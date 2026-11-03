@@ -6,6 +6,7 @@ import type { GraphSnapshot } from '@patchwork/contracts';
 import { GroupingService, validateCandidateLabels } from './index';
 
 const snapshot = (): GraphSnapshot => ({
+  schemaVersion: '1',
   id: 'snapshot-1', repository: { owner: 'example', name: 'repo', fullName: 'example/repo', defaultBranch: 'main', htmlUrl: 'https://github.com/example/repo' },
   contextRef: 'main', contextSha: '1234', createdAt: '2026-11-03T00:00:00Z', mode: 'demo', coverage: { status: 'complete', reasons: [] }, sources: [],
   groups: [{ id: 'auth', label: 'Auth', origin: 'rules' }, { id: 'billing', label: 'Billing', origin: 'rules' }],
