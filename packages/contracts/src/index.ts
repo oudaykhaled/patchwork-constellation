@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+export const CONTRACT_VERSION = '1' as const;
+const IdSchema = z.string().min(1);
+const TimestampSchema = z.string().refine(value => Number.isFinite(Date.parse(value)), 'Invalid timestamp');
+const GitShaSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i, 'Expected immutable Git object SHA');
+export const RepositoryPathSchema = z.string().min(1).refine(path => !path.startsWith('/') && !path.includes('\\') && !/[\u0000-\u001f\u007f]/.test(path) && !path.split('/').some(segment => segment === '..' || segment === '.' || segment === ''), 'Expected repository-relative path');
 
 export const ChangeStatusSchema = z.enum([
   'added', 'modified', 'deleted', 'removed', 'renamed', 'copied', 'unchanged', 'binary', 'unparsed',
@@ -10,23 +15,29 @@ export const CoverageSchema = z.object({
   reasons: z.array(z.string()),
   filesAnalyzed: z.number().int().nonnegative().optional(),
   totalFiles: z.number().int().nonnegative().optional(),
-}).passthrough();
+}).passthrough().superRefine((coverage, ctx) => {
+  if (coverage.filesAnalyzed !== undefined && coverage.totalFiles !== undefined && coverage.filesAnalyzed > coverage.totalFiles) ctx.addIssue({ code: 'custom', path: ['filesAnalyzed'], message: 'Analyzed files exceed total files' });
+  if (coverage.status !== 'complete' && !coverage.reasons.some(reason => reason.trim())) ctx.addIssue({ code: 'custom', path: ['reasons'], message: 'Incomplete coverage requires a reason' });
+});
 export type Coverage = z.infer<typeof CoverageSchema>;
 
 export const RepositorySchema = z.object({
+  id: z.union([z.string().min(1), z.number().int().positive()]).optional(),
   owner: z.string().min(1),
   name: z.string().min(1),
   fullName: z.string().min(3),
   defaultBranch: z.string().min(1),
   htmlUrl: z.string().url(),
-}).passthrough();
+}).passthrough().refine(repository => repository.fullName.toLowerCase() === `${repository.owner}/${repository.name}`.toLowerCase(), { path: ['fullName'], message: 'Repository identity does not match owner/name' });
 export type Repository = z.infer<typeof RepositorySchema>;
 
 export const FileNodeSchema = z.object({
   id: z.string().min(1),
-  path: z.string().min(1),
+  path: RepositoryPathSchema,
   groupId: z.string().min(1),
   language: z.string().optional(),
+  fileType: z.enum(['source', 'binary', 'generated', 'symlink', 'submodule', 'other']).optional(),
+  ancestry: z.array(z.object({ previousPath: RepositoryPathSchema, previousFileId: IdSchema.optional(), commitSha: GitShaSchema.optional(), confidence: z.enum(['confirmed', 'ambiguous']) })).optional(),
   status: ChangeStatusSchema.optional(),
   presence: z.enum(['context', 'added', 'deleted', 'source-only']).optional(),
   sourceIds: z.array(z.string()),
@@ -46,11 +57,13 @@ export type Group = z.infer<typeof GroupSchema>;
 export const ImportEvidenceSchema = z.union([
   z.string(),
   z.object({
-    path: z.string(),
+    path: RepositoryPathSchema,
     line: z.number().int().positive().optional(),
     specifier: z.string().optional(),
-    snapshotSha: z.string().optional(),
-    resolver: z.string().optional(),
+    snapshotSha: z.string().min(1).optional(),
+    snapshotId: IdSchema.optional(),
+    sourceId: IdSchema.optional(),
+    resolver: z.string().min(1).optional(),
   }).passthrough(),
 ]);
 export type ImportEvidence = z.infer<typeof ImportEvidenceSchema>;
@@ -59,18 +72,23 @@ export const ImportEdgeSchema = z.object({
   source: z.string().min(1),
   target: z.string().min(1),
   kind: z.enum(['import', 'reexport', 'type-import', 'dynamic-import']),
+  direction: z.literal('source-to-target').optional(),
   evidence: ImportEvidenceSchema.optional(),
 }).passthrough();
 export type ImportEdge = z.infer<typeof ImportEdgeSchema>;
 
 export const FileChangeSchema = z.object({
   fileId: z.string().min(1),
-  path: z.string().min(1),
+  path: RepositoryPathSchema,
   status: ChangeStatusSchema,
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
-  previousPath: z.string().optional(),
-}).passthrough();
+  previousPath: RepositoryPathSchema.optional(),
+}).passthrough().superRefine((change, ctx) => {
+  if (change.status === 'renamed' && !change.previousPath) ctx.addIssue({ code: 'custom', path: ['previousPath'], message: 'Rename requires its previous path' });
+  if (change.status === 'added' && change.deletions !== 0) ctx.addIssue({ code: 'custom', path: ['deletions'], message: 'Added file cannot have deleted lines' });
+  if ((change.status === 'deleted' || change.status === 'removed') && change.additions !== 0) ctx.addIssue({ code: 'custom', path: ['additions'], message: 'Deleted file cannot have added lines' });
+});
 export type FileChange = z.infer<typeof FileChangeSchema>;
 
 export const ChangeSourceSchema = z.object({
@@ -89,7 +107,7 @@ export const ChangeSourceSchema = z.object({
 export type ChangeSource = z.infer<typeof ChangeSourceSchema>;
 
 const GraphSnapshotBaseSchema = z.object({
-  schemaVersion: z.literal('1').optional(),
+  schemaVersion: z.literal(CONTRACT_VERSION),
   id: z.string().min(1),
   repository: RepositorySchema,
   contextSha: z.string().min(1),
@@ -99,7 +117,7 @@ const GraphSnapshotBaseSchema = z.object({
   groups: z.array(GroupSchema),
   sources: z.array(ChangeSourceSchema),
   coverage: CoverageSchema,
-  createdAt: z.string(),
+  createdAt: TimestampSchema,
   mode: z.enum(['demo', 'github']),
 }).passthrough();
 
@@ -121,11 +139,49 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
     if (new Set(node.sourceIds).size !== node.sourceIds.length) ctx.addIssue({ code: 'custom', path: ['nodes', index, 'sourceIds'], message: 'Duplicate source membership' });
     node.sourceIds.forEach((id) => { if (!sources.has(id)) ctx.addIssue({ code: 'custom', path: ['nodes', index, 'sourceIds'], message: `Unknown source reference: ${id}` }); });
   });
+  const nodeById = new Map(snapshot.nodes.map(node => [node.id, node]));
+  const sourceById = new Map(snapshot.sources.map(source => [source.id, source]));
+  const sourceFileIds = new Map(snapshot.sources.map(source => [source.id, new Set(source.files.map(file => file.fileId))]));
+  const groupById = new Map(snapshot.groups.map(group => [group.id, group]));
+  snapshot.groups.forEach((group, index) => {
+    if (!group.parentId) return;
+    if (!groups.has(group.parentId)) ctx.addIssue({ code: 'custom', path: ['groups', index, 'parentId'], message: 'Unknown parent group' });
+    const seen = new Set([group.id]); let parent = group.parentId;
+    while (parent) {
+      if (seen.has(parent)) { ctx.addIssue({ code: 'custom', path: ['groups', index, 'parentId'], message: 'Cyclic group hierarchy' }); break; }
+      seen.add(parent); parent = groupById.get(parent)?.parentId ?? '';
+    }
+  });
+  if (snapshot.mode === 'github' && !GitShaSchema.safeParse(snapshot.contextSha).success) ctx.addIssue({ code: 'custom', path: ['contextSha'], message: 'Context must be pinned to an immutable SHA' });
   snapshot.edges.forEach((edge, index) => {
     if (!nodes.has(edge.source) || !nodes.has(edge.target)) ctx.addIssue({ code: 'custom', path: ['edges', index], message: 'Dangling import edge' });
+    const evidence = edge.evidence;
+    const fail = (message: string) => ctx.addIssue({ code: 'custom', path: ['edges', index, 'evidence'], message });
+    if (snapshot.mode === 'github' && (!evidence || typeof evidence === 'string' || !evidence.snapshotSha || !evidence.resolver)) fail('Observed import requires pinned evidence and resolver');
+    if (evidence && typeof evidence !== 'string') {
+      if (evidence.snapshotId && evidence.snapshotId !== snapshot.id) fail('Foreign snapshot evidence');
+      const source = evidence.sourceId ? sourceById.get(evidence.sourceId) : undefined;
+      if (nodeById.get(edge.source)?.path !== evidence.path && !source?.files.some(file => file.fileId === edge.source && file.path === evidence.path)) fail('Evidence path must identify the importing file');
+      if (evidence.sourceId && !source) fail('Unknown source evidence');
+      if (evidence.snapshotSha && evidence.snapshotSha !== (source ? source.headSha : snapshot.contextSha)) fail('Foreign or unpinned evidence SHA');
+    }
   });
-  snapshot.sources.forEach((source, index) => source.files.forEach((file, fileIndex) => {
-    if (!nodes.has(file.fileId)) ctx.addIssue({ code: 'custom', path: ['sources', index, 'files', fileIndex, 'fileId'], message: 'Unknown changed-file reference' });
+  snapshot.sources.forEach((source, index) => {
+    const fail = (message: string) => ctx.addIssue({ code: 'custom', path: ['sources', index], message });
+    if (!source.baseSha || !source.headSha || !source.comparisonKind) fail('Source comparison requires exact base/head and comparison kind');
+    if (snapshot.mode === 'github' && (!GitShaSchema.safeParse(source.baseSha).success || !GitShaSchema.safeParse(source.headSha).success)) fail('Source comparison must use immutable SHAs');
+    if (source.kind === 'pr' && source.comparisonKind !== 'merge-base') fail('Pull request requires merge-base comparison');
+    if (source.kind === 'commit' && (!['first-parent', 'empty-tree'].includes(source.comparisonKind ?? '') || !source.sha || source.sha !== source.headSha)) fail('Commit requires parent/commit comparison');
+    const fileIds = new Set<string>();
+    source.files.forEach((file, fileIndex) => {
+      if (!nodes.has(file.fileId)) ctx.addIssue({ code: 'custom', path: ['sources', index, 'files', fileIndex, 'fileId'], message: 'Unknown changed-file reference' });
+      if (fileIds.has(file.fileId)) fail('Duplicate changed-file identity within source');
+      fileIds.add(file.fileId);
+      if (!nodeById.get(file.fileId)?.sourceIds.includes(source.id)) fail('Source change missing from node membership');
+    });
+  });
+  snapshot.nodes.forEach((node, index) => node.sourceIds.forEach(sourceId => {
+    if (sources.has(sourceId) && !sourceFileIds.get(sourceId)!.has(node.id)) ctx.addIssue({ code: 'custom', path: ['nodes', index, 'sourceIds'], message: 'Node membership missing from source change list' });
   }));
 });
 
@@ -141,9 +197,71 @@ export interface SelectionFootprint {
   affectedGroupIds: Set<string>;
 }
 
+/** Serializable overlay; dependency neighbors are never counted as directly changed files. */
+export const SelectionFootprintSchema = z.object({
+  schemaVersion: z.literal(CONTRACT_VERSION),
+  snapshotId: IdSchema,
+  selectedSourceIds: z.array(IdSchema),
+  affectedGroupIds: z.array(IdSchema),
+  files: z.array(z.object({ fileId: IdSchema, sourceIds: z.array(IdSchema), directlyChanged: z.boolean(), dependencyNeighbor: z.boolean() })),
+  counts: z.object({ changedFiles: z.number().int().nonnegative(), overlappingFiles: z.number().int().nonnegative(), overlappingSources: z.number().int().nonnegative(), dependencyNeighbors: z.number().int().nonnegative() }),
+}).superRefine((footprint, ctx) => {
+  const selected = new Set(footprint.selectedSourceIds);
+  const ids = new Set<string>(); const overlappingSources = new Set<string>();
+  const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
+  if (selected.size !== footprint.selectedSourceIds.length || new Set(footprint.affectedGroupIds).size !== footprint.affectedGroupIds.length) fail('Duplicate overlay references');
+  for (const file of footprint.files) {
+    if (ids.has(file.fileId)) fail('Duplicate footprint file'); ids.add(file.fileId);
+    if (new Set(file.sourceIds).size !== file.sourceIds.length || file.sourceIds.some(id => !selected.has(id))) fail('Invalid selected-source membership');
+    if (file.directlyChanged !== (file.sourceIds.length > 0) || file.dependencyNeighbor === file.directlyChanged) fail('Direct changes and dependency neighbors must remain distinct');
+    if (file.sourceIds.length > 1) file.sourceIds.forEach(id => overlappingSources.add(id));
+  }
+  if (footprint.counts.changedFiles !== footprint.files.filter(file => file.directlyChanged).length || footprint.counts.overlappingFiles !== footprint.files.filter(file => file.sourceIds.length > 1).length || footprint.counts.overlappingSources !== overlappingSources.size || footprint.counts.dependencyNeighbors !== footprint.files.filter(file => file.dependencyNeighbor).length) fail('Footprint counts disagree with file membership');
+});
+export type SelectionFootprintData = z.infer<typeof SelectionFootprintSchema>;
+
+export function createSelectionFootprint(snapshot: GraphSnapshot, selectedSourceIds: readonly string[]): SelectionFootprintData {
+  const selected = [...new Set(selectedSourceIds)].sort();
+  const sources = new Map(snapshot.sources.map(source => [source.id, source]));
+  if (selected.some(id => !sources.has(id))) throw new Error('Unknown selected source');
+  const membership = new Map<string, Set<string>>();
+  for (const id of selected) for (const file of sources.get(id)!.files) {
+    const ids = membership.get(file.fileId) ?? new Set<string>(); ids.add(id); membership.set(file.fileId, ids);
+  }
+  const neighbors = new Set<string>();
+  for (const edge of snapshot.edges) {
+    if (membership.has(edge.source) && !membership.has(edge.target)) neighbors.add(edge.target);
+    if (membership.has(edge.target) && !membership.has(edge.source)) neighbors.add(edge.source);
+  }
+  const files = snapshot.nodes.filter(node => membership.has(node.id) || neighbors.has(node.id)).map(node => ({ fileId: node.id, sourceIds: [...(membership.get(node.id) ?? [])].sort(), directlyChanged: membership.has(node.id), dependencyNeighbor: neighbors.has(node.id) })).sort((a, b) => a.fileId.localeCompare(b.fileId));
+  const overlap = files.filter(file => file.sourceIds.length > 1);
+  return SelectionFootprintSchema.parse({
+    schemaVersion: CONTRACT_VERSION, snapshotId: snapshot.id, selectedSourceIds: selected,
+    affectedGroupIds: [...new Set(snapshot.nodes.filter(node => membership.has(node.id)).map(node => node.groupId))].sort(), files,
+    counts: { changedFiles: membership.size, overlappingFiles: overlap.length, overlappingSources: new Set(overlap.flatMap(file => file.sourceIds)).size, dependencyNeighbors: neighbors.size },
+  });
+}
+
+/** Shared wire contract; stores may additionally carry lease/attempt metadata. */
+export const AnalysisJobSchema = z.object({
+  schemaVersion: z.literal(CONTRACT_VERSION), id: IdSchema,
+  repository: z.string().regex(/^[^/]+\/[^/]+$/), contextRef: z.string().min(1).optional(), contextSha: GitShaSchema.optional(),
+  status: z.enum(['queued', 'running', 'fetching', 'indexing', 'grouping', 'ready', 'partial', 'failed', 'cancelled']),
+  progress: z.number().finite().min(0).max(100), message: z.string(),
+  createdAt: TimestampSchema, updatedAt: TimestampSchema,
+  snapshotId: IdSchema.optional(), error: z.string().optional(), coverage: CoverageSchema.optional(),
+}).passthrough().superRefine((job, ctx) => {
+  if ((job.status === 'ready' || job.status === 'partial') && (!job.snapshotId || job.progress !== 100)) ctx.addIssue({ code: 'custom', message: 'Completed analysis requires a snapshot and 100% progress' });
+  if (job.status === 'failed' && !job.error) ctx.addIssue({ code: 'custom', path: ['error'], message: 'Failed analysis requires an error' });
+  if (Date.parse(job.updatedAt) < Date.parse(job.createdAt)) ctx.addIssue({ code: 'custom', path: ['updatedAt'], message: 'Job update predates creation' });
+});
+export type AnalysisJob = z.infer<typeof AnalysisJobSchema>;
+
+/** Generated structural JSON Schema; runtime schemas additionally enforce cross-reference invariants. */
+export function graphSnapshotJsonSchema() { return z.toJSONSchema(GraphSnapshotSchema); }
+
 export interface ApiError {
   error: string;
   code?: string;
   retryAfter?: number;
 }
-

@@ -66,4 +66,3 @@ Use ordinary pull-request checks without deployment secrets. Grant workflow toke
 Capture failure screenshots and traces for browser checks, with bounded artifact retention and no authenticated production data. Playwright supports this in its [recording configuration](https://playwright.dev/docs/test-use-options#recording-options). Do not hide flaky tests with unlimited retries; keep a retry budget and investigate recurring failure.
 
 Release notes distinguish demo mode, deterministic analysis, available AI integrations, supported language analysis and known scale limits. Production hosting, paid infrastructure and provider credentials remain implementation decisions; this planning task does not deploy them.
-
