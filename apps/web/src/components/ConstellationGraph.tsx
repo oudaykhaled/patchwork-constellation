@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { fitCamera, islandBounds, neighborsOf, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
-import type { Bounds, Camera, GraphData, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
+import type { Bounds, Camera, GraphData, GraphLayout, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
 import { useSettledLayout } from './useSettledLayout';
 import './constellation-graph.css';
 
@@ -17,6 +17,7 @@ export interface ConstellationGraphProps {
   className?: string;
   layoutSeed?: number;
   layoutPins?: Record<string, Point>;
+  onLayoutReady?: (layout: GraphLayout) => void;
 }
 
 type Size = { width: number; height: number };
@@ -38,7 +39,7 @@ function islandPath(context: CanvasRenderingContext2D, island: Island) {
   context.closePath();
 }
 
-export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, className = '', layoutSeed = 0, layoutPins }: ConstellationGraphProps) {
+export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, className = '', layoutSeed = 0, layoutPins, onLayoutReady }: ConstellationGraphProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(DEFAULT_CAMERA);
@@ -55,6 +56,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const [canvasFailed, setCanvasFailed] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const { layout, layoutState, layoutError, resetLayout } = useSettledLayout(snapshot, layoutSeed, layoutPins);
+  useEffect(() => { if (layoutState === 'ready') onLayoutReady?.(layout); }, [layout, layoutState, onLayoutReady]);
   const framedRepository = useRef<string | null>(null);
   const membership = useMemo(() => selectedMembership(snapshot, selectedSourceIds), [snapshot, selectedSourceIds]);
   const neighbors = useMemo(() => neighborsOf(snapshot.edges, selectedFileId), [snapshot.edges, selectedFileId]);
