@@ -75,4 +75,4 @@ The TypeScript workspace contains the React frontend/BFF in `apps/web`, job orch
 
 ## License
 
-A code license has not yet been selected. Record the maintainer's choice before accepting external contributions or distributing a release.
+Licensed under [Apache License 2.0](LICENSE), selected by the repository owner on 2026-11-03. Third-party dependencies retain their own licenses.
