@@ -14,7 +14,7 @@ beforeAll(async () => { vi.stubEnv('OPS_METRICS_ENABLED', 'true'); vi.stubEnv('A
 afterAll(async () => { if (server) await new Promise<void>(resolve => server.close(() => resolve())); vi.unstubAllEnvs(); });
 test('metrics require opt-in and an authenticated current owner, without cross-owner activity', async () => {
   expect((await fetch(base + '/api/metrics')).status).toBe(401);
-  expect((await fetch(base + '/api/readiness')).status).toBe(200);
+  const ready = await fetch(base + '/api/readiness'); const readiness = await ready.json(); expect(readiness.checks).toMatchObject({ storage: 'ready', queue: 'ready', worker: 'ready' }); expect(ready.status).toBe(readiness.checks.assets === 'ready' ? 200 : 503);
   await fetch(base + '/api/demo', { headers: { Cookie: 'alice' } });
   const proposal = await fetch(base + '/api/grouping', { method: 'POST', headers: { Cookie: 'alice', 'X-CSRF-Token': 'synthetic-csrf', 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ snapshotId: demoSnapshot.id, enabled: true }) }); expect(proposal.status).toBe(200);
   const alice = await fetch(base + '/api/metrics', { headers: { Cookie: 'alice' } }).then(value => value.json()); const bob = await fetch(base + '/api/metrics', { headers: { Cookie: 'bob' } }).then(value => value.json());

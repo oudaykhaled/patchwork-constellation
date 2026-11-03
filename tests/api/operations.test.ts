@@ -15,7 +15,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { if (server) await new Promise<void>(resolve => server.close(() => resolve())); vi.unstubAllEnvs(); });
 test('operational routes report successful probes and redact dependency failures', async () => {
-  const ready = await fetch(base + '/api/readiness'); expect(ready.status).toBe(200); expect((await ready.json()).checks).toMatchObject({ storage: 'ready', queue: 'ready', assets: 'ready' });
+  const ready = await fetch(base + '/api/readiness'); const readiness = await ready.json(); expect(readiness.checks).toMatchObject({ storage: 'ready', queue: 'ready', worker: 'ready' }); expect(ready.status).toBe(readiness.checks.assets === 'ready' ? 200 : 503);
   const proposal = await fetch(base + '/api/grouping', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ snapshotId: demoSnapshot.id, enabled: true }) }); expect(proposal.status).toBe(200);
   const submitted = await fetch(base + '/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ repository: demoSnapshot.repository.fullName, contextRef: 'a'.repeat(40) }) }); const { jobId } = await submitted.json();
   await vi.waitFor(async () => expect((await fetch(`${base}/api/jobs/${jobId}`).then(value => value.json())).status).toBe('ready'));

@@ -388,7 +388,7 @@ export async function createApplicationServer(options: { production?: boolean; s
       const requested = resolve(dist, '.' + decodeURIComponent(url.pathname));
       if (requested !== dist && !requested.startsWith(dist + sep)) return json(res, 403, { error: 'Invalid path.' });
       let file = requested; try { if (!(await stat(file)).isFile()) file = resolve(dist, 'index.html'); } catch { file = resolve(dist, 'index.html'); }
-      const mime: Record<string,string> = { '.html':'text/html', '.js':'application/javascript', '.css':'text/css', '.svg':'image/svg+xml', '.woff2':'font/woff2', '.png':'image/png', '.ico':'image/x-icon' };
+      const mime: Record<string,string> = { '.html':'text/html', '.js':'application/javascript', '.css':'text/css', '.svg':'image/svg+xml', '.woff2':'font/woff2', '.png':'image/png', '.ico':'image/x-icon', '.txt':'text/plain; charset=utf-8', '.json':'application/json; charset=utf-8' };
       res.setHeader('Content-Type', mime[extname(file)] ?? 'application/octet-stream'); res.setHeader('Cache-Control', file.endsWith('index.html') ? 'no-cache' : 'public, max-age=3600');
       res.end(req.method === 'HEAD' ? undefined : await readFile(file));
     } catch (error) {
