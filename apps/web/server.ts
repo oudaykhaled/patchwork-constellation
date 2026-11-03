@@ -70,12 +70,13 @@ export async function createApplicationServer(options: { production?: boolean; s
   const rateWindows = new Map<string, { start: number; requests: number }>();
   const repositoryFences = new RepositoryFences();
   const useProduction = options.production ?? production;
+  const authConfig = options.auth === undefined ? githubAuthConfig() : undefined;
+  const auth = options.auth === undefined ? (authConfig ? new GitHubAppAuth(authConfig) : undefined) : options.auth ?? undefined;
+  if (process.env.GITHUB_WEBHOOK_SECRET && !auth && !options.webhooks) throw new ConfigurationError(['GITHUB_WEBHOOK_SECRET requires GitHub App configuration.']);
   const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100 });
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
   const loadSources = options.runSources ?? runSourceAnalysisInWorker;
   const admission = new WorkerAdmission(2);
-  const authConfig = options.auth === undefined ? githubAuthConfig() : undefined;
-  const auth = options.auth === undefined ? (authConfig ? new GitHubAppAuth(authConfig) : undefined) : options.auth ?? undefined;
   const ownerGroupings = new Map<string, GroupingService>();
   const groupingForOwner = () => {
     if (!auth) return grouping;
@@ -176,9 +177,9 @@ export async function createApplicationServer(options: { production?: boolean; s
     });
     analysisJobs.finishInvalidation(scope);
   }
-  if (process.env.GITHUB_WEBHOOK_SECRET && !auth && !options.webhooks) throw new ConfigurationError(['GITHUB_WEBHOOK_SECRET requires GitHub App configuration.']);
   const webhookBinding = (value: ReturnType<GitHubAppAuth['knownRepositoryBindings']>[number]) => ({ scope: { ownerId: value.ownerId, repository: value.repository }, installationId: value.installationId, repositoryId: value.repositoryId, contextRef: refreshContexts.get(scopeKey(value)) });
-  const webhooks = options.webhooks ?? (auth ? await createConfiguredWebhookRefresh({
+  let webhooks: WebhookRefreshService | undefined;
+  try { webhooks = options.webhooks ?? (auth ? await createConfiguredWebhookRefresh({
     resolveInstallation: async installationId => auth.knownRepositoryBindings(installationId).map(webhookBinding),
     resolveScope: async scope => {
       await auth.credentialsForOwner(scope.ownerId, scope.repository);
@@ -193,7 +194,8 @@ export async function createApplicationServer(options: { production?: boolean; s
     invalidateMetadata: repository => { invalidateGitHubRepositoryCache(repository); },
     invalidateAuthorization: (installationId, repositoryId) => { if (repositoryId === undefined) auth.invalidateInstallation(installationId); else auth.invalidateRepository(installationId, repositoryId); },
     purgeRepository,
-  }, process.env, options.webhookInbox) : undefined);
+  }, process.env, options.webhookInbox) : undefined); }
+  catch (error) { await Promise.allSettled([analysisJobs.close(), store.close()]); throw error; }
   webhooks?.start();
   await saveSnapshot(structuredClone(demoSnapshot));
   const vite = useProduction ? null : await (await import('vite')).createServer({ configFile: resolve(root, 'apps/web/vite.config.ts'), server: { middlewareMode: true }, appType: 'spa' });

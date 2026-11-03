@@ -111,3 +111,9 @@ it('verified removal invokes the actual purge fence and a late private worker ca
   expect((await app.get(`/api/jobs/${jobId}?repository=${repository}`)).status).toBe(404);
   const feed = await app.get(`/api/refresh?repository=${repository}`).then(response => response.json()); expect(feed.state.revoked).toBe(true);
 });
+it('invalid webhook configuration fails closed and disposes the initialized store', async () => {
+  const store = await createStore({ databaseUrl: '' }), close = vi.spyOn(store, 'close');
+  vi.stubEnv('GITHUB_WEBHOOK_SECRET', 'too-short'); vi.stubEnv('DATABASE_URL', 'postgresql://synthetic@127.0.0.1/controlled-test');
+  await expect(createApplicationServer({ production: true, auth: new RuntimeAuth(), store, webhookInbox: new RuntimeTestInbox() })).rejects.toThrow('at least 16');
+  expect(close).toHaveBeenCalledOnce();
+});
