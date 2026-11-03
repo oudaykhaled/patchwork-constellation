@@ -114,7 +114,9 @@ jobs:
         run: |
           git worktree add --detach .cache/staging-prior-source "$ROLLBACK_COMMIT"
           cd .cache/staging-prior-source
-          pnpm install --offline --frozen-lockfile
+          # Package blobs alone do not include pnpm's registry policy metadata.
+          # Qualify this prior lockfile with policies enabled before offline deployment.
+          pnpm install --frozen-lockfile --prod=false
           pnpm build
           RELEASE_OUT_DIR="$GITHUB_WORKSPACE/release-artifacts/prior" pnpm release:pack
       - name: Start owned ephemeral staging PostgreSQL
