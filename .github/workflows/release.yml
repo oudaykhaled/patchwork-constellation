@@ -45,7 +45,7 @@ jobs:
         run: |
           [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
           if [[ "$RELEASE_STAGE" == production && "$GITHUB_REF" != refs/heads/main ]]; then exit 1; fi
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4, same verified pin as checks
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, verified 2026-11-03
         with:
           ref: ${{ inputs.commit }}
           fetch-depth: 0
@@ -54,7 +54,7 @@ jobs:
         if: inputs.stage == 'production'
         run: git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0, verified 2026-11-03
         with:
           node-version: 24
           cache: pnpm
@@ -65,7 +65,7 @@ jobs:
         if: inputs.stage == 'production'
         run: node scripts/release-gate.mjs .release/acceptance.json "$RELEASE_COMMIT"
       - run: pnpm release:pack
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, verified 2026-11-03
         with:
           name: constellation-${{ inputs.commit }}-${{ inputs.stage }}
           path: release-artifacts/
@@ -92,7 +92,7 @@ jobs:
           [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$ROLLBACK_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$RELEASE_COMMIT" != "$ROLLBACK_COMMIT" ]] || exit 1
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, same verified pin as checks
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, verified 2026-11-03
         with:
           ref: ${{ inputs.commit }}
           fetch-depth: 0
@@ -100,7 +100,7 @@ jobs:
       - name: Require a compatible prior ancestor
         run: git merge-base --is-ancestor "$ROLLBACK_COMMIT" "$RELEASE_COMMIT"
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0, verified 2026-11-03
         with:
           node-version: 24
           cache: pnpm
@@ -135,7 +135,7 @@ jobs:
       - name: Stop owned staging PostgreSQL
         if: always()
         run: node tools/release/ci-postgres.mjs stop
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, verified 2026-11-03
         if: always()
         with:
           name: constellation-staging-${{ inputs.commit }}
