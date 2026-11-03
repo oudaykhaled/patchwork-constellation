@@ -36,9 +36,9 @@
       "focusedConnections": 4,
       "fileList": "complete",
       "screenshots": [
-        "212-overview.jpg",
-        "212-out.jpg",
-        "212-in.jpg"
+        "212-overview.svg",
+        "212-out.svg",
+        "212-in.svg"
       ]
     },
     {
@@ -58,9 +58,9 @@
       "focusedConnections": 9,
       "fileList": "complete",
       "screenshots": [
-        "2000-overview.jpg",
-        "2000-out.jpg",
-        "2000-in.jpg"
+        "2000-overview.svg",
+        "2000-out.svg",
+        "2000-in.svg"
       ]
     }
   ],
