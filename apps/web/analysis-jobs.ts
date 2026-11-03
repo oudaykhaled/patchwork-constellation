@@ -11,7 +11,15 @@ export const GROUPING_VERSION = 'baseline-v1';
 export interface PinnedAnalysisInput extends AnalyzeInput { displayContextRef?: string }
 export type AnalysisJobView = { id: string; status: 'queued' | 'running' | 'ready' | 'failed' | 'cancelled'; stage: StoredJob['status']; progress: number; message: string; createdAt: string; updatedAt: string; version: string; snapshotId?: string; graphUrl?: string; snapshot?: GraphSnapshot; error?: string; code?: string; retryable?: boolean };
 const terminal = (job: StoredJob) => ['ready', 'partial', 'failed', 'cancelled'].includes(job.status);
-const errorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Analysis failed.').replace(/(?:gh[pousr]_[a-zA-Z0-9]+|sk-[a-zA-Z0-9_-]+)/g, '[redacted]').slice(0, 500);
+// Exceptions may contain private source, URLs or credentials. Persist static descriptions only.
+const errorMessage = (error: unknown) => {
+  const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 500;
+  if (status === 401 || status === 403) return 'Repository access is unavailable. Reconnect the account and retry.';
+  if (status === 404) return 'The repository or revision is unavailable. Check access and retry.';
+  if (status === 429) return 'The upstream request quota is exhausted. Retry after the limit resets.';
+  if (status === 413) return 'The analysis exceeds its configured resource scope. Try a smaller repository.';
+  return 'Analysis could not complete. Retry, or narrow the repository scope.';
+};
 export function analysisJobId(scope: StoreScope, input: PinnedAnalysisInput) {
   return createHash('sha256').update(JSON.stringify([scope.ownerId, scope.repository.toLowerCase(), input.contextRef, input.mode ?? 'pr', ANALYSIS_VERSION, GROUPING_VERSION])).digest('hex');
 }
