@@ -18,7 +18,7 @@ const snapshot = (): GraphSnapshot => ({
   ], edges: [{ id: 'e1', source: 'a', target: 'b', kind: 'import', evidence: { path: 'src/auth/session.ts', line: 1 } }],
 });
 
-type MockOptions = { confidence?: number; unknownId?: boolean; label?: string; discoveredModel?: string; responseModel?: string; moveToBilling?: boolean; status?: number };
+type MockOptions = { confidence?: number; omitConfidence?: boolean; unknownId?: boolean; label?: string; discoveredModel?: string; responseModel?: string; moveToBilling?: boolean; status?: number };
 function providerMock(options: MockOptions = {}) {
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
@@ -33,7 +33,7 @@ function providerMock(options: MockOptions = {}) {
       const questions = body.questions as Record<string, { criteria: Record<string, string> }>;
       const answers = Object.fromEntries(Object.entries(questions).map(([key, question]) => {
         const choice = options.moveToBilling ? 'g1' : 'g0';
-        return [key, { type: 'choice', choice, confidence: options.confidence ?? 0.9, probabilities: Object.fromEntries(Object.keys(question.criteria).map(id => [id, id === choice ? 1 : 0])) }];
+        return [key, { type: 'choice', choice, ...(options.omitConfidence ? {} : { confidence: options.confidence ?? 0.9 }), probabilities: Object.fromEntries(Object.keys(question.criteria).map(id => [id, id === choice ? 1 : 0])) }];
       }));
       return Response.json({ model: options.responseModel ?? 'test-jev-2026', answers, usage: { input_tokens: 150, output_tokens: 50 } });
     }
@@ -105,6 +105,11 @@ describe('baseline and provider boundary', () => {
     const result = await configured(providerMock({ confidence: 0.2, moveToBilling: true })).propose(snapshot(), { enabled: true });
     expect(result.status).toBe('proposed'); expect(result.membership.a).toBe('auth');
     expect(result.decisions[0]!.rationale).toContain('uncertain');
+  });
+  it('retains membership when optional confidence is absent', async () => {
+    const result = await configured(providerMock({ omitConfidence: true, moveToBilling: true })).propose(snapshot(), { enabled: true });
+    expect(result.status).toBe('proposed'); expect(result.membership.a).toBe('auth');
+    expect(result.decisions[0]?.confidence).toBeUndefined();
   });
   it('caches only within the same tenant, snapshot and grouping revision', async () => {
     const transport = providerMock(); const service = configured(transport);

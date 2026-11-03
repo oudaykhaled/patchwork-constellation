@@ -6,9 +6,9 @@ import { decideMembership, discoverJevModel, generateLabels, plainText, type Evi
 import { GroupingError, type GroupingConfig, type GroupingOperation, type GroupingProposal, type GroupingResult, type GroupingRevision, type RequestContext } from './types';
 
 export * from './types';
-export { validateCandidateLabels } from './providers';
 export * from './contracts';
 import { GroupingRevisionSchema, validateGroupingProposal, validateGroupingRevision } from './contracts';
+export { validateCandidateLabels, TypeSafeDecisionProvider, OpenAIGenerativeProvider, PROVIDER_CONTRACT_VERSION, LABEL_PROMPT_VERSION, MEMBERSHIP_PROMPT_VERSION, type DecisionProvider, type GenerativeProvider, type ChoiceQuestion, type ScoreQuestion, type NoulQuestion, type ChoiceAnswer, type ScoreAnswer, type NoulAnswer, type DecisionResponse, type DiscoveredModel } from './providers';
 
 const POLICY_VERSION = 'metadata-only-v1';
 const MAX_CONTEXTS = 100;
@@ -261,7 +261,7 @@ export class GroupingService {
     });
     const membership = copy(revision.membership);
     const detailed = decisions.decisions.map(decision => {
-      const accepted = decision.groupId !== null && decision.confidence >= this.config.minimumConfidence && !revision.lockedFileIds.includes(decision.fileId);
+      const accepted = decision.groupId !== null && typeof decision.confidence === 'number' && decision.confidence >= this.config.minimumConfidence && !revision.lockedFileIds.includes(decision.fileId);
       if (accepted) membership[decision.fileId] = decision.groupId!;
       return { schemaVersion: '1' as const, snapshotId: snapshot.id, fileId: decision.fileId, groupId: membership[decision.fileId]!, origin: 'ai-jev' as const, evidenceIds: [`file:${decision.fileId}`], confidence: decision.confidence, model: decisions.model,
         rationale: accepted ? 'Jev selected this existing island from bounded path and import evidence. Confidence describes model uncertainty, not verified accuracy.' : 'Evidence was uncertain or a manual override is active; the existing island is retained.',
