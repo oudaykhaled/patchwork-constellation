@@ -7,6 +7,14 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 
 const rootFiles = new Set(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts', 'LICENSE', 'README.md', 'CONTRIBUTING.md', 'SECURITY.md', '.env.example', '.release/acceptance.json']);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+const frontendPackages = ['react', 'react-dom', 'scheduler', 'lucide-react', 'zod', '@fontsource/geist', '@fontsource/geist-mono'];
+export function thirdPartyNoticeRecord(text, provenance) {
+  if (!text || !provenance) throw new Error('Frontend third-party notices are required');
+  const metadata = JSON.parse(provenance.toString('utf8'));
+  if (metadata.schemaVersion !== '1' || metadata.noticeSha256 !== sha256(text) || !Array.isArray(metadata.packages) || metadata.packages.length !== frontendPackages.length || new Set(metadata.packages.map(pkg => pkg.name)).size !== frontendPackages.length || frontendPackages.some(name => !metadata.packages.some(pkg => pkg.name === name)) || !text.toString('utf8').includes('SIL OPEN FONT LICENSE Version 1.1')) throw new Error('Frontend third-party license provenance is invalid');
+  for (const pkg of metadata.packages) if (typeof pkg.version !== 'string' || !pkg.version || typeof pkg.declaredLicense !== 'string' || !/^[a-f0-9]{64}$/.test(pkg.sha256)) throw new Error('Invalid dependency license provenance');
+  return { path: 'dist/THIRD_PARTY_NOTICES.txt', metadataPath: 'dist/THIRD_PARTY_NOTICES.json', sha256: sha256(text), packages: metadata.packages.map(({ name, version, declaredLicense }) => ({ name, version, declaredLicense })) };
+}
 export function safeReleasePath(path) {
   if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(part)) || /[\x00-\x1f\x7f:]/.test(path)) throw new Error('Unsafe release path');
   if (/(?:^|\/)(?:node_modules|\.git|\.cache|\.tmp)(?:\/|$)/.test(path) || /(?:^|\/)\.env(?:\.|$)/.test(path) && path !== '.env.example' || /\.(?:pem|key|p12|pfx)$/i.test(path)) throw new Error('Private or generated source path excluded from release');
@@ -49,7 +57,11 @@ export async function verifyRelease(directory) {
   if (manifest.schemaVersion !== '1' || !Array.isArray(manifest.files) || manifest.files.length > 5000) throw new Error('Invalid release manifest');
   const seen = new Set();
   for (const file of manifest.files) { safeReleasePath(file.path); if (!Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > 100_000_000 || !/^[a-f0-9]{64}$/.test(file.sha256)) throw new Error('Invalid release file digest'); if (seen.has(file.path)) throw new Error('Duplicate release path'); seen.add(file.path); const absolute = resolve(root, file.path); if (!absolute.startsWith(root + sep) || !(await lstat(absolute)).isFile()) throw new Error('Release entry must be a regular file'); const bytes = await readFile(absolute); if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256) throw new Error('Release integrity check failed'); }
-  return { id: manifest.id, commit: manifest.commit, mode: manifest.mode, files: seen.size };
+  if (manifest.files.some(file => /\.woff2?$/.test(file.path)) || manifest.thirdPartyNotices) {
+    if (!seen.has('dist/THIRD_PARTY_NOTICES.txt') || !seen.has('dist/THIRD_PARTY_NOTICES.json')) throw new Error('Distributed fonts require their accompanying license notices');
+    const notices = thirdPartyNoticeRecord(await readFile(resolve(root, 'dist/THIRD_PARTY_NOTICES.txt')), await readFile(resolve(root, 'dist/THIRD_PARTY_NOTICES.json'))); if (JSON.stringify(notices) !== JSON.stringify(manifest.thirdPartyNotices)) throw new Error('Release third-party license manifest differs');
+  }
+  return { id: manifest.id, commit: manifest.commit, mode: manifest.mode, files: seen.size, thirdPartyNotices: manifest.thirdPartyNotices };
 }
 export async function createRelease(root, outputDirectory = resolve(root, 'release-artifacts'), { allowDirty = false } = {}) {
   root = resolve(root); const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }).trim();
@@ -61,8 +73,11 @@ export async function createRelease(root, outputDirectory = resolve(root, 'relea
   for (const path of paths) { safeReleasePath(path); const absolute = resolve(root, path); if (!(await lstat(absolute)).isFile()) throw new Error('Release source must be regular files, without symlinks'); files.set(path, await readFile(absolute)); }
   async function assets(directory) { for (const entry of await readdir(directory, { withFileTypes: true })) { const absolute = resolve(directory, entry.name); if (entry.isDirectory()) await assets(absolute); else if (entry.isFile()) files.set(safeReleasePath(relative(root, absolute).split(sep).join('/')), await readFile(absolute)); else throw new Error('Build assets cannot contain symlinks'); } }
   await assets(resolve(root, 'dist')); if (!files.has('dist/index.html') || !files.has('LICENSE')) throw new Error('Build and license are required');
+  const thirdPartyNotices = thirdPartyNoticeRecord(files.get('dist/THIRD_PARTY_NOTICES.txt'), files.get('dist/THIRD_PARTY_NOTICES.json'));
+  if (!files.get('apps/web/public/THIRD_PARTY_NOTICES.txt')?.equals(files.get('dist/THIRD_PARTY_NOTICES.txt')) || !files.get('apps/web/public/THIRD_PARTY_NOTICES.json')?.equals(files.get('dist/THIRD_PARTY_NOTICES.json'))) throw new Error('Built and source third-party notices differ');
   const sorted = [...files].sort(([a], [b]) => a.localeCompare(b, 'en')); if (sorted.length > 5000 || sorted.reduce((sum, [, bytes]) => sum + bytes.length, 0) > 100_000_000) throw new Error('Release exceeds bounded artifact size');
   const manifest = { schemaVersion: '1', id, version: pkg.version, commit, sourceEpoch: epoch, dirty, mode: 'deterministic-preview', license: pkg.license, node: pkg.engines.node, packageManager: pkg.packageManager, files: sorted.map(([path, bytes]) => ({ path, bytes: bytes.length, sha256: sha256(bytes) })) };
+  manifest.thirdPartyNotices = thirdPartyNotices;
   files.set('release-manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n'));
   const tar = []; for (const [path, bytes] of [...files].sort(([a], [b]) => a.localeCompare(b, 'en'))) tar.push(...tarEntry(path, bytes, epoch)); tar.push(Buffer.alloc(1024));
   const archive = gzipSync(Buffer.concat(tar), { level: 9 }); const output = resolve(outputDirectory, `${id}.tar.gz`); await mkdir(dirname(output), { recursive: true }); await writeFile(output, archive); await writeFile(`${output}.sha256`, `${sha256(archive)}  ${id}.tar.gz\n`); await writeFile(resolve(outputDirectory, `${id}.manifest.json`), JSON.stringify(manifest, null, 2) + '\n');
