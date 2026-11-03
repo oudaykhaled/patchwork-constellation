@@ -86,6 +86,7 @@ export class AnalysisJobs {
     const id = analysisJobId(scope, input), pending = this.pending.get(id);
     this.startRecovery(scope.ownerId);
     if (pending) return { jobId: id, reused: true };
+    if (this.controllers.has(id) && !this.views.has(id)) throw Object.assign(new Error('An obsolete worker is still stopping. Retry shortly.'), { status: 429, code: 'BUSY', retryAfter: 1 });
     const cached = this.views.get(id);
     if (cached && !['failed', 'cancelled'].includes(cached.status)) return { jobId: id, reused: true };
     // Reserve before the first storage await, including delayed enqueue writes.
@@ -110,6 +111,7 @@ export class AnalysisJobs {
     if (scope && known && (scope.ownerId !== known.ownerId || scope.repository.toLowerCase() !== known.repository.toLowerCase())) return undefined;
     const selected = scope ?? known;
     if (!selected) return undefined;
+    if (this.invalidatingRepositories.has(this.repositoryKey(selected))) return undefined;
     const epoch = this.repositoryEpochs.get(this.repositoryKey(selected)) ?? 0;
     this.startRecovery(selected.ownerId);
     if (this.pending.has(id)) return this.views.get(id);
@@ -153,7 +155,7 @@ export class AnalysisJobs {
   }
   private launch(scope: StoreScope, id: string, release: () => void) {
     const controller = new AbortController(); this.controllers.set(id, controller);
-    const task = this.run(scope, id, controller).finally(() => { this.controllers.delete(id); this.tasks.delete(task); release(); });
+    const task = this.run(scope, id, controller).finally(() => { if (this.controllers.get(id) === controller) this.controllers.delete(id); this.tasks.delete(task); release(); });
     this.tasks.add(task); void task.catch(() => {});
   }
   private async run(scope: StoreScope, id: string, controller: AbortController) {
@@ -186,7 +188,8 @@ export class AnalysisJobs {
       await writes;
       const current = await this.store.getJob(scope, id); if (!current || current.status === 'cancelled') return;
       const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 500;
-      const retryable = this.closing || (!controller.signal.aborted && (status >= 500 || status === 429));
+      const hasExplicitStatus = typeof error === 'object' && error && 'status' in error;
+      const retryable = this.closing || (!controller.signal.aborted && Boolean(hasExplicitStatus) && (status >= 500 || status === 429));
       if (retryable && job.attempts < job.maxAttempts) await this.store.retryJob(scope, id, this.workerId, this.closing ? 'Server restarted; analysis will resume from its pinned context.' : errorMessage(error), this.closing ? 0 : Math.min(30_000, 1_000 * 2 ** job.attempts));
       else if (await this.store.completeJob(scope, id, this.workerId, { status: 'failed', error: controller.signal.aborted ? 'Analysis exceeded its resource budget. Retry a smaller repository.' : errorMessage(error), errorCode: controller.signal.aborted ? 'ANALYSIS_TIMEOUT' : failureCode(error, status), retryable })) this.failuresSinceStart++;
     } finally { clearTimeout(timeout); clearInterval(heartbeat); }

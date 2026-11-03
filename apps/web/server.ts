@@ -90,15 +90,16 @@ export async function createApplicationServer(options: { production?: boolean; s
     const epoch = repositoryFences.capture(scope); epochs?.set(key, epoch); return epoch;
   };
   const scopeFor = (repository: string): StoreScope => { const scope = { ownerId: ownerId(), repository: parseRepository(repository).fullName.toLowerCase() }; expectedEpoch(scope); return scope; };
-  async function saveSnapshot(snapshot: GraphSnapshot, isCurrent: () => boolean = () => true) {
+  async function saveSnapshot(snapshot: GraphSnapshot, isCurrent: () => boolean = () => true, withinWrite = false) {
     validateGraphSnapshot(snapshot); const scope = scopeFor(snapshot.repository.fullName), epoch = expectedEpoch(scope);
-    return repositoryFences.write(scope, epoch, async () => {
+    const write = async () => {
       if (auth && scope.ownerId !== 'local-public' && snapshot.mode !== 'demo') await auth.credentialsForOwner(scope.ownerId, scope.repository);
       repositoryFences.assert(scope, epoch); if (!isCurrent()) throw new AuthError('Repository analysis was invalidated.', 409, 'REPOSITORY_INVALIDATED');
       await store.putSnapshot(scope, snapshot);
       repositoryFences.assert(scope, epoch); if (!isCurrent()) throw new AuthError('Repository analysis was invalidated.', 409, 'REPOSITORY_INVALIDATED');
       return remember(snapshot);
-    });
+    };
+    return withinWrite ? write() : repositoryFences.write(scope, epoch, write);
   }
   async function lookupSnapshot(id: string, repository?: string | null): Promise<GraphSnapshot> {
     const cached = snapshots.get(snapshotKey(id));
@@ -129,6 +130,37 @@ export async function createApplicationServer(options: { production?: boolean; s
     auth ? scope => auth.credentialsForOwner(scope.ownerId, scope.repository) : undefined);
   const resolveAnalysisInput = options.resolveAnalysisInput ?? (options.runAnalysis ? async (input: Parameters<typeof runAnalysisInWorker>[0]) => input : pinAnalysisInput);
   if (!auth) analysisJobs.startRecovery();
+  async function mutateGrouping<T extends { snapshot: GraphSnapshot }>(snapshot: GraphSnapshot, operation: () => Promise<T> | T) {
+    const scope = scopeFor(snapshot.repository.fullName), epoch = expectedEpoch(scope);
+    return repositoryFences.write(scope, epoch, async () => {
+      if (auth && snapshot.mode !== 'demo') await auth.credentialsForOwner(scope.ownerId, scope.repository);
+      repositoryFences.assert(scope, epoch);
+      const result = await operation();
+      repositoryFences.assert(scope, epoch); await saveSnapshot(result.snapshot, () => true, true); return result;
+    });
+  }
+  async function proposeGrouping(snapshot: GraphSnapshot, enabled: boolean) {
+    const scope = scopeFor(snapshot.repository.fullName), epoch = expectedEpoch(scope), request = { scope, controller: new AbortController() };
+    groupingRequests.add(request);
+    try {
+      const result = await groupingForOwner().propose(snapshot, { enabled, tenantId: scope.ownerId, signal: AbortSignal.any([request.controller.signal, AbortSignal.timeout(60_000)]) });
+      repositoryFences.assert(scope, epoch); request.controller.signal.throwIfAborted(); return result;
+    } finally { groupingRequests.delete(request); }
+  }
+  async function purgeRepository(requestedScope: StoreScope) {
+    const scope = { ownerId: requestedScope.ownerId, repository: parseRepository(requestedScope.repository).fullName.toLowerCase() };
+    const invalidation = analysisJobs.invalidateRepository(scope); void invalidation.catch(() => {});
+    for (const request of sourceRequests.values()) if (scopeKey(request.scope) === scopeKey(scope)) request.controller.abort();
+    for (const request of groupingRequests) if (scopeKey(request.scope) === scopeKey(scope)) request.controller.abort();
+    await repositoryFences.purge(scope, async () => {
+      await invalidation;
+      for (const [key, snapshot] of snapshots) if (key.startsWith(`${scope.ownerId}:`) && snapshot.repository.fullName.toLowerCase() === scope.repository) snapshots.delete(key);
+      // Owner services are isolated. The revision-store integration supplies scoped durable deletion.
+      if (auth) ownerGroupings.delete(scope.ownerId);
+      await store.deleteRepository(scope);
+    });
+    analysisJobs.finishInvalidation(scope);
+  }
   await saveSnapshot(structuredClone(demoSnapshot));
   const vite = useProduction ? null : await (await import('vite')).createServer({ configFile: resolve(root, 'apps/web/vite.config.ts'), server: { middlewareMode: true }, appType: 'spa' });
   const server = createServer((req, res) => requestScope.run({ ownerId: 'local-public', epochs: new Map() }, async () => {
@@ -181,7 +213,7 @@ export async function createApplicationServer(options: { production?: boolean; s
           catch { return json(res, 503, { status: 'unavailable', code: 'WORKER_UNAVAILABLE', error: 'The analysis worker could not start. Restart the server and check the Node.js installation.' }); }
         }
         if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: auth ? 'github-app' : 'local-public', github: { publicRepositories: true, privateRepositories: Boolean(auth), configuredToken: Boolean(process.env.GITHUB_TOKEN), appConfigured: Boolean(auth), loginUrl: auth ? '/api/auth/login' : null }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: store.kind === 'postgres' } });
-        if (req.method === 'GET' && url.pathname === '/api/demo') return json(res, 200, await saveSnapshot(grouping.view(structuredClone(demoSnapshot)).snapshot));
+        if (req.method === 'GET' && url.pathname === '/api/demo') return json(res, 200, await saveSnapshot(grouping.view(structuredClone(demoSnapshot), { tenantId: ownerId() }).snapshot));
         if (req.method === 'GET' && url.pathname.startsWith('/api/snapshots/')) return json(res, 200, await lookupSnapshot(decodeURIComponent(url.pathname.slice(15)), url.searchParams.get('repository')));
         const graphMatch = url.pathname.match(/^\/api\/graphs\/([^/]+)(\/chunks)?$/);
         if (req.method === 'GET' && graphMatch) {
@@ -230,13 +262,13 @@ export async function createApplicationServer(options: { production?: boolean; s
           const input = sourceRequest.parse(await body(req));
           const snapshot = getSnapshot(input.snapshotId); const ids = [...new Set(input.ids)];
           if (ids.some(id => !snapshot.sources.some(source => source.id === id && source.kind === input.kind))) throw Object.assign(new Error('Unknown change source.'), { status: 400 });
-          if (snapshot.mode === 'demo') return json(res, 200, await serialSnapshot(input.snapshotId, () => saveSnapshot(grouping.view(getSnapshot(input.snapshotId)).snapshot)));
+          if (snapshot.mode === 'demo') return json(res, 200, await serialSnapshot(input.snapshotId, () => saveSnapshot(grouping.view(getSnapshot(input.snapshotId), { tenantId: ownerId() }).snapshot)));
           // A newer selection cancels its predecessor rather than joining a work queue.
           const sourceKey = snapshotKey(input.snapshotId);
           sourceRequests.get(sourceKey)?.controller.abort();
           if (ids.every(id => snapshot.sources.find(source => source.id === id)?.loaded === true)) {
             sourceRequests.delete(sourceKey);
-            return json(res, 200, await serialSnapshot(input.snapshotId, () => saveSnapshot(grouping.view({ ...getSnapshot(input.snapshotId), defaultSelection: ids }).snapshot)));
+            return json(res, 200, await serialSnapshot(input.snapshotId, () => saveSnapshot(grouping.view({ ...getSnapshot(input.snapshotId), defaultSelection: ids }, { tenantId: ownerId() }).snapshot)));
           }
           const release = admission.reserve();
           const request = { controller: new AbortController(), scope: scopeFor(snapshot.repository.fullName) }; sourceRequests.set(sourceKey, request);
@@ -253,7 +285,7 @@ export async function createApplicationServer(options: { production?: boolean; s
                 const latest = getSnapshot(input.snapshotId);
                 const sources = new Map(loaded.sources.map(source => [source.id, source]));
                 for (const source of latest.sources) if (!sources.has(source.id)) sources.set(source.id, source);
-                return saveSnapshot(grouping.view({ ...loaded, sources: [...sources.values()] }).snapshot);
+                return saveSnapshot(grouping.view({ ...loaded, sources: [...sources.values()] }, { tenantId: ownerId() }).snapshot);
               });
             } catch (error) { superseded(); throw error; }
             finally { res.removeListener('close', disconnect); if (sourceRequests.get(sourceKey) === request) sourceRequests.delete(sourceKey); release(); }
@@ -264,15 +296,15 @@ export async function createApplicationServer(options: { production?: boolean; s
         }
         if (req.method === 'POST' && url.pathname === '/api/grouping') {
           const input = idRequest.extend({ enabled: z.boolean().default(false) }).parse(await body(req));
-          return json(res, 200, await grouping.propose(getSnapshot(input.snapshotId), { enabled: input.enabled, tenantId: ownerId(), signal: AbortSignal.timeout(60_000) }));
+          return json(res, 200, await proposeGrouping(getSnapshot(input.snapshotId), input.enabled));
         }
         if (req.method === 'POST' && url.pathname === '/api/grouping/apply') {
-          const input = idRequest.extend({ proposalId: z.string().max(500) }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const value = await grouping.apply(getSnapshot(input.snapshotId), input.proposalId); await saveSnapshot(value.snapshot); return value; }); return json(res, 200, result);
+          const input = idRequest.extend({ proposalId: z.string().max(500) }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.apply(snapshot, input.proposalId, { tenantId: ownerId() })); }); return json(res, 200, result);
         }
         if (req.method === 'POST' && url.pathname === '/api/grouping/mutate') {
-          const input = idRequest.extend({ operation: z.unknown() }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const value = await grouping.mutate(getSnapshot(input.snapshotId), input.operation as Parameters<typeof grouping.mutate>[1]); await saveSnapshot(value.snapshot); return value; }); return json(res, 200, result);
+          const input = idRequest.extend({ operation: z.unknown() }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.mutate(snapshot, input.operation as Parameters<typeof grouping.mutate>[1], { tenantId: ownerId() })); }); return json(res, 200, result);
         }
-        if (req.method === 'POST' && url.pathname === '/api/grouping/undo') { const input = idRequest.parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const value = await grouping.undo(getSnapshot(input.snapshotId)); await saveSnapshot(value.snapshot); return value; }); return json(res, 200, result); }
+        if (req.method === 'POST' && url.pathname === '/api/grouping/undo') { const input = idRequest.parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.undo(snapshot, { tenantId: ownerId() })); }); return json(res, 200, result); }
         return json(res, 404, { error: 'API route not found.' });
       }
       if (!useProduction && vite) return vite.middlewares(req, res, () => json(res, 404, { error: 'Not found' }));
@@ -291,7 +323,7 @@ export async function createApplicationServer(options: { production?: boolean; s
     }
   }));
   server.on('close', () => { for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void Promise.allSettled([...runningTasks, analysisJobs.close()]).then(() => store.close()); });
-  return server;
+  return Object.assign(server, { purgeRepository, analysisJobs });
 }
 function safeError(error: unknown) { return publicErrorMessage(error); }
 

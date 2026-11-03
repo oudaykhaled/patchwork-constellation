@@ -1,13 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createStore, newJob, type StoreScope } from '@patchwork/storage';
 import { demoSnapshot } from '@patchwork/fixtures';
-import { AnalysisJobs, analysisJobId } from './analysis-jobs';
+import { AnalysisJobs, analysisJobId, pinAnalysisInput } from './analysis-jobs';
 import { WorkerAdmission } from './worker-admission';
 import type { runAnalysisInWorker } from '../worker/src/index';
 
 const scope: StoreScope = { ownerId: 'local-public', repository: demoSnapshot.repository.fullName };
 const input = { repository: scope.repository, contextRef: 'a'.repeat(40), displayContextRef: 'main', mode: 'pr' as const };
 describe('durable analysis coordination', () => {
+  it('pins an authorized private ref using server credentials while preserving its display ref', async () => {
+    const headers: string[] = [];
+    const fetcher = vi.fn(async (url: string | URL | Request, options?: RequestInit) => {
+      headers.push(new Headers(options?.headers).get('authorization')!);
+      return new Response(JSON.stringify(String(url).includes('/commits/') ? { sha: 'c'.repeat(40) } : { private: true, default_branch: 'trunk' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const pinned = await pinAnalysisInput({ repository: 'acme/private' }, { token: 'server-only', allowPrivate: true, fetch: fetcher });
+    expect(pinned).toMatchObject({ contextRef: 'c'.repeat(40), displayContextRef: 'trunk' }); expect(headers).toEqual(['Bearer server-only', 'Bearer server-only']);
+    expect(JSON.stringify(pinned)).not.toContain('server-only');
+    await expect(pinAnalysisInput({ repository: 'another/private' }, { fetch: fetcher })).rejects.toMatchObject({ code: 'PRIVATE_UNSUPPORTED' });
+  });
   it('atomically deduplicates pinned work, completed results and owner scopes', async () => {
     const store = await createStore({ databaseUrl: '' });
     let resolve!: (value: typeof demoSnapshot) => void;
