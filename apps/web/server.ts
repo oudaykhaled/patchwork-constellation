@@ -182,6 +182,20 @@ export async function createApplicationServer(options: { production?: boolean; s
     });
     analysisJobs.finishInvalidation(scope);
   }
+  async function disconnectOwner(req: IncomingMessage, res: ServerResponse) {
+    const session = auth!.requireSession(req); auth!.csrf(req, session);
+    const service = ownerGroupings.get(session.ownerId) ?? createGrouping(session.ownerId);
+    const repositories = new Set(await store.listRepositories(session.ownerId));
+    for (const repository of service.repositoriesForTenant(session.ownerId)) repositories.add(repository);
+    for (const binding of auth!.knownRepositoryBindings()) if (binding.ownerId === session.ownerId) repositories.add(binding.repository);
+    for (const [key, snapshot] of snapshots) if (key.startsWith(`${session.ownerId}:`)) repositories.add(snapshot.repository.fullName);
+    for (const request of [...sourceRequests.values(), ...groupingRequests]) if (request.scope.ownerId === session.ownerId) repositories.add(request.scope.repository);
+    // Revoke every owner session before awaiting cancellation/deletion. Purge uses
+    // the existing per-repository write fence, including late ignored-abort work.
+    auth!.disconnect(req, res);
+    for (const repository of repositories) await purgeRepository({ ownerId: session.ownerId, repository });
+    ownerGroupings.delete(session.ownerId);
+  }
   const webhookBinding = (value: ReturnType<GitHubAppAuth['knownRepositoryBindings']>[number]) => ({ scope: { ownerId: value.ownerId, repository: value.repository }, installationId: value.installationId, repositoryId: value.repositoryId, contextRef: refreshContexts.get(scopeKey(value)) });
   let webhooks: WebhookRefreshService | undefined;
   try { webhooks = options.webhooks ?? (auth ? await createConfiguredWebhookRefresh({
@@ -223,7 +237,7 @@ export async function createApplicationServer(options: { production?: boolean; s
           if (req.method === 'GET' && url.pathname === '/api/auth/login') { res.writeHead(302, { Location: auth.begin(res), 'Cache-Control': 'no-store' }); return res.end(); }
           if (req.method === 'GET' && url.pathname === '/api/auth/callback') { await auth.complete(req, res, url.searchParams.get('code') ?? '', url.searchParams.get('state') ?? ''); res.writeHead(303, { Location: '/', 'Cache-Control': 'no-store' }); return res.end(); }
           if (req.method === 'GET' && url.pathname === '/api/auth/session') { const session = auth.session(req); return json(res, 200, session ? { configured: true, authenticated: true, login: session.login, csrf: session.csrf, expiresAt: session.expiresAt } : { configured: true, authenticated: false }); }
-          if (req.method === 'POST' && url.pathname === '/api/auth/disconnect') { auth.disconnect(req, res); return json(res, 200, { authenticated: false }); }
+          if (req.method === 'POST' && url.pathname === '/api/auth/disconnect') { await disconnectOwner(req, res); return json(res, 200, { authenticated: false }); }
           if (req.method === 'GET' && url.pathname === '/api/auth/repositories') return json(res, 200, { repositories: await auth.repositories(auth.requireSession(req)) });
           return json(res, 404, { error: 'Authentication route not found.' });
         }

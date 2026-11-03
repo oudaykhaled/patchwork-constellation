@@ -9,7 +9,7 @@ const req = (cookie = '', headers: Record<string, string> = {}) => ({ headers: {
 const res = () => { const headers: Record<string, string | string[]> = {}; return { headers, response: { setHeader: (name: string, value: string | string[]) => { headers[name] = value; } } as unknown as ServerResponse }; };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 const repo = { id: 80, full_name: 'acme/private', private: true };
-function fixture() {
+function fixture(options: { beforeDiscovery?: () => Promise<void> } = {}) {
   let now = Date.parse('2026-11-03T12:00:00Z'); let access = true; let revoked = false; let tokenCalls = 0;
   const requests: { url: string; body?: unknown; authorization?: string }[] = [];
   const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -18,7 +18,7 @@ function fixture() {
     if (address === 'https://github.com/login/oauth/access_token') return json({ access_token: 'ghu_synthetic', token_type: 'bearer', expires_in: 28_800 });
     if (revoked && address.includes('/user')) return json({}, 401);
     if (address === 'https://api.github.com/user') return json({ id: 9, login: 'reviewer' });
-    if (address.includes('/user/installations?')) return json({ installations: access ? [{ id: 18, suspended_at: null }] : [] });
+    if (address.includes('/user/installations?')) { await options.beforeDiscovery?.(); return json({ installations: access ? [{ id: 18, suspended_at: null }] : [] }); }
     if (address.includes('/user/installations/18/repositories')) return json({ repositories: access ? [repo] : [] });
     if (address.endsWith('/app/installations/18/access_tokens')) { tokenCalls++; return json({ token: `ghs_synthetic_${tokenCalls}`, expires_at: new Date(now + 3_600_000).toISOString() }); }
     return json({}, 404);
@@ -66,6 +66,25 @@ describe('GitHub App authorization boundary', () => {
     await expect(f.auth.repositoryToken(session, repo.full_name, 999)).rejects.toMatchObject({ code: 'REPOSITORY_DENIED' });
     await expect(f.auth.repositoryToken(session, 'other/secret')).rejects.toMatchObject({ code: 'REPOSITORY_DENIED' });
     expect(f.tokenCalls).toBe(0);
+  });
+  test('disconnect invalidates every session for the owner and clears its repository bindings', async () => {
+    const f = fixture(), first = await login(f.auth), sibling = await login(f.auth);
+    await f.auth.repositoryToken(first.session, repo.full_name);
+    expect(f.auth.knownRepositoryBindings()).toHaveLength(1);
+    f.auth.disconnect(req(first.cookie, { origin: config.origin, 'x-csrf-token': first.session.csrf }), res().response);
+    expect(f.auth.session(req(first.cookie))).toBeUndefined(); expect(f.auth.session(req(sibling.cookie))).toBeUndefined();
+    expect(f.auth.knownRepositoryBindings()).toEqual([]);
+    await expect(f.auth.credentialsForOwner(first.session.ownerId, repo.full_name)).rejects.toMatchObject({ code: 'AUTH_SESSION_REQUIRED' });
+  });
+  test('upstream discovery finishing after disconnect cannot restore bindings or mint a token', async () => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { entered = resolve; });
+    const f = fixture({ beforeDiscovery: async () => { entered(); await gate; } }), logged = await login(f.auth);
+    const pending = f.auth.repositoryToken(logged.session, repo.full_name); await started;
+    f.auth.disconnect(req(logged.cookie, { origin: config.origin, 'x-csrf-token': logged.session.csrf }), res().response);
+    release();
+    await expect(pending).rejects.toMatchObject({ code: 'SIGN_IN_REQUIRED' });
+    expect(f.tokenCalls).toBe(0); expect(f.auth.knownRepositoryBindings()).toEqual([]);
   });
   test('token scope is one authorized repository with readonly permissions; reuse refreshes before expiry', async () => {
     const f = fixture(); const { session } = await login(f.auth);

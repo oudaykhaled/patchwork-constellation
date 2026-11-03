@@ -92,7 +92,13 @@ export class GitHubAppAuth {
   }
   requireSession(req: IncomingMessage): GitHubSession { const session = this.session(req); if (!session) throw new AuthError('Sign in with GitHub to access repository analysis.'); return session; }
   csrf(req: IncomingMessage, session: GitHubSession) { if (req.headers.origin !== this.config.origin || typeof req.headers['x-csrf-token'] !== 'string' || !equal(req.headers['x-csrf-token'], session.csrf)) throw new AuthError('Refresh the page and retry this action.', 403, 'CSRF_DENIED'); }
-  disconnect(req: IncomingMessage, res: ServerResponse) { const session = this.requireSession(req); this.csrf(req, session); this.sessions.delete(session.id); this.installationTokens.clear(); res.setHeader('Set-Cookie', this.cookie('constellation_session', '', 0)); }
+  disconnect(req: IncomingMessage, res: ServerResponse) {
+    const session = this.requireSession(req); this.csrf(req, session);
+    // Disconnect is account-wide: a second tab/session cannot restore deleted data.
+    for (const [id, stored] of this.sessions) if (stored.ownerId === session.ownerId) this.sessions.delete(id);
+    for (const [key, scope] of this.knownScopes) if (scope.ownerId === session.ownerId) this.knownScopes.delete(key);
+    this.installationTokens.clear(); res.setHeader('Set-Cookie', this.cookie('constellation_session', '', 0));
+  }
   private stored(session: GitHubSession) { const value = this.sessions.get(session.id); if (!value || value.expiresAt <= this.now()) throw new AuthError('GitHub session expired. Sign in again.'); return value; }
   /** Always live authorization: installation IDs, cached tokens and cached snapshots are not authority. */
   async repositories(session: GitHubSession): Promise<AuthorizedRepository[]> {
@@ -116,7 +122,8 @@ export class GitHubAppAuth {
         if (page === 20) throw new AuthError('Installation discovery limit reached. Contact the maintainer.', 422, 'AUTH_DISCOVERY_LIMIT');
       }
     } catch (error) { if (error instanceof AuthError && error.code === 'AUTH_REVOKED') this.sessions.delete(session.id); throw error; }
-    return repositories;
+    // A disconnect may have happened while upstream discovery was in flight.
+    this.stored(session); return repositories;
   }
   async authorize(session: GitHubSession, repository: string, installationId?: number) {
     const found = (await this.repositories(session)).find(value => value.full_name.toLowerCase() === repository.toLowerCase() && (installationId === undefined || installationId === value.installationId));
@@ -130,12 +137,13 @@ export class GitHubAppAuth {
     const authorized = await this.authorize(session, repository, installationId);
     const key = `${authorized.installationId}:${authorized.id}`; const cached = this.installationTokens.get(key);
     if (cached && cached.expires > this.now() + 60_000) return cached.value;
-    const pending = this.tokenRequests.get(key); if (pending) return pending;
+    const pending = this.tokenRequests.get(key); if (pending) { const value = await pending; this.stored(session); return value; }
     const work = (async () => {
       const seconds = Math.floor(this.now() / 1000); const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
       const payload = Buffer.from(JSON.stringify({ iat: seconds - 60, exp: seconds + 540, iss: this.config.appId })).toString('base64url');
       const content = `${header}.${payload}`; const jwt = `${content}.${sign('RSA-SHA256', Buffer.from(content), this.config.privateKey).toString('base64url')}`;
       const result = z.object({ token: z.string().min(1).max(16_384), expires_at: z.string().datetime() }).parse(await this.request(`/app/installations/${authorized.installationId}/access_tokens`, jwt, 'POST', { repository_ids: [authorized.id], permissions: { contents: 'read', pull_requests: 'read', metadata: 'read' } }));
+      this.stored(session);
       const expires = Date.parse(result.expires_at);
       if (expires <= this.now() + 60_000 || expires > this.now() + 3_660_000) throw new AuthError('GitHub returned an invalid token expiry.', 502, 'INVALID_AUTH_RESPONSE');
       if (this.installationTokens.size >= 256) this.installationTokens.delete(this.installationTokens.keys().next().value!);

@@ -23,7 +23,10 @@ describe('revision recovery and lineage', () => {
     const alice = service.mutate(value, { type: 'rename', groupId: 'auth', label: 'Alice identity' }, { tenantId: 'alice' });
     service.mutate(value, { type: 'rename', groupId: 'auth', label: 'Bob identity' }, { tenantId: 'bob' });
     const stale = new GroupingService({ storagePath }); expect(stale.current(value, { tenantId: 'alice' }).id).toBe(alice.revision.id);
+    expect(stale.repositoriesForTenant('alice')).toEqual(['example/repo']); expect(stale.repositoriesForTenant('bob')).toEqual(['example/repo']);
+    expect(stale.repositoriesForTenant('outsider')).toEqual([]);
     service.purgeRepository(value.repository.fullName, 'alice');
+    expect(new GroupingService({ storagePath }).repositoriesForTenant('alice')).toEqual([]);
     expect(() => stale.mutate(value, { type: 'rename', groupId: 'auth', label: 'Resurrection' }, { tenantId: 'alice', expectedRevisionId: alice.revision.id })).toThrow('Grouping changed');
     const fresh = new GroupingService({ storagePath });
     expect(fresh.current(value, { tenantId: 'alice' }).groups[0]!.label).toBe('Auth');

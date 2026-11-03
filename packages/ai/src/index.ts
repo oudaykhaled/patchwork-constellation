@@ -269,6 +269,15 @@ export class GroupingService {
     try { this.config.onTelemetry?.({ event: 'grouping', outcome, durationMs, requests: cacheHit ? 0 : requests, inputTokens: noTraffic ? 0 : proposal?.usage?.inputTokens ?? null, outputTokens: noTraffic ? 0 : proposal?.usage?.outputTokens ?? null, cacheHit }); } catch { /* A metrics sink cannot interrupt the review flow. */ }
   }
 
+  /** Inventory persisted and pending scopes before an authenticated owner disconnect. */
+  repositoriesForTenant(tenantId: string): string[] {
+    this.restore();
+    return [...new Set([
+      ...[...this.historyMetadata.values()].filter(value => value.tenantId === tenantId).map(value => value.repository),
+      ...[...this.proposals.values()].filter(value => value.tenantId === tenantId).map(value => value.repository.toLowerCase()),
+    ])].sort();
+  }
+
   /** Called only after the server revokes the same owner/repository authority. */
   purgeRepository(repository: string, tenantId = 'local'): void {
     this.restore();

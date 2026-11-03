@@ -38,6 +38,8 @@ export interface SnapshotStore {
   getSnapshot(scope: StoreScope, id: string): Promise<GraphSnapshot | undefined>;
   /** Most recently written unexpired snapshot in this exact owner/repository scope. */
   getLatestSnapshot(scope: StoreScope): Promise<GraphSnapshot | undefined>;
+  /** All retained repository scopes, including expired data awaiting pruning. */
+  listRepositories(ownerId: string): Promise<string[]>;
   deleteRepository(scope: StoreScope): Promise<void>;
   putJob(scope: StoreScope, job: StoredJob): Promise<void>;
   /** Atomic insert without replacing an existing idempotency key. */
@@ -124,6 +126,13 @@ class MemoryStore implements SnapshotStore {
     let latest: { value: GraphSnapshot; storedOrder: number } | undefined;
     for (const entry of this.snapshots.values()) if (entry.scope.ownerId === selected.ownerId && entry.scope.repository === selected.repository && entry.expires > this.now() && (!latest || entry.storedOrder > latest.storedOrder)) latest = entry;
     return latest ? structuredClone(latest.value) : undefined;
+  }
+  async listRepositories(ownerId: string): Promise<string[]> {
+    normalizeScope({ ownerId, repository: 'scope/check' });
+    const repositories = new Set<string>();
+    for (const entry of [...this.snapshots.values(), ...this.jobs.values()]) if (entry.scope.ownerId === ownerId) repositories.add(entry.scope.repository);
+    for (const key of this.deliveries.keys()) { const tuple = JSON.parse(key) as string[]; if (tuple[0] === ownerId) repositories.add(tuple[1]!); }
+    return [...repositories].sort();
   }
   async putJob(scope: StoreScope, job: StoredJob): Promise<void> {
     const s = normalizeScope(scope), value = checkedJob(job); const key = this.key(s, job.id);
@@ -212,6 +221,11 @@ class PostgresStore implements SnapshotStore {
   async getLatestSnapshot(scope: StoreScope): Promise<GraphSnapshot | undefined> {
     const result = await this.pool.query<{ payload: GraphSnapshot }>('SELECT payload FROM patchwork_snapshots WHERE owner_id=$1 AND repository=$2 AND expires_at>NOW() ORDER BY stored_at DESC,id DESC LIMIT 1', this.params(scope));
     return result.rows[0]?.payload;
+  }
+  async listRepositories(ownerId: string): Promise<string[]> {
+    normalizeScope({ ownerId, repository: 'scope/check' });
+    const result = await this.pool.query<{ repository: string }>('SELECT repository FROM patchwork_snapshots WHERE owner_id=$1 UNION SELECT repository FROM patchwork_jobs WHERE owner_id=$1 UNION SELECT repository FROM patchwork_webhook_deliveries WHERE owner_id=$1 ORDER BY repository', [ownerId]);
+    return result.rows.map(row => row.repository);
   }
   async putJob(scope: StoreScope, job: StoredJob): Promise<void> {
     const j = checkedJob(job); await this.pool.query('INSERT INTO patchwork_jobs(owner_id,repository,id,payload,status,available_at,lease_owner,lease_expires_at,attempts,max_attempts,expires_at) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,NOW()+$11*INTERVAL \'1 millisecond\') ON CONFLICT(owner_id,repository,id) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status,available_at=EXCLUDED.available_at,lease_owner=EXCLUDED.lease_owner,lease_expires_at=EXCLUDED.lease_expires_at,attempts=EXCLUDED.attempts,max_attempts=EXCLUDED.max_attempts,expires_at=EXCLUDED.expires_at', [...this.params(scope), j.id, JSON.stringify(j), j.status, j.availableAt, j.leaseOwner ?? null, j.leaseExpiresAt ?? null, j.attempts, j.maxAttempts, this.retention]);
