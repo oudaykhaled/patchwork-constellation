@@ -5,6 +5,7 @@ import type { AnalysisOptions } from './index';
 import { deriveGroups, nodeForPath } from './groups';
 import { languageFor } from './imports';
 import { boundedGitDiff } from './git-fallback';
+import { enrichSelectedSourceDependencies } from './source-dependencies';
 
 interface ApiCommit { sha: string; html_url?: string; commit: { message: string; committer?: { date?: string } }; parents: { sha: string }[]; files?: ApiFile[]; }
 interface ApiPull { number: number; title: string; html_url: string; state: string; updated_at?: string; changed_files?: number; base: { sha: string; ref: string }; head: { sha: string; ref: string }; }
@@ -116,5 +117,6 @@ export async function loadSourceChanges(snapshot: GraphSnapshot, kind: 'pr' | 'c
   result.groups.push(...deriveGroups(result.nodes.map(node => node.path)).filter(group => !existingGroups.has(group.id)));
   result.coverage = { ...result.coverage, status: reasons.length ? 'partial' : 'complete', reasons: unique(reasons) }; result.defaultSelection = selection;
   options.onProgress?.({ stage: 'ready', progress: 100, message: 'Selected change footprints are ready' });
+  await enrichSelectedSourceDependencies(result, kind, selection, options);
   return validateGraphSnapshot(result);
 }
