@@ -12,4 +12,10 @@ The command clears provider, GitHub and database settings only inside its own pr
 
 The allowlisted result is written to `.tmp/public-github-smoke.json`. It contains pinned public metadata, counts, coverage, aggregate request totals, source/runner identifiers and the generated public diff destination. It contains no credential, response body or repository source. Preserve the result with its recorded source commit when publishing evidence.
 
+## Observed run
+
+The [published raw result](../evidence/live-public-github-smoke.json) passed all **six checks** at committed source `3d037815dd420326ea4aafb4da720cd3918e8c23` on 2026-11-03, Windows x64 / Node 24.22.1. The run took **6,206 ms**. The product BFF/worker made **13 actual GitHub requests**, with one cache hit, zero retries and zero rate-limit responses. Independent ground truth used three API requests; comparison HTML and raw pinned diff used two additional requests. Model requests were **zero**.
+
+The single inventoried file and both selected commit changes matched independent GitHub evidence: **one changed file, one overlapping file, two overlapping sources**. Context coverage remained explicitly partial because README dependency extraction is unsupported. The actual GitHub comparison and its `.diff` both returned HTTP 200; the raw diff contained the exact README file header. Initial comparison HTML omitted the lazy-loaded file anchor, so browser fragment navigation remains unverified in this report.
+
 This tiny README-only fixture verifies live transport and exact change semantics. Its unsupported JavaScript/TypeScript import analysis is explicit; zero edges is expected. It is not evidence for large-repository analysis or a private account's GitHub App installation. The script verifies both the GitHub comparison's HTTP response and its actual `.diff` file header. GitHub can lazy-load the files pane, so initial HTML is not presented as proof that rendered fragment navigation succeeded. This command does not establish browser interaction, accessibility acceptance, a deployed environment, intelligence quality or beta approval.

@@ -1,0 +1,140 @@
+{
+  "schemaVersion": "1",
+  "issue": 18,
+  "status": "passed",
+  "recordedAt": "2026-11-03T21:46:36.053Z",
+  "applicationCommit": "3d037815dd420326ea4aafb4da720cd3918e8c23",
+  "runnerSha256": "9a5787ab3262f56aef7098e881ac800cda749f880edc0b47838ea2d5d2c83b60",
+  "node": "v24.22.1",
+  "platform": "win32/x64",
+  "durationMs": 6206,
+  "sampleKind": "live-anonymous-public-GitHub-through-product-BFF",
+  "checks": [
+    {
+      "id": "public-pinned-ground-truth",
+      "status": "passed",
+      "evidence": {
+        "repository": "octocat/Hello-World",
+        "contextSha": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d",
+        "paths": [
+          "README"
+        ]
+      }
+    },
+    {
+      "id": "credential-free-public-mode",
+      "status": "passed",
+      "evidence": {
+        "mode": "local-public",
+        "configuredGithubToken": false,
+        "appConfigured": false,
+        "externalAiEnabled": false,
+        "storage": "memory"
+      }
+    },
+    {
+      "id": "real-bff-and-worker-analysis",
+      "status": "passed",
+      "evidence": {
+        "files": 1,
+        "edges": 0,
+        "groups": 1,
+        "coverage": {
+          "status": "partial",
+          "reasons": [
+            "1 files are inventoried as context with unsupported dependency extraction."
+          ],
+          "filesAnalyzed": 0,
+          "totalFiles": 1,
+          "importsSupported": "JavaScript/TypeScript static imports",
+          "excludedExternalPackages": true
+        },
+        "perFileImportCoverage": "unsupported",
+        "perFileImportReasons": [
+          "Dependency extraction supports JavaScript and TypeScript only."
+        ]
+      }
+    },
+    {
+      "id": "live-multi-commit-footprint",
+      "status": "passed",
+      "evidence": {
+        "sources": [
+          {
+            "id": "commit:7fd1a60b01f91b314f59955a4e4d4e80d8edf11d",
+            "baseSha": "553c2077f0edc3d5dc5d17262f6aa498e69d6f8e",
+            "headSha": "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d",
+            "comparisonKind": "first-parent",
+            "files": [
+              "README"
+            ],
+            "coverage": {
+              "status": "complete",
+              "reasons": []
+            },
+            "fileEvidence": "github-api"
+          },
+          {
+            "id": "commit:762941318ee16e59dabbacb1b4049eec22f0d303",
+            "baseSha": "553c2077f0edc3d5dc5d17262f6aa498e69d6f8e",
+            "headSha": "762941318ee16e59dabbacb1b4049eec22f0d303",
+            "comparisonKind": "first-parent",
+            "files": [
+              "README"
+            ],
+            "coverage": {
+              "status": "complete",
+              "reasons": []
+            },
+            "fileEvidence": "github-api"
+          }
+        ],
+        "counts": {
+          "changedFiles": 1,
+          "overlappingFiles": 1,
+          "overlappingSources": 2,
+          "dependencyNeighbors": 0
+        }
+      }
+    },
+    {
+      "id": "genuine-file-detail-and-diff",
+      "status": "passed",
+      "evidence": {
+        "path": "README",
+        "sourceCount": 2,
+        "destination": "https://github.com/octocat/Hello-World/compare/553c2077f0edc3d5dc5d17262f6aa498e69d6f8e..7fd1a60b01f91b314f59955a4e4d4e80d8edf11d#diff-2b7814d3fca2e99e56c51b6ff2aa313ea6e9da6424804240aa8ad891fdfe0900",
+        "destinationStatus": 200,
+        "exactFileAnchorPresentInInitialHtml": false,
+        "browserFragmentNavigationVerified": false,
+        "pinnedDiffTextStatus": 200,
+        "pinnedDiffHeader": "diff --git a/README b/README",
+        "pinnedDiffTextSha256": "b9f0e648c3b11a522fc2db0348b3814ccdec3d5a8e4a70a8a458cd2cd6c7897f"
+      }
+    },
+    {
+      "id": "observed-real-network-budget",
+      "status": "passed",
+      "evidence": {
+        "productGithub": {
+          "requests": 13,
+          "rateLimited": 0,
+          "cacheHits": 1,
+          "retries": 0,
+          "minimumRemaining": 30,
+          "observationStatus": "observed"
+        },
+        "independentVerificationRequests": 3,
+        "githubComparisonAndDiffRequests": 2,
+        "providerRequests": 0
+      }
+    }
+  ],
+  "limits": [
+    "One fixed public repository and two immutable commits; no credentialed/private GitHub App login, installation or revocation is established.",
+    "Loopback BFF with actual worker threads and live GitHub HTTP; no browser interaction, staging deployment or production traffic is established.",
+    "README-only inventory correctly reports unsupported import analysis; zero edges is not an analysis-capacity claim.",
+    "GitHub comparison shell and actual pinned diff content verified; rendered per-file fragment navigation is not established by an HTML fetch.",
+    "No accessibility review, intelligence enablement or beta approval is implied."
+  ]
+}

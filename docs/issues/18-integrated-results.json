@@ -46,8 +46,13 @@
     "evidence": []
   },
   "authorizedProductGithubSmoke": {
-    "status": "not established",
-    "note": "Controlled browser/BFF auth fixtures and GitHub CLI publishing do not establish the deployed product GitHub App flow."
+    "status": "passed for anonymous public mode",
+    "evidence": "../evidence/live-public-github-smoke.json",
+    "applicationCommit": "3d037815dd420326ea4aafb4da720cd3918e8c23",
+    "checksPassed": 6,
+    "productGithubRequests": 13,
+    "providerRequests": 0,
+    "note": "Actual BFF/worker GitHub HTTP, pinned public context/two commits, independently checked counts and genuine pinned diff content. No private GitHub App login, deployment or rendered fragment navigation is established."
   },
   "closureRecommended": false,
   "releaseApproved": false
