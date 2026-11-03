@@ -14,6 +14,27 @@ export type ReviewRevision = {
   provenance?: { source?: string; snapshotId?: string; contextSha?: string };
   decisions?: ReviewDecision[]; models?: { generative: string; jev: string };
 };
+export type ReviewPolicy = {
+  version: string; fieldsSent: string[]; sourceExcerpts: false; excludedFiles: number; analyzedFiles: number; externalEnabled: boolean;
+  metadata: { files: { id: string; path: string; groupId: string; imports: string[] }[]; groups: { id: string; label: string }[] };
+};
+
+export function parseReviewPolicy(value: unknown, snapshot: GraphSnapshot): ReviewPolicy {
+  const parsed = z.object({
+    version: z.string().max(100), fieldsSent: z.array(z.string().max(300)).max(30), sourceExcerpts: z.literal(false),
+    excludedFiles: z.number().int().nonnegative(), analyzedFiles: z.number().int().nonnegative(), externalEnabled: z.boolean(),
+    metadata: z.object({
+      files: z.array(z.object({ id: z.string().max(500), path: z.string().max(300), groupId: z.string().max(500), imports: z.array(z.string().max(500)).max(100) })).max(64),
+      groups: z.array(z.object({ id: z.string().max(500), label: z.string().max(500) })).max(64),
+    }),
+  }).safeParse(value);
+  if (!parsed.success) throw new Error('The data-policy preview is unavailable. Your current grouping is retained.');
+  const preview = parsed.data;
+  const nodes = new Map(snapshot.nodes.map(node => [node.id, node]));
+  const groups = new Set(snapshot.groups.map(group => group.id));
+  if (preview.analyzedFiles !== preview.metadata.files.length || preview.analyzedFiles + preview.excludedFiles > snapshot.nodes.length || preview.metadata.groups.some(group => !groups.has(group.id)) || preview.metadata.files.some(file => nodes.get(file.id)?.path.slice(0, 300) !== file.path || !groups.has(file.groupId) || file.imports.some(id => !nodes.has(id)))) throw new Error('The data-policy preview does not match this snapshot. Reload the current grouping and try again.');
+  return preview;
+}
 
 const reviewProposalSchema = z.object({
   id: z.string().optional(), snapshotId: z.string().optional(), status: z.enum(['proposed', 'baseline']), origin: z.string().optional(),

@@ -3,7 +3,7 @@ import { ArrowRight, CircleHelp, LoaderCircle, RotateCcw, ShieldCheck, X } from 
 import type { GraphSnapshot } from '@patchwork/contracts';
 import type { GraphLayout } from '../../../../packages/graph-core/src/index';
 import { previewLayoutChanges, startLayoutTask, type LayoutWorkerPort } from '../../../../packages/graph-core/src/layout-task';
-import { describeEvidence, groupingSource, inspectProposal, type ReviewDecision, type ReviewProposal, type ReviewRevision } from '../grouping-review';
+import { describeEvidence, groupingSource, inspectProposal, type ReviewDecision, type ReviewPolicy, type ReviewProposal, type ReviewRevision } from '../grouping-review';
 import './grouping-review.css';
 
 export type Movement = ReturnType<typeof previewLayoutChanges>[number];
@@ -11,6 +11,7 @@ type Props = {
   snapshot: GraphSnapshot; presentationSnapshot?: GraphSnapshot | null; proposal: ReviewProposal | null; revision: ReviewRevision | null;
   busy: boolean; error: string; hasUndo: boolean; persistence?: string; available?: boolean;
   availabilityMessage?: string; configured?: boolean; evaluation?: { passed: boolean; reason?: string };
+  policyPreview: ReviewPolicy | null; onPreviewPolicy: () => void;
   explainedGroupId: string | null; activeLayout: GraphLayout | null;
   onExplain: (id: string) => void; onRequest: () => void; onUndo: () => void;
   onApply: () => void; onReject: () => void; onReload: () => void; onMutate: (operation: unknown) => void;
@@ -86,6 +87,16 @@ export function GroupingReview(props: Props) {
     <div className="grouping-status"><ShieldCheck size={20} /><div><strong>{groupingSource(snapshot, revision)}</strong><p>Your current map stays usable while AI is disabled or unavailable.</p></div><span className="status-tag">Active</span></div>
     <p className="inline-note">{revision ? <>Revision <code>{revision.id}</code> · {revision.provenance?.source || revision.origin || 'canonical'}<br /></> : 'Loading current revision… '}{props.persistence === 'local-file' ? 'Manual revisions are saved on this server.' : 'Persistence depends on server configuration; process-memory changes end when the server restarts.'}</p>
     <p className="inline-note ai-data-policy">Optional AI sends only the server-disclosed, bounded file IDs, paths, island names and import metadata. File contents are not included. Disabled AI sends no provider request.</p>
+    <button className="button" disabled={busy} onClick={props.onPreviewPolicy}>Preview data sent to AI</button>
+    {props.policyPreview && <section className="group-explanation" aria-label="External data policy preview">
+      <h3>Metadata preview · {props.policyPreview.version}</h3>
+      <p>{props.policyPreview.analyzedFiles} eligible files in this request · {props.policyPreview.excludedFiles} excluded by policy. File contents are excluded. Remaining files outside this bounded request retain their current grouping.</p>
+      <p>{props.policyPreview.externalEnabled ? 'External AI is enabled, but this preview made no model request.' : 'External AI is disabled. This preview made no model request.'}</p>
+      <details><summary>Fields included in the request</summary><ul>{props.policyPreview.fieldsSent.map(field => <li key={field}>{field}</li>)}</ul></details>
+      <details><summary>Exact bounded file metadata ({props.policyPreview.metadata.files.length})</summary><ul className="observed-paths">{props.policyPreview.metadata.files.map(file => <li key={file.id}><strong>{file.path}</strong><br /><small>File ID: {file.id} · island: {props.policyPreview!.metadata.groups.find(group => group.id === file.groupId)?.label || file.groupId}</small>{file.imports.length > 0 && <ul>{file.imports.map(id => <li key={id}>Import target: {snapshot.nodes.find(node => node.id === id)?.path} · ID {id}</li>)}</ul>}</li>)}</ul></details>
+      <details><summary>Island names included ({props.policyPreview.metadata.groups.length})</summary><ul className="observed-paths">{props.policyPreview.metadata.groups.map(group => <li key={group.id}>{group.label} · ID {group.id}</li>)}</ul></details>
+      <p className="small muted">Regenerate this preview after changing the grouping. Choosing “Review with AI + Jev” is a separate action.</p>
+    </section>}
     <div className="grouping-actions"><button className="button accent" onClick={props.onRequest} disabled={busy}>Review with AI + Jev</button><button className="button" disabled={!hasUndo || busy || !revision} onClick={props.onUndo}><RotateCcw size={14} />Undo grouping</button><button className="text-button" onClick={props.onReload} disabled={busy}>Reload current grouping</button></div>
     {proposal && <section className={`proposal-result ${proposal.status === 'baseline' ? 'baseline' : ''}`} aria-label="Grouping proposal">
       <span className="eyebrow">{proposal.status === 'baseline' ? 'BASELINE PRESERVED' : 'AI-GENERATED PROPOSAL · REVIEW REQUIRED'}</span>

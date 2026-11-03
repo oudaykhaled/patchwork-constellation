@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { createDemoSnapshot } from '../../packages/fixtures/src/index';
 
 const initial = createDemoSnapshot();
@@ -32,6 +33,8 @@ test('proposal shows readable evidence, uncertainty and movement before applying
   await expect(dialog.locator('.membership-changes')).toContainText(target.label);
   await expect(page.getByTestId('changed-count')).toHaveText('68');
   await expect(dialog.getByRole('button', { name: 'Apply reviewed grouping' })).toBeEnabled();
+  const accessibility = await new AxeBuilder({ page }).include('dialog[open]').withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(accessibility.violations.map(violation => ({ id: violation.id, targets: violation.nodes.map(node => node.target) }))).toEqual([]);
 });
 
 test('foreign proposal evidence disables apply and retains the graph', async ({ page }) => {
@@ -56,6 +59,22 @@ test('configured providers with a blocked evaluation show the gate reason', asyn
   await fixture(page, { status: 'baseline', message: 'Evaluation pending.' });
   await expect(page.getByRole('dialog')).toContainText('Human-reviewed holdout evaluation is pending.');
   await expect(page.getByRole('dialog')).not.toContainText('Server credentials required for live AI');
+});
+
+test('external policy preview discloses exact bounded metadata without requesting a model', async ({ page }) => {
+  await fixture(page, { status: 'baseline' });
+  const file = initial.nodes[0]!;
+  let modelRequests = 0;
+  page.on('request', request => { if (new URL(request.url()).pathname === '/api/grouping') modelRequests++; });
+  await page.route('**/api/grouping/policy', route => route.fulfill({ json: { version: 'metadata-preview-fixture', fieldsSent: ['file IDs and paths', 'existing island names', 'bounded import target IDs'], sourceExcerpts: false, excludedFiles: 3, analyzedFiles: 1, externalEnabled: false, metadata: { files: [{ id: file.id, path: file.path, groupId: file.groupId, imports: [initial.nodes[1]!.id] }], groups: initial.groups.map(group => ({ id: group.id, label: group.label })) } } }));
+  await page.getByRole('button', { name: 'Preview data sent to AI', exact: true }).click();
+  const policy = page.getByRole('region', { name: 'External data policy preview' });
+  await expect(policy).toContainText('1 eligible files in this request · 3 excluded by policy');
+  await expect(policy).toContainText('This preview made no model request.');
+  await policy.getByText('Exact bounded file metadata (1)', { exact: true }).click();
+  await expect(policy).toContainText(file.path);
+  await expect(policy).toContainText(initial.nodes[1]!.path);
+  expect(modelRequests).toBe(0);
 });
 
 test('structurally invalid model output keeps the complete current grouping', async ({ page }) => {

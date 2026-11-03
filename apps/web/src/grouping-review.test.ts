@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDemoSnapshot } from '@patchwork/fixtures';
-import { describeEvidence, groupingSource, inspectProposal, parseReviewProposal } from './grouping-review';
+import { describeEvidence, groupingSource, inspectProposal, parseReviewPolicy, parseReviewProposal } from './grouping-review';
 
 describe('grouping review trust boundary', () => {
   const snapshot = createDemoSnapshot();
@@ -33,5 +33,12 @@ describe('grouping review trust boundary', () => {
   it('turns malformed output into an honest retained state without rendering invalid values', () => {
     expect(parseReviewProposal({ status: 'proposed', groups: {}, message: { html: 'bad' } })).toMatchObject({ status: 'baseline', message: expect.stringContaining('invalid') });
     expect(parseReviewProposal({ ...valid, decisions: [{ fileId: 'known', confidence: Infinity }] }).status).toBe('baseline');
+  });
+  it('accepts only bounded, source-free policy metadata from the current snapshot', () => {
+    const file = snapshot.nodes[0]!;
+    const preview = { version: 'metadata-only-fixture', fieldsSent: ['file IDs', 'paths'], sourceExcerpts: false, excludedFiles: 1, analyzedFiles: 1, externalEnabled: false, metadata: { files: [{ id: file.id, path: file.path, groupId: file.groupId, imports: [] }], groups: [{ id: file.groupId, label: 'Current island' }] } };
+    expect(parseReviewPolicy(preview, snapshot).metadata.files[0]!.path).toBe(file.path);
+    expect(() => parseReviewPolicy({ ...preview, sourceExcerpts: true }, snapshot)).toThrow('unavailable');
+    expect(() => parseReviewPolicy({ ...preview, metadata: { ...preview.metadata, files: [{ id: 'foreign', path: 'hidden.ts', groupId: file.groupId, imports: [] }] } }, snapshot)).toThrow('does not match');
   });
 });
