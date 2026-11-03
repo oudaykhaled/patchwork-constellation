@@ -1,0 +1,54 @@
+{
+  "issue": 18,
+  "recordedDate": "2026-11-03",
+  "auditedMergeCommit": "2100fbe7d36ed8bdfa86d9129339dbb39a2b8bd7",
+  "integratedBrowserCi": {
+    "headCommit": "30259473fa55e1a3501db4630b752b11c3d9ec8f",
+    "treeEqualsAuditedMerge": true,
+    "run": "https://github.com/oudaykhaled/patchwork-constellation/actions/runs/41715396223",
+    "job": "https://github.com/oudaykhaled/patchwork-constellation/actions/runs/41715396223/job/126193936974",
+    "status": "completed",
+    "conclusion": "success",
+    "passed": 185,
+    "intentionalSkipped": 16,
+    "platform": "linux/x64",
+    "browsers": {
+      "chromium": "156.0.8078.4",
+      "firefox": "157.0",
+      "webkit": "27.2"
+    },
+    "source": "GitHub CLI run metadata and browser-job log readback"
+  },
+  "sourceToggleFollowup": {
+    "test": "tests/e2e/constellation.spec.ts: selecting PRs changes the footprint and keeps the graph mounted",
+    "scope": "Follow-up test changes based on the audited merge; controlled demo, Windows x64, loopback port 4518",
+    "assertions": [
+      "A newly rendered scene is observed after removing PR #256",
+      "All 212 distinct painted world-coordinate circle centers remain identical",
+      "Changed/overlap counts transition from 68/14 to 57/2",
+      "Camera and island-label positions remain identical"
+    ],
+    "installedChromePassed": 1,
+    "webkitPassed": 1,
+    "typecheck": "passed",
+    "lint": "passed",
+    "format": "passed",
+    "finalIntegratedRerun": "required after combining follow-up changes"
+  },
+  "manualKeyboardReview": {
+    "status": "not recorded",
+    "observations": [],
+    "evidence": []
+  },
+  "manualScreenReaderReview": {
+    "status": "not recorded",
+    "observations": [],
+    "evidence": []
+  },
+  "authorizedProductGithubSmoke": {
+    "status": "not established",
+    "note": "Controlled browser/BFF auth fixtures and GitHub CLI publishing do not establish the deployed product GitHub App flow."
+  },
+  "closureRecommended": false,
+  "releaseApproved": false
+}
