@@ -69,11 +69,17 @@ test('Escape dismisses hover before file details and preserves exact selected so
   await search.fill('refresh.ts');
   await page.getByRole('option', { name: /refresh\.ts/ }).first().click();
   const inspector = page.getByTestId('file-inspector'); await expect(inspector).toBeVisible();
+  // Opening details intentionally transfers focus on the next animation frame.
+  // Visibility alone does not mean that transfer finished (notably WebKit on
+  // a loaded CI host). Deliberately move away only after its focus contract.
+  await expect(page.getByRole('button', { name: 'Close file inspector', exact: true })).toBeFocused();
   await search.focus();
+  await expect(search).toBeFocused();
   const beforeCamera = await camera(page), before = new URL(page.url());
   const point = await visibleFilePoint(page, 'src/auth/session/refresh.ts');
   await page.mouse.move(point.x, point.y);
   await expect(page.getByRole('tooltip')).toContainText(point.path);
+  await expect(search).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('tooltip')).toBeHidden();
   await expect(inspector).toBeVisible();
