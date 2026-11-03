@@ -10,7 +10,7 @@ Use this runbook with the scoped, read-only GitHub App configuration in [GITHUB_
 4. `AUTH_SESSION_REQUIRED`, removed repository access or revoked installation must stop recovery. Reconnect and explicitly retry after authorization has been restored. Never edit a job owner, installation ID or token in the database to bypass access checks.
 5. If a job reaches its attempt limit, retain its sanitized code, stage and correlation ID; fix the cause and explicitly resubmit. A failure message must not include credentials or source text. Do not clear all users' caches to recover one repository.
 
-No PostgreSQL process-kill/restart or live private-account rehearsal was available during this change. Run those in an isolated staging scope before beta; the memory-store tests establish logic, not operational database availability.
+A follow-up [local PostgreSQL rehearsal](evidence/postgres-local.json) verified real cross-connection storage and recovery after a hard-killed Node coordinator's lease expired. It used a portable PostgreSQL 17.11 cluster with synthetic data. Live private-account and hosted staging rehearsals remain required; local database success does not establish those environments.
 
 ## Rate exhaustion and source drift
 
@@ -48,3 +48,7 @@ pnpm exec tsx tests/backend-release/measure.ts docs/evidence/data-09.json
 ```
 
 The report records actual hardware/runtime, fixture seed, controlled-service conditions and timings. It deliberately remains `partial` until the live PostgreSQL/App/removal/webhook and process-containment gates pass. Measurements taken while parallel agents are building are not production capacity claims. Never copy a synthetic success into a staging/live gate.
+
+The original DATA-09 measurement preceded the portable database follow-up. [postgres-local.json](evidence/postgres-local.json) records the later database-only result separately. Its opt-in process rehearsal requires both `TEST_DATABASE_URL` and `PG_PROCESS_REHEARSAL=1`, rejects non-loopback or non-`constellation_` database names, kills only its own spawned Node child, and waits for the real lease expiry. It does not edit database clocks/lease rows or run imported code.
+
+On the authoring workstation, a protected helper outside Git is available at `C:/Users/youne/Desktop/gitchangelogs/issue-orchestration/pg-test/rehearse.ps1`. `-Mode Test -Checkout <task checkout>` loads the local ephemeral secret without printing it, runs the three selected suites, and stops the owned server in `finally`. `Start` and `Stop` modes validate the loopback listener, executable path and cluster PID before acting. No Windows service, system PATH entry or existing database is changed. Other machines must supply their own isolated, authorized database; do not copy this workstation's secret or data directory.
