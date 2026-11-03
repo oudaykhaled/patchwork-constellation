@@ -1,3 +1,4 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { describe, expect, it, vi } from 'vitest';
 import type { GraphSnapshot } from '@patchwork/contracts';
 import { createGroupingEvidence, evaluateGroupingProposal, GroupingService } from './index';
@@ -10,12 +11,12 @@ function snapshot(): GraphSnapshot {
     schemaVersion: '1', id: 'ambiguous-module-v1', repository: { owner: 'fixture', name: 'review', fullName: 'fixture/review', defaultBranch: 'main', htmlUrl: 'https://github.com/fixture/review' }, contextRef: 'main', contextSha: 'a'.repeat(40), mode: 'demo', createdAt: '2026-11-03T00:00:00Z', coverage: { status: 'complete', reasons: [], filesAnalyzed: 5, totalFiles: 5 }, sources: [],
     groups: [{ id: 'core', label: 'Core', origin: 'rules' }, { id: 'billing', label: 'Billing', origin: 'manifest' }],
     nodes: [
-      { id: 'a', path: 'src/shared/not-billing.ts', groupId: 'core', sourceIds: [], importCoverage: 'complete' },
-      { id: 'b', path: 'src/shared/util.ts', groupId: 'core', sourceIds: [], importCoverage: 'complete' },
-      { id: 'c', path: 'packages/billing/charge.ts', groupId: 'billing', sourceIds: [], importCoverage: 'complete' },
-      { id: 'd', path: 'packages/billing/ledger.ts', groupId: 'billing', sourceIds: [], importCoverage: 'complete' },
-      { id: 'p', path: 'packages/billing/package.json', groupId: 'billing', sourceIds: [] },
-      { id: 'secret', path: '.env.local', groupId: 'core', sourceIds: [] },
+      { ...authoredFileFacts('complete'), id: 'a', path: 'src/shared/not-billing.ts', groupId: 'core', sourceIds: [], importCoverage: 'complete' },
+      { ...authoredFileFacts('complete'), id: 'b', path: 'src/shared/util.ts', groupId: 'core', sourceIds: [], importCoverage: 'complete' },
+      { ...authoredFileFacts('complete'), id: 'c', path: 'packages/billing/charge.ts', groupId: 'billing', sourceIds: [], importCoverage: 'complete' },
+      { ...authoredFileFacts('complete'), id: 'd', path: 'packages/billing/ledger.ts', groupId: 'billing', sourceIds: [], importCoverage: 'complete' },
+      { ...authoredFileFacts('complete'), id: 'p', path: 'packages/billing/package.json', groupId: 'billing', sourceIds: [] },
+      { ...authoredFileFacts('complete'), id: 'secret', path: '.env.local', groupId: 'core', sourceIds: [] },
     ], edges: [
       { id: 'ac', source: 'a', target: 'c', kind: 'import', evidence: { path: 'src/shared/not-billing.ts', line: 2, resolver: 'authored-fixture', snapshotSha: 'a'.repeat(40) } },
       { id: 'ad', source: 'a', target: 'd', kind: 'type-import', evidence: { path: 'src/shared/not-billing.ts', line: 3, resolver: 'authored-fixture', snapshotSha: 'a'.repeat(40) } },

@@ -1,3 +1,4 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { randomUUID, createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GraphSnapshot } from '@patchwork/contracts';
@@ -6,7 +7,7 @@ import { acceptWebhookDelivery, createStore, newJob, verifyWebhook, type Snapsho
 const snapshot: GraphSnapshot = {
   schemaVersion: '1',
   id: 'snapshot-1', repository: { owner: 'example', name: 'repo', fullName: 'example/repo', defaultBranch: 'main', htmlUrl: 'https://github.com/example/repo' },
-  contextSha: '123456789', contextRef: 'main', nodes: [{ id: 'file-1', path: 'src/index.ts', groupId: 'src', sourceIds: [] }], edges: [],
+  contextSha: '123456789', contextRef: 'main', nodes: [{ ...authoredFileFacts('complete'), id: 'file-1', path: 'src/index.ts', groupId: 'src', sourceIds: [] }], edges: [],
   groups: [{ id: 'src', label: 'Source' }], sources: [], coverage: { status: 'complete', reasons: [] }, createdAt: '2026-11-03T00:00:00Z', mode: 'demo',
 };
 

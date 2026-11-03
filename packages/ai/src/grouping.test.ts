@@ -1,3 +1,4 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,10 +13,10 @@ const snapshot = (): GraphSnapshot => ({
   contextRef: 'main', contextSha: '1234', createdAt: '2026-11-03T00:00:00Z', mode: 'demo', coverage: { status: 'complete', reasons: [] }, sources: [],
   groups: [{ id: 'auth', label: 'Auth', origin: 'rules' }, { id: 'billing', label: 'Billing', origin: 'rules' }],
   nodes: [
-    { id: 'a', path: 'src/auth/session.ts', groupId: 'auth', sourceIds: [] },
-    { id: 'b', path: 'src/auth/tokens.ts', groupId: 'auth', sourceIds: [] },
-    { id: 'c', path: 'src/billing/charge.ts', groupId: 'billing', sourceIds: [] },
-    { id: 'secret', path: '.env.production', groupId: 'auth', sourceIds: [] },
+    { ...authoredFileFacts('complete'), id: 'a', path: 'src/auth/session.ts', groupId: 'auth', sourceIds: [] },
+    { ...authoredFileFacts('complete'), id: 'b', path: 'src/auth/tokens.ts', groupId: 'auth', sourceIds: [] },
+    { ...authoredFileFacts('complete'), id: 'c', path: 'src/billing/charge.ts', groupId: 'billing', sourceIds: [] },
+    { ...authoredFileFacts('complete'), id: 'secret', path: '.env.production', groupId: 'auth', sourceIds: [] },
   ], edges: [{ id: 'e1', source: 'a', target: 'b', kind: 'import', evidence: { path: 'src/auth/session.ts', line: 1 } }],
 });
 
@@ -185,7 +186,7 @@ describe('revision and override invariants', () => {
     const service = configured(providerMock()); const value = snapshot();
     const proposal = await service.propose(value, { enabled: true });
     const before = service.current(value);
-    const overlay = snapshot(); overlay.nodes.push({ id: 'ghost', path: 'src/auth/ghost.ts', groupId: 'auth', sourceIds: [], presence: 'source-only' });
+    const overlay = snapshot(); overlay.nodes.push({ ...authoredFileFacts('complete'), id: 'ghost', path: 'src/auth/ghost.ts', groupId: 'auth', sourceIds: [], presence: 'source-only' });
     const extended = service.current(overlay); expect(extended.id).toBe(before.id); expect(extended.membership.ghost).toBe('auth');
     expect(() => service.apply(overlay, proposal.id)).toThrow('changed since this proposal');
     expect(service.current(value).id).toBe(before.id);
@@ -263,7 +264,7 @@ describe('revision and override invariants', () => {
   it('reconciles new source-only files while preserving overrides', () => {
     const service = new GroupingService();
     const renamed = service.mutate(snapshot(), { type: 'rename', groupId: 'auth', label: 'Identity' });
-    const extended = snapshot(); extended.nodes.push({ id: 'new', path: 'src/auth/new.ts', groupId: 'auth', sourceIds: [] });
+    const extended = snapshot(); extended.nodes.push({ ...authoredFileFacts('complete'), id: 'new', path: 'src/auth/new.ts', groupId: 'auth', sourceIds: [] });
     const view = service.view(extended);
     expect(view.snapshot.groups[0]!.label).toBe('Identity'); expect(view.revision.membership.new).toBe('auth'); expect(view.revision.id).not.toBe(renamed.revision.id);
     const undone = service.undo(view.snapshot);
