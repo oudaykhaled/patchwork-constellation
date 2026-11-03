@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { GitHubClient, parseRepository, type GitHubOptions } from '@patchwork/github';
 import { newJob, type SnapshotStore, type StoreScope, type StoredJob } from '@patchwork/storage';
-import type { AnalyzeInput } from '@patchwork/analysis';
+import { ANALYZER_VERSION, type AnalyzeInput } from '@patchwork/analysis';
 import type { GraphSnapshot } from '@patchwork/contracts';
 import type { runAnalysisInWorker } from '../worker/src/index';
 import { WorkerAdmission } from './worker-admission';
 import { publicErrorCode, publicErrorMessage } from './public-errors';
 
-export const ANALYSIS_VERSION = 'static-v2';
+export const ANALYSIS_VERSION = ANALYZER_VERSION;
 export const GROUPING_VERSION = 'baseline-v1';
 export interface PinnedAnalysisInput extends AnalyzeInput { displayContextRef?: string }
 export type AnalysisJobView = { id: string; status: 'queued' | 'running' | 'ready' | 'failed' | 'cancelled'; stage: StoredJob['status']; progress: number; message: string; createdAt: string; updatedAt: string; version: string; snapshotId?: string; graphUrl?: string; snapshot?: GraphSnapshot; error?: string; code?: string; retryable?: boolean };
