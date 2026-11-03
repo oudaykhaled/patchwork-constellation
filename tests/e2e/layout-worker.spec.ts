@@ -40,4 +40,3 @@ test('worker construction failure preserves selection and accessible list plus r
   await page.getByRole('button', { name: /refresh\.ts/ }).first().click();
   await expect(page.getByTestId('file-inspector')).toContainText('refresh.ts');
 });
-
