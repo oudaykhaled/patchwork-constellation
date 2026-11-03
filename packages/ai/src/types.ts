@@ -7,6 +7,8 @@ export type GroupingOperation =
   | { type: 'split'; groupId: string; fileIds: string[]; label: string };
 
 export interface MembershipDecision {
+  schemaVersion: '1';
+  snapshotId: string;
   fileId: string;
   groupId: string;
   origin: 'rules' | 'ai-jev' | 'manual';
@@ -16,12 +18,28 @@ export interface MembershipDecision {
   rationale: string;
 }
 
+/** Evidence is pinned to the immutable review context, independently of overlays. */
+export interface GroupingProvenance {
+  snapshotId: string;
+  contextSha: string;
+  source: 'canonical' | 'model' | 'manual';
+  models?: { generative: string; jev: string };
+}
+
+/** Untouched DATA-06 facts; semantic names/memberships live alongside these. */
+export interface CanonicalHierarchy {
+  groups: Group[];
+  membership: Record<string, string>;
+}
+
 export interface GroupingProposal {
+  schemaVersion: '1';
   id: string;
   snapshotId: string;
   parentRevisionId: string | null;
   status: 'proposed' | 'baseline';
-  origin: 'rules' | 'ai-jev';
+  origin: 'rules' | 'ai-jev' | 'manual';
+  provenance: GroupingProvenance;
   groups: Group[];
   membership: Record<string, string>;
   decisions: MembershipDecision[];
@@ -33,10 +51,18 @@ export interface GroupingProposal {
 }
 
 export interface GroupingRevision {
+  schemaVersion: '1';
+  status: 'accepted';
   id: string;
   snapshotId: string;
   parentRevisionId: string | null;
   origin: 'rules' | 'ai-jev' | 'manual';
+  provenance: GroupingProvenance;
+  canonicalHierarchy: CanonicalHierarchy;
+  /** Semantic annotations do not replace a file's single primary membership. */
+  secondaryTags?: Record<string, string[]>;
+  decisions?: MembershipDecision[];
+  models?: { generative: string; jev: string };
   groups: Group[];
   membership: Record<string, string>;
   lockedFileIds: string[];
