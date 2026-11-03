@@ -1,0 +1,47 @@
+{
+  "name": "patchwork-constellation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "engines": { "node": ">=24 <25" },
+  "scripts": {
+    "dev": "tsx apps/web/server.ts",
+    "start": "tsx apps/web/server.ts --production",
+    "typecheck": "tsc --noEmit",
+    "build": "vite build --config apps/web/vite.config.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "dependencies": {
+    "@fontsource/geist": "5.3.0",
+    "@fontsource/geist-mono": "5.3.0",
+    "@patchwork/ai": "workspace:*",
+    "@patchwork/analysis": "workspace:*",
+    "@patchwork/contracts": "workspace:*",
+    "@patchwork/fixtures": "workspace:*",
+    "@patchwork/github": "workspace:*",
+    "@patchwork/graph-core": "workspace:*",
+    "@patchwork/storage": "workspace:*",
+    "lucide-react": "1.67.0",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "26.6.6",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  }
+}
