@@ -40,7 +40,7 @@ jobs:
         run: |
           [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
           if [[ "$RELEASE_STAGE" == production && "$GITHUB_REF" != refs/heads/main ]]; then exit 1; fi
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, same verified pin as checks
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4, same verified pin as checks
         with:
           ref: ${{ inputs.commit }}
           fetch-depth: 0
