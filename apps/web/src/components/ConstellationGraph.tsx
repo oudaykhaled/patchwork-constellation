@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { islandBounds, neighborsOf, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
 import type { Bounds, Camera, GraphData, GraphLayout, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
+import { boundsIntersect, connectionInViewport, exceedsGraphEnvelope, scopeSummary, viewportBounds } from '../../../../packages/graph-core/src/render-policy';
 import { useSettledLayout } from './useSettledLayout';
 import { fitVisibleCamera, isValidCamera, MAX_RELATIVE_ZOOM, MIN_RELATIVE_ZOOM, minimapPoint, navigationInsets, pinchCamera } from './camera-navigation';
 import './constellation-graph.css';
@@ -66,6 +67,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const [canvasFailed, setCanvasFailed] = useState(false);
   const [canvasAttempt, setCanvasAttempt] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const [scopeGroupId, setScopeGroupId] = useState<string | null>(null);
   const { layout, layoutState, layoutError, resetLayout } = useSettledLayout(snapshot, layoutSeed, layoutPins);
   useEffect(() => { if (layoutState === 'ready') onLayoutReady?.(layout); }, [layout, layoutState, onLayoutReady]);
   const framedRepository = useRef<string | null>(null);
@@ -76,6 +78,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const selectedPosition = selectedFileId ? layout.nodeById.get(selectedFileId) : undefined;
   const focusedIsland = focusGroupId ? layout.islands.find(island => island.id === focusGroupId) : undefined;
   const hovered = hoveredId ? layout.nodeById.get(hoveredId) : undefined;
+  const scope = useMemo(() => scopeSummary(snapshot, scopeGroupId), [snapshot.nodes, snapshot.edges, scopeGroupId]);
   const insets = useMemo(() => navigationInsets(size.width, inspectorWidth), [size.width, inspectorWidth]);
   const fit = useMemo(() => fitVisibleCamera(layout.bounds, size.width, size.height, insets), [layout.bounds, size, insets]);
   const fitBounds = useCallback((bounds: Bounds) => {
@@ -83,8 +86,8 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     const inspector = host?.parentElement?.querySelector('[data-testid="file-inspector"]');
     return fitVisibleCamera(bounds, sizeRef.current.width, sizeRef.current.height, navigationInsets(sizeRef.current.width, inspector?.getBoundingClientRect().width ?? 0));
   }, []);
-  const latest = useRef({ layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports });
-  latest.current = { layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports };
+  const latest = useRef({ layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId });
+  latest.current = { layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId };
 
   const draw = useCallback(() => {
     frameRef.current = null;
@@ -105,8 +108,11 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     context.fillStyle = '#16272a';
     for (let x = offsetX; x < width; x += grid) for (let y = offsetY; y < height; y += grid) context.fillRect(x, y, 1.2, 1.2);
     context.translate(width / 2, height / 2); context.scale(c.zoom, c.zoom); context.translate(-c.x, -c.y);
+    const viewport = viewportBounds(c, width, height, 30);
+    const inScope = (node: PositionedFile) => !data.scopeGroupId || node.groupId === data.scopeGroupId;
     const visible = (node: Point, extra = 25) => Math.abs((node.x - c.x) * c.zoom) < width / 2 + extra && Math.abs((node.y - c.y) * c.zoom) < height / 2 + extra;
     for (const island of data.layout.islands) {
+      if ((data.scopeGroupId && island.id !== data.scopeGroupId) || !boundsIntersect(viewport, { x: island.x - island.rx * 1.2, y: island.y - island.ry * 1.2, width: island.rx * 2.4, height: island.ry * 2.4 })) continue;
       islandPath(context, island);
       context.fillStyle = alpha(island.color, data.selectedFileId && !island.nodes.some(node => node.id === data.selectedFileId) ? '04' : '07');
       context.fill(); context.strokeStyle = alpha(island.color, '45'); context.lineWidth = .8 / c.zoom; context.stroke();
@@ -118,9 +124,9 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     data.snapshot.edges.forEach((edge, i) => {
       if (!data.showImports) return;
       const from = data.layout.nodeById.get(edge.source); const to = data.layout.nodeById.get(edge.target);
-      if (!from || !to) return;
+      if (!from || !to || !inScope(from) || !inScope(to)) return;
       if (connectionFocus && (from.id === connectionFocus || to.id === connectionFocus)) { focusedEdges.push(edge); return; }
-      if ((suppressEdges && i % 3 !== 0) || (!visible(from, 120) && !visible(to, 120))) return;
+      if ((suppressEdges && i % 3 !== 0) || !connectionInViewport(from, to, viewport)) return;
       context.moveTo(from.x, from.y);
       const curve = (hashEdge(edge.id) % 2 ? 1 : -1) * Math.min(25, Math.abs(from.x - to.x) * .12);
       context.quadraticCurveTo((from.x + to.x) / 2 + curve, (from.y + to.y) / 2 - curve, to.x, to.y);
@@ -139,7 +145,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     }
     const labels: { node: PositionedFile; priority: number }[] = [];
     for (const node of data.layout.nodes) {
-      if (!visible(node)) continue;
+      if (!inScope(node) || !visible(node)) continue;
       const count = data.membership.get(node.id) ?? 0;
       const isSelected = node.id === data.selectedFileId;
       const isNeighbor = data.neighbors.has(node.id);
@@ -173,6 +179,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     }
     // Draw a few contextual labels in overview and more labels at semantic zoom.
     if (c.zoom <= 1.25 && !data.selectedFileId && !data.search) for (const island of data.layout.islands) {
+      if (data.scopeGroupId && island.id !== data.scopeGroupId) continue;
       const representative = island.nodes.find(node => data.membership.has(node.id)) ?? island.nodes[0];
       if (representative) labels.push({ node: representative, priority: 4 });
     }
@@ -203,7 +210,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     };
     animationRef.current = requestAnimationFrame(tick);
   }, [reducedMotion, setCamera, stopAnimation]);
-  const fitAll = useCallback(() => { onFocusGroup?.(null); moveCamera(fitBounds(layout.bounds)); }, [layout.bounds, moveCamera, onFocusGroup, fitBounds]);
+  const fitAll = useCallback(() => { setScopeGroupId(null); onFocusGroup?.(null); moveCamera(fitBounds(layout.bounds)); }, [layout.bounds, moveCamera, onFocusGroup, fitBounds]);
   const fitIsland = useCallback((id: string) => {
     const island = layout.islands.find(group => group.id === id);
     if (island) { onFocusGroup?.(id); moveCamera(fitBounds(islandBounds(island))); }
@@ -241,7 +248,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       if (first) setCamera(isValidCamera(initialCameraRef.current) ? initialCameraRef.current : fitBounds(latest.current.layout.bounds)); else requestDraw();
     });
     observer.observe(host); return () => observer.disconnect();
-  }, [requestDraw, setCamera, canvasAttempt, fitBounds]);
+  }, [requestDraw, setCamera, fitBounds, canvasAttempt]);
   useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return;
     const lost = (event: Event) => { event.preventDefault(); setCanvasFailed(true); };
@@ -262,7 +269,9 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     if (lastOverviewRequest.current === overviewRequest) return;
     lastOverviewRequest.current = overviewRequest; fitAll();
   }, [overviewRequest, fitAll]);
-  useEffect(() => { requestDraw(); }, [layout, snapshot.edges, membership, neighbors, selectedFileId, hoveredId, search, showImports, requestDraw]);
+  useEffect(() => { requestDraw(); }, [layout, snapshot.edges, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId, requestDraw]);
+  useEffect(() => { if (scopeGroupId && !snapshot.groups.some(group => group.id === scopeGroupId)) setScopeGroupId(null); }, [snapshot.groups, scopeGroupId]);
+  useEffect(() => { if (selectedPosition && scopeGroupId && selectedPosition.groupId !== scopeGroupId) setScopeGroupId(null); }, [selectedPosition?.id, selectedPosition?.groupId, scopeGroupId]);
   useEffect(() => {
     if (!focusGroupId) return;
     const island = layout.islands.find(group => group.id === focusGroupId);
@@ -303,7 +312,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const eventPoint = (event: ReactPointerEvent<HTMLCanvasElement>): Point => { const rect = event.currentTarget.getBoundingClientRect(); return { x: event.clientX - rect.left, y: event.clientY - rect.top }; };
   const hitNode = (point: Point) => {
     let found: PositionedFile | undefined; let best = 16;
-    for (const node of layout.nodes) { const screen = worldToScreen(node, cameraRef.current, sizeRef.current.width, sizeRef.current.height); const distance = Math.hypot(screen.x - point.x, screen.y - point.y); if (distance < best) { found = node; best = distance; } }
+    for (const node of layout.nodes) { if (scopeGroupId && node.groupId !== scopeGroupId) continue; const screen = worldToScreen(node, cameraRef.current, sizeRef.current.width, sizeRef.current.height); const distance = Math.hypot(screen.x - point.x, screen.y - point.y); if (distance < best) { found = node; best = distance; } }
     return found;
   };
   const pointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -370,7 +379,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     } else if (event.key === 'Home' || event.key === '0') { event.preventDefault(); fitAll(); }
   };
 
-  const visibleFiles = useMemo(() => layout.nodes.reduce((count, node) => count + Number(Math.abs((node.x - camera.x) * camera.zoom) < size.width / 2 + 25 && Math.abs((node.y - camera.y) * camera.zoom) < size.height / 2 + 25), 0), [layout.nodes, camera, size]);
+  const visibleFiles = useMemo(() => layout.nodes.reduce((count, node) => count + Number((!scopeGroupId || node.groupId === scopeGroupId) && Math.abs((node.x - camera.x) * camera.zoom) < size.width / 2 + 25 && Math.abs((node.y - camera.y) * camera.zoom) < size.height / 2 + 25), 0), [layout.nodes, camera, size, scopeGroupId]);
   const suppressedEdges = useMemo(() => {
     if (!showImports) return snapshot.edges.length;
     if (snapshot.edges.length <= 10000 || camera.zoom >= .6) return 0;
@@ -391,24 +400,34 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   }, [layout.islands, camera, size, focusGroupId]);
 
   const viewport = { x: camera.x - size.width / camera.zoom / 2, y: camera.y - size.height / camera.zoom / 2, width: size.width / camera.zoom, height: size.height / camera.zoom };
-  return <div ref={hostRef} className={`constellation-graph ${dragging ? 'is-dragging' : ''} ${className}`} style={{ '--graph-inspector-width': `${inspectorWidth}px` } as CSSProperties} data-testid="graph-surface">
+  return <div ref={hostRef} className={`constellation-graph ${dragging ? 'is-dragging' : ''} ${className}`} style={{ '--graph-inspector-width': `${inspectorWidth}px` } as CSSProperties} data-testid="graph-surface" data-layout-state={layoutState}>
     <canvas ref={canvasRef} data-testid="graph-canvas" data-camera-x={camera.x} data-camera-y={camera.y} data-camera-scale={camera.zoom} data-visible-file-count={visibleFiles} data-selection-cue={selectedFileId ? 'corner-brackets' : 'none'} className="constellation-canvas" tabIndex={0} aria-label={`Repository file graph. ${snapshot.nodes.length} files in ${layout.islands.length} islands. Arrow keys pan. Plus and minus zoom. Zero fits all islands. Use the Files view for accessible file details.`} aria-describedby="graph-instructions" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={pointerUp} onPointerLeave={() => !pointers.current.size && setHoveredId(null)} onKeyDown={keyDown} />
     <p id="graph-instructions" className="graph-sr-only">One circle is one file. Green circles changed in the selected sources; an outer ring means multiple sources. Corner brackets identify the selected file. Lines are directed imports. Drag to pan, scroll or pinch to zoom. Control or Command modified wheel and keyboard shortcuts retain browser zoom. Select a labeled island to focus it. Filename labels are prioritized to avoid collisions; the synchronized Files view retains every file.</p>
     <div className="island-controls" aria-label="Repository islands">
       {islandLabels.map(({ island, point, hidden }) => {
+        if (scopeGroupId && island.id !== scopeGroupId) return null;
         const count = island.nodes.reduce((total, node) => total + Number(membership.has(node.id)), 0);
         return <button type="button" key={island.id} className={`island-label ${focusGroupId === island.id ? 'is-focused' : ''}`} style={{ left: point.x, top: point.y, visibility: hidden ? 'hidden' : undefined, '--island-color': island.color } as CSSProperties} onClick={() => fitIsland(island.id)} aria-label={`Explore ${island.label} island, ${count} changed of ${island.nodes.length} files`}>
           <span className="island-title"><i />{island.label}</span><span className="island-meta">{count} changed <b>/</b> {island.nodes.length} files</span>
         </button>;
       })}
     </div>
+    {exceedsGraphEnvelope(snapshot) && <div className="graph-scope-control" aria-label="Large repository scope">
+      <label htmlFor="graph-scope">Explore scope <select id="graph-scope" aria-label="Explore scope" value={scopeGroupId ?? ''} onChange={event => {
+        const id = event.target.value || null; setScopeGroupId(id); onFocusGroup?.(id);
+        const island = id ? layout.islands.find(group => group.id === id) : undefined;
+        moveCamera(fitBounds(island ? islandBounds(island) : layout.bounds));
+      }}><option value="">All islands</option>{snapshot.groups.map(group => <option value={group.id} key={group.id}>{group.label}</option>)}</select></label>
+      <span role="status">Showing {scope.files.toLocaleString()} of {scope.totalFiles.toLocaleString()} files · {scope.edges.toLocaleString()} of {scope.totalEdges.toLocaleString()} connections</span>
+      <small>Above the 2,000-file / 8,000-connection target. Scope filters affect drawing; Files retains all repository evidence.</small>
+    </div>}
     {hovered && !dragging && <div className="graph-tooltip" role="tooltip" style={{ left: clamp(hoverPosition.x + 20, 8, Math.max(8, size.width - 285)), top: clamp(hoverPosition.y - 48, 8, Math.max(8, size.height - 130)) }}><strong>{basename(hovered.path)}</strong><span>{hovered.path}</span><small>{membership.get(hovered.id) ? `${membership.get(hovered.id)} selected source${membership.get(hovered.id) === 1 ? '' : 's'}` : 'Unchanged context'} · Click to inspect</small></div>}
     {layoutState === 'pending' && <div className="graph-layout-status" role="status">Settling repository islands…</div>}
-    {(canvasFailed || layoutState === 'failed') && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>{layoutError || 'Use Files to explore the complete repository and its connections.'}</p>{onOpenFiles && <button type="button" onClick={onOpenFiles}>Open file list</button>}{layoutState === 'failed' && <button type="button" onClick={resetLayout}>Retry layout</button>}{canvasFailed && <button type="button" onClick={() => { const available = !!canvasRef.current?.getContext('2d'); setCanvasFailed(!available); if (available) { setCanvasAttempt(value => value + 1); requestDraw(); } }}>Retry graph</button>}</div>}
+    {(canvasFailed || layoutState === 'failed') && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>{layoutError || 'Use Files to explore the complete repository and its connections.'}</p>{onOpenFiles && <button type="button" onClick={onOpenFiles}>Open file list</button>} {layoutState === 'failed' && <button type="button" onClick={resetLayout}>Retry layout</button>} {canvasFailed && <button type="button" onClick={() => { const available = !!canvasRef.current?.getContext('2d'); setCanvasFailed(!available); if (available) { setCanvasAttempt(value => value + 1); requestDraw(); } }}>Retry graph</button>}</div>}
     {showImports && suppressedEdges > 0 && <div className="graph-detail-notice">Overview detail: {suppressedEdges.toLocaleString()} of {snapshot.edges.length.toLocaleString()} background import lines suppressed. All {snapshot.nodes.length.toLocaleString()} files are retained. Zoom in or inspect a file for its connections.</div>}
     <div className="graph-navigation" aria-label="Graph navigation">
-      <output className="graph-detail-summary" aria-label="Graph detail" aria-live="off">{visibleFiles.toLocaleString()} / {snapshot.nodes.length.toLocaleString()} files in view</output>
       <button type="button" className="graph-reset-layout" onClick={resetLayout} disabled={layoutState === 'pending'}>Reset island layout</button>
+      <output className="graph-detail-summary" aria-label="Graph detail" aria-live="off">{visibleFiles.toLocaleString()} / {snapshot.nodes.length.toLocaleString()} files in view</output>
       <span className="graph-pan-hint">Drag to pan · scroll to zoom</span>
       <button className="graph-minimap" type="button" title="Repository minimap. Click to pan, arrows to move, Home to fit." aria-label="Repository minimap. Click to reposition. Arrow keys pan the graph." onClick={repositionMinimap} onKeyDown={minimapKeyDown}>
         <svg viewBox={`${layout.bounds.x} ${layout.bounds.y} ${layout.bounds.width} ${layout.bounds.height}`} preserveAspectRatio="none" aria-hidden="true">{layout.islands.map(island => <ellipse key={island.id} cx={island.x} cy={island.y} rx={island.rx} ry={island.ry} fill={alpha(island.color, '77')} />)}<rect x={viewport.x} y={viewport.y} width={viewport.width} height={viewport.height} fill="none" stroke="#a2f4ba" strokeWidth={10} /></svg>
