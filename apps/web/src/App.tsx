@@ -91,6 +91,9 @@ export default function App() {
   const viewCamera = useRef<SharedCamera | undefined>(undefined);
   const pendingSharedFile = useRef<string | null>(null);
   const lastCameraWrite = useRef(0);
+  const cameraWriteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestView = useRef({ snapshot, kind, selectedIds, selectedFileId });
+  latestView.current = { snapshot, kind, selectedIds, selectedFileId };
   const searchRef = useRef<HTMLInputElement>(null);
   const inspectorCloseRef = useRef<HTMLButtonElement>(null);
   const fileFocusRef = useRef<HTMLElement | null>(null);
@@ -135,7 +138,7 @@ export default function App() {
     if (params.get('repo')) void analyzeTarget(params.get('repo')!, params.get('context') || undefined, true);
     else api<GraphSnapshot | { snapshot: GraphSnapshot }>('/api/demo', undefined, controller.signal).then(value => installSnapshot(unwrapSnapshot(value), true)).catch(reason => { if (!controller.signal.aborted) setError(reason.message); }).finally(() => { if (!controller.signal.aborted) setBusy(''); });
     api<RuntimeConfig>('/api/config', undefined, controller.signal).then(setConfig).catch(() => {});
-    return () => { controller.abort(); abortRef.current?.abort(); selectionAbortRef.current?.abort(); groupingAbortRef.current?.abort(); if (noticeTimer.current) clearTimeout(noticeTimer.current); };
+    return () => { controller.abort(); abortRef.current?.abort(); selectionAbortRef.current?.abort(); groupingAbortRef.current?.abort(); if (noticeTimer.current) clearTimeout(noticeTimer.current); if (cameraWriteTimer.current) clearTimeout(cameraWriteTimer.current); };
   }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === '/' && !(event.target instanceof HTMLInputElement) && !(event.target instanceof HTMLTextAreaElement) && !dialog) { event.preventDefault(); searchRef.current?.focus(); } if (event.key === 'Escape' && !dialog) { setSelectedFileId(null); setQuery(''); setGroupMenu(false); const previous = fileFocusRef.current; if (previous?.isConnected) previous.focus({ preventScroll: true }); else searchRef.current?.focus({ preventScroll: true }); } };
@@ -292,6 +295,23 @@ export default function App() {
   const explainGroup = (id: string) => { setExplainedGroupId(id); setDialog('grouping'); };
   const saveView = async () => { if (snapshot) history.replaceState(null, '', `${location.pathname}?${sharedViewQuery(location.search, snapshot, kind, selectedIds, selectedFileId || pendingSharedFile.current, viewCamera.current)}`); const url = location.href; localStorage.setItem('patchwork:saved-view', url); try { await navigator.clipboard.writeText(url); flash('View saved. Share link copied to clipboard.'); } catch { flash('View saved in this browser. The address bar contains your share link.'); } };
   const focusIsland = (id: string | null) => { setFocusGroupId(id); setQuery(''); };
+  const publishCamera = (camera: SharedCamera) => {
+    viewCamera.current = camera;
+    if (cameraWriteTimer.current) clearTimeout(cameraWriteTimer.current);
+    const epoch = contextEpoch.current;
+    const write = () => {
+      cameraWriteTimer.current = null;
+      if (epoch !== contextEpoch.current) return;
+      const view = latestView.current;
+      if (!view.snapshot) return;
+      lastCameraWrite.current = performance.now();
+      history.replaceState(null, '', `${location.pathname}?${sharedViewQuery(location.search, view.snapshot, view.kind, view.selectedIds, view.selectedFileId || pendingSharedFile.current, viewCamera.current)}`);
+    };
+    // Bound writes during a gesture, then flush its final camera. Read current
+    // selection/context at flush time so a pending camera cannot restore old IDs.
+    const remaining = Math.max(0, 200 - (performance.now() - lastCameraWrite.current));
+    if (remaining) cameraWriteTimer.current = setTimeout(write, remaining); else write();
+  };
 
   return <div className="app-shell">
     <a className="skip-link" href="#graph-workspace">Skip to graph workspace</a>
@@ -306,7 +326,7 @@ export default function App() {
       <button className="avatar" onClick={() => setDialog('help')} aria-label="Help and keyboard shortcuts"><CircleHelp size={16} /></button>
     </header>
     <main id="graph-workspace" className={`graph-workspace ${selectedFile ? 'has-inspector' : ''}`} data-testid="graph-viewport">
-      {presentationSnapshot && <ConstellationGraph {...{ overviewRequest }} snapshot={presentationSnapshot} selectedSourceIds={selectedIds} selectedFileId={selectedFileId} onSelectFile={chooseFile} focusGroupId={focusGroupId} onFocusGroup={focusIsland} searchQuery={query} showImports={showImports} onLayoutReady={setActiveLayout} onOpenFiles={() => setDialog('list')} {...{ initialCamera, onCameraChange: (camera: SharedCamera) => { viewCamera.current = camera; if (performance.now() - lastCameraWrite.current > 200) { lastCameraWrite.current = performance.now(); history.replaceState(null, '', `${location.pathname}?${sharedViewQuery(location.search, snapshot!, kind, selectedIds, selectedFileId || pendingSharedFile.current, camera)}`); } } }} />}
+      {presentationSnapshot && <ConstellationGraph {...{ overviewRequest }} snapshot={presentationSnapshot} selectedSourceIds={selectedIds} selectedFileId={selectedFileId} onSelectFile={chooseFile} focusGroupId={focusGroupId} onFocusGroup={focusIsland} searchQuery={query} showImports={showImports} onLayoutReady={setActiveLayout} onOpenFiles={() => setDialog('list')} {...{ initialCamera, onCameraChange: publishCamera }} />}
       {!snapshot && <div className="empty-workspace"><LoaderCircle className="spinning" size={24} /><h1>Opening your constellation</h1><p>Finding the shape of your repository.</p>{error && <><p className="error-text">{error}</p><button className="button" onClick={() => void loadDemo()}>Try again</button></>}</div>}
       {snapshot && <>
         <div className="source-bar panel" data-node-id="17:3072">

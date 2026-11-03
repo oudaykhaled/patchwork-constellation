@@ -235,7 +235,12 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
 
   const requestDraw = useCallback(() => { if (frameRef.current === null) frameRef.current = requestAnimationFrame(draw); }, [draw]);
   const setCamera = useCallback((next: Camera) => {
-    cameraRef.current = next; setCameraState(next); cameraChangeRef.current?.(next); requestDraw();
+    cameraRef.current = next; setCameraState(next);
+    const repository = latest.current.snapshot.repository?.fullName ?? latest.current.snapshot.id ?? 'graph';
+    // Resize can run before the layout worker returns. Its empty-layout fit is
+    // internal bootstrap state and must never become a restorable shared camera.
+    if (framedRepository.current === repository) cameraChangeRef.current?.(next);
+    requestDraw();
   }, [requestDraw]);
   const stopAnimation = useCallback(() => { if (animationRef.current !== null) cancelAnimationFrame(animationRef.current); animationRef.current = null; }, []);
   const moveCamera = useCallback((next: Camera, animate = true) => {
