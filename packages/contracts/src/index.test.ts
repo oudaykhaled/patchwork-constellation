@@ -1,14 +1,15 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { describe, expect, it } from 'vitest';
 import { createDemoSnapshot } from '@patchwork/fixtures';
 import { deriveRepositoryHierarchy } from '../../analysis/src/groups';
-import { AnalysisJobSchema, CoverageSchema, createSelectionFootprint, graphSnapshotJsonSchema, GraphSnapshotSchema, RepositoryHierarchySchema, SelectionFootprintSchema, type GraphSnapshot } from './index';
+import { AnalysisJobSchema, CoverageSchema, createSelectionFootprint, FileNodeSchema, graphSnapshotJsonSchema, GraphSnapshotSchema, RepositoryHierarchySchema, SelectionFootprintSchema, unparsedFileFacts, type GraphSnapshot } from './index';
 
 const valid: GraphSnapshot = {
   schemaVersion: '1', id: 'snapshot-1', contextSha: '123', contextRef: 'main', createdAt: '2026-11-03T00:00:00Z', mode: 'demo',
   repository: { owner: 'demo', name: 'repo', fullName: 'demo/repo', defaultBranch: 'main', htmlUrl: 'https://github.com/demo/repo' },
   nodes: [
-    { id: 'a', path: 'src/a.ts', groupId: 'module', sourceIds: ['pr-1'] },
-    { id: 'b', path: 'src/b.ts', groupId: 'module', sourceIds: [] },
+    { ...authoredFileFacts('complete'), id: 'a', path: 'src/a.ts', groupId: 'module', sourceIds: ['pr-1'] },
+    { ...authoredFileFacts('complete'), id: 'b', path: 'src/b.ts', groupId: 'module', sourceIds: [] },
   ],
   groups: [{ id: 'module', label: 'Module' }],
   edges: [{ id: 'import-a-b', source: 'a', target: 'b', kind: 'import', evidence: { path: 'src/a.ts', line: 1, specifier: './b' } }],
@@ -56,6 +57,7 @@ describe('graph boundary validation', () => {
     const sha = 'a'.repeat(40);
     const snapshot = { ...valid, mode: 'github', contextSha: sha, sources: [{ ...valid.sources[0], baseSha: 'b'.repeat(40), headSha: 'c'.repeat(40) }], edges: [{ ...valid.edges[0], evidence: { path: 'src/a.ts', line: 1, snapshotSha: sha, resolver: 'typescript-v1' } }] };
     expect(GraphSnapshotSchema.safeParse(snapshot).success).toBe(true);
+    expect(GraphSnapshotSchema.safeParse({ ...snapshot, nodes: [{ ...snapshot.nodes[0]!, importCoverage: 'excluded', importReasons: ['No context parsing.'] }, snapshot.nodes[1]!] }).success).toBe(false);
     for (const evidence of [undefined, 'unverified', { path: 'src/a.ts' }, { path: 'src/b.ts', snapshotSha: sha, resolver: 'typescript-v1' }, { path: 'src/a.ts', snapshotSha: 'f'.repeat(40), resolver: 'typescript-v1' }, { path: 'src/a.ts', snapshotSha: sha, resolver: 'typescript-v1', sourceId: 'missing' }]) expect(GraphSnapshotSchema.safeParse({ ...snapshot, edges: [{ ...snapshot.edges[0], evidence }] }).success).toBe(false);
   });
 
@@ -74,12 +76,31 @@ describe('graph boundary validation', () => {
   });
 });
 
+describe('canonical per-file inventory facts', () => {
+  it('requires honest explicit facts instead of defaulting missing metadata to complete', () => {
+    const node = { ...unparsedFileFacts('Source parsing has not run.'), id: 'a', path: 'src/a.ts', groupId: 'module', sourceIds: [] };
+    expect(FileNodeSchema.parse(node)).toMatchObject({ fileKind: 'unknown', importCoverage: 'partial', importReasons: ['Source parsing has not run.'] });
+    for (const field of ['fileKind', 'presence', 'status', 'importCoverage', 'importReasons', 'externalImports', 'unresolvedImports']) {
+      expect(FileNodeSchema.safeParse({ ...node, [field]: undefined }).success, field).toBe(false);
+    }
+    expect(FileNodeSchema.safeParse({ ...node, importCoverage: 'complete' }).success).toBe(false);
+    expect(() => unparsedFileFacts(' ')).toThrow('explicit reason');
+  });
+
+  it('rejects malformed classifications, statuses, reasons, sizes and unresolved import metadata', () => {
+    const node = valid.nodes[0]!;
+    for (const patch of [{ fileKind: 'folder' }, { fileType: 'island' }, { status: 'guessed' }, { presence: 'remote' }, { importCoverage: 'pending' }, { importReasons: [7] }, { importCoverage: 'partial', importReasons: [] }, { size: Infinity }, { size: -1 }, { externalImports: [{ specifier: 'react', line: 0, kind: 'import', reason: 'External' }] }, { unresolvedImports: [{ specifier: './missing', line: 1, kind: 'ai-inferred', reason: 'Unknown' }] }]) expect(FileNodeSchema.safeParse({ ...node, ...patch }).success, JSON.stringify(patch)).toBe(false);
+    expect(FileNodeSchema.safeParse({ ...node, unresolvedImports: [{ specifier: './missing', line: 1, kind: 'import', reason: 'No matching file' }] }).success).toBe(false);
+    expect(FileNodeSchema.safeParse({ ...node, importCoverage: 'partial', importReasons: ['Unresolved literal import.'], unresolvedImports: [{ specifier: './missing', line: 1, kind: 'import', reason: 'No matching file' }] }).success).toBe(true);
+  });
+});
+
 describe('selected-head dependency layer boundary', () => {
   const contextSha = 'a'.repeat(40), headSha = 'b'.repeat(40);
   function snapshot(): GraphSnapshot {
     return {
       ...structuredClone(valid), mode: 'github', contextSha,
-      nodes: [...structuredClone(valid.nodes), { id: 'new', path: 'src/new.ts', groupId: 'module', presence: 'source-only', sourceIds: ['pr-1'] }],
+      nodes: [...structuredClone(valid.nodes), { ...authoredFileFacts('complete'), id: 'new', path: 'src/new.ts', groupId: 'module', presence: 'source-only', sourceIds: ['pr-1'] }],
       edges: [{ ...valid.edges[0]!, provenance: 'context', evidence: { path: 'src/a.ts', line: 1, specifier: './b', resolver: 'ts-v3', snapshotSha: contextSha } }],
       sources: [{
         ...valid.sources[0]!, baseSha: contextSha, headSha,
