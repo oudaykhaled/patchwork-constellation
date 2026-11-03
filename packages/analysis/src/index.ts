@@ -5,7 +5,8 @@ import { GitHubClient, GitHubError, parseRepository, type GitHubOptions } from '
 import { deriveGroups, groupKeyFor, nodeForPath } from './groups';
 import { extractImports, isSourceFile, languageFor, resolveImport, type ResolverOptions } from './imports';
 export { extractImports, resolveImport, languageFor, isSourceFile } from './imports';
-export { deriveGroups, groupKeyFor } from './groups';
+export { deriveGroups, groupKeyFor, deriveRepositoryHierarchy, applyHierarchy, RepositoryMappingSchema, GROUPING_RULES_VERSION } from './groups';
+export type { RepositoryHierarchy, RepositoryMapping, HierarchyOptions, ManifestBoundary } from './groups';
 
 export interface AnalysisProgress { stage: 'fetching' | 'indexing' | 'sources' | 'ready'; progress: number; message: string; }
 export interface AnalysisOptions extends GitHubOptions { onProgress?: (progress: AnalysisProgress) => void; maxFiles?: number; maxSourceFiles?: number; sourcePages?: number; }
