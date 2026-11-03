@@ -168,7 +168,7 @@ export default function App() {
   const matchingGroups = !query.trim() ? [] : (presentationSnapshot?.groups || []).filter(group => group.label.toLowerCase().includes(query.toLowerCase())).slice(0, 3);
 
 
-  const chooseFile = (id: string | null) => { pendingSharedFile.current = null; if (id && !selectedFileId) fileFocusRef.current = document.activeElement as HTMLElement; setSelectedFileId(id); setQuery(''); if (id) { const node = snapshot?.nodes.find(file => file.id === id); if (node) setMoveGroup(node.groupId); } else { const target = fileFocusRef.current; if (target?.isConnected) target.focus({ preventScroll: true }); else searchRef.current?.focus({ preventScroll: true }); } };
+  const chooseFile = (id: string | null) => { pendingSharedFile.current = null; if (id && !selectedFileId) { const active = document.activeElement; fileFocusRef.current = active instanceof HTMLElement && active !== document.body && active !== document.documentElement ? active : searchRef.current; } setSelectedFileId(id); setQuery(''); if (id) { const node = snapshot?.nodes.find(file => file.id === id); if (node) setMoveGroup(node.groupId); } else { const target = fileFocusRef.current; if (target?.isConnected) target.focus({ preventScroll: true }); else searchRef.current?.focus({ preventScroll: true }); } };
   const updateSelection = async (ids: string[], nextKind = kind) => {
     ids = [...new Set(ids)];
     if (ids.length > MAX_SELECTED_SOURCES) { flash(`Select up to ${MAX_SELECTED_SOURCES} changes at a time.`); return; }
