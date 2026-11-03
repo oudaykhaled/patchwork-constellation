@@ -1,0 +1,53 @@
+{
+  "schemaVersion": "1",
+  "kind": "provider-integration-followup",
+  "recordedAt": "2026-11-03T21:25:25Z",
+  "issue": 21,
+  "baseCommit": "2100fbe7d36ed8bdfa86d9129339dbb39a2b8bd7",
+  "status": "partial",
+  "changes": [
+    "Smoke requires a dated immutable generative model ID and non-whitespace credentials before any request.",
+    "Smoke rejects actual generative response model drift before a Jev decision call."
+  ],
+  "validation": {
+    "focusedProviderTestsPassed": 27,
+    "typecheck": "passed",
+    "changedSourceFormat": "passed",
+    "changedSourceLint": "passed",
+    "actualCredentialFreeSmoke": {
+      "status": "blocked",
+      "code": "INTEGRATION_GATE_REQUIRED",
+      "exitCode": 1,
+      "requests": 0,
+      "qualityEvaluation": "not-performed"
+    }
+  },
+  "configurationDiscovery": {
+    "method": "Presence booleans only; values never emitted",
+    "environmentScopes": ["Process", "User", "Machine"],
+    "variables": ["TYPESAFE_API_KEY", "JEV_MODEL", "OPENAI_API_KEY", "OPENAI_MODEL"],
+    "anyPresent": false,
+    "projectEnvironmentFiles": "Only .env.example in main checkout and isolated worktree; no .env",
+    "credentialStoresOrUnrelatedProjectsSearched": false
+  },
+  "officialReferenceReview": {
+    "date": "2026-11-03",
+    "models": "https://docs.typesafe.ai/models",
+    "systemOneSchema": "https://api.typesafe.ai/openapi.json",
+    "javascriptSdk": "https://docs.typesafe.ai/sdk/javascript",
+    "legalIndex": "https://docs.typesafe.ai/legal",
+    "jevIdentity": "TypeSafe Jev, served by System One",
+    "publicStableCandidate": "jev-1.14.0",
+    "candidateEvaluatedForApplication": false,
+    "accountSpecificTermsOrLimitsVerified": false
+  },
+  "remainingOriginalGates": [
+    "Configure authorized TypeSafe and generative-provider accounts and immutable models outside chat.",
+    "Review applicable account data terms, organization limits and bounded-call authorization.",
+    "Run and review the redacted live synthetic smoke.",
+    "Pass AI-06 quality/cost/calibration and independent review before enabling intelligence."
+  ],
+  "liveRequestsMade": 0,
+  "intelligenceEnabled": false,
+  "releaseApproved": false
+}

@@ -17,11 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, verified 2026-11-03
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0, verified 2026-11-03
         with:
           node-version: 24
           cache: pnpm
@@ -35,7 +35,7 @@ jobs:
           GRAPH_ENFORCE_BUDGETS: 'true'
           GRAPH_BENCHMARK_CONCURRENCY: dedicated single-worker GitHub Actions job
           GRAPH_BENCHMARK_OUTPUT: test-results/graph-budgets
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, verified 2026-11-03
         if: always()
         with:
           name: graph-budget-numeric-evidence

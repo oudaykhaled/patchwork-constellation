@@ -31,6 +31,12 @@ describe('reviewed evaluation release gate', () => {
     expect(admitted.filter(Boolean).length).toBeLessThan(150);
     expect(evaluationAllowsTenant(canary, 'fixed')).toBe(evaluationAllowsTenant(canary, 'fixed'));
   });
+  it('rejects post-run terms review and reviewer identities differing only by whitespace or case', () => {
+    const approved = testEvaluationManifest();
+    expect(evaluateReleaseGate({ ...approved, review: { ...approved.review, dataTermsReviewedAt: new Date(Date.parse(approved.live.completedAt) + 1).toISOString() } }, config).passed).toBe(false);
+    expect(evaluateReleaseGate({ ...approved, review: { ...approved.review, independentReviewer: ` ${approved.review.reviewer.toUpperCase()} ` } }, config).passed).toBe(false);
+    expect(evaluateReleaseGate({ ...approved, review: { ...approved.review, reviewer: ' ' } }, config).passed).toBe(false);
+  });
   it('AI_ENABLED and keys alone cannot emit provider traffic; manual edits still work', async () => {
     const transport = vi.fn();
     const service = new GroupingService({ enabled: true, jevApiKey: 'test-only', generativeApiKey: 'test-only', ...config, fetch: transport });

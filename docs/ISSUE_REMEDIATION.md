@@ -1,5 +1,7 @@
 # Acceptance audit of the 31 implementation issues
 
+Historical pre-closure audit. [Current completion decisions](COMPLETION_STATUS.md) and the linked GitHub issue states supersede the candidate/partial counts and pending publication statements below. The owner has since excluded accessibility review; no accessibility certification is inferred.
+
 Updated 2026-11-03 against all original issue contracts, individual `docs/issues/NN.md` reports and local integration commit **`2f6a59174ed981b27957218890ee75c4d6b9019a`**. All 31 code lanes are now integrated locally. This supersedes the earlier audit of `b1b76b1`, which correctly recorded wiring and verification still in progress at that time.
 
 There are **22 conditional closure candidates and nine partial issues**. **Candidate** means the original scoped implementation and controlled/local acceptance evidence are supplied, pending final combined verification and review. **Partial** identifies a specific original requirement still unmet. Neither status closes an issue or certifies a release. Final frozen-build results belong in the integrator's [final verification record](FINAL_VERIFICATION.md); that record now supplies the completed frozen-build checks and measured limits.

@@ -31,6 +31,17 @@ describe('bounded memory storage', () => {
     await expect(store.putSnapshot({ ...scope, repository: 'other/repo' }, snapshot)).rejects.toThrow('does not match');
     await expect(store.putSnapshot(scope, { ...snapshot, nodes: [{ ...snapshot.nodes[0]!, groupId: 'missing' }] })).rejects.toThrow();
   });
+  it('inventories every retained owner repository for disconnect, including expired and non-snapshot records', async () => {
+    await store.putSnapshot(scope, snapshot);
+    await store.putSnapshot({ ...scope, ownerId: 'bob' }, snapshot);
+    await store.putJob({ ...scope, repository: 'jobs/only' }, newJob({}, { now, id: 'retained-job' }));
+    await store.recordWebhookDelivery({ ...scope, repository: 'webhooks/only' }, 'retained-delivery');
+    now += 60_001;
+    expect(await store.listRepositories(scope.ownerId)).toEqual(['example/repo', 'jobs/only', 'webhooks/only']);
+    for (const repository of await store.listRepositories(scope.ownerId)) await store.deleteRepository({ ...scope, repository });
+    expect(await store.listRepositories(scope.ownerId)).toEqual([]);
+    expect(await store.listRepositories('bob')).toEqual(['example/repo']);
+  });
   it('loads latest by writes rather than LRU reads or caller dates and isolates scope', async () => {
     await store.putSnapshot(scope, { ...snapshot, id: 'older', createdAt: '2026-11-03T23:59:59Z' });
     await store.putSnapshot(scope, { ...snapshot, id: 'newer', createdAt: '2026-11-03T00:00:00Z' });
@@ -144,6 +155,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('PostgreSQL persistence (opt-in 
       expect(await first.cancelJob(scope, 'pg-job')).toBe(true);
       expect(await second.completeJob(scope, 'pg-job', claims[0]?.leaseOwner ?? claims[1]!.leaseOwner!, { status: 'ready' })).toBe(false);
       expect(await first.recordWebhookDelivery(scope, 'delivery-1234')).toBe(true); expect(await second.recordWebhookDelivery(scope, 'delivery-1234')).toBe(false);
+      expect(await second.listRepositories(scope.ownerId)).toEqual([scope.repository.toLowerCase()]);
       const same = newJob({ contextRef: 'a'.repeat(40) }, { id: 'idempotent' });
       const submitted = await Promise.all([first.enqueueJob(scope, same), second.enqueueJob(scope, same)]);
       expect(submitted.filter(result => result.created)).toHaveLength(1);

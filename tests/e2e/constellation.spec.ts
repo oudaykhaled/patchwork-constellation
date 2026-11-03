@@ -18,8 +18,30 @@ async function openDemo(page: Page) {
 }
 
 test('selecting PRs changes the footprint and keeps the graph mounted', async ({ page }) => {
+  await page.addInitScript(() => {
+    // Observe the actual circles painted by the renderer, including its cached
+    // scene canvas. Camera and island labels alone cannot prove files stayed put.
+    const centers = new WeakMap<object, Set<string>>();
+    const clear = CanvasRenderingContext2D.prototype.clearRect;
+    CanvasRenderingContext2D.prototype.clearRect = function(...args) {
+      centers.set(this.canvas, new Set());
+      return clear.apply(this, args);
+    };
+    const circle = CanvasRenderingContext2D.prototype.arc;
+    CanvasRenderingContext2D.prototype.arc = function(...args) {
+      let current = centers.get(this.canvas);
+      if (!current) { current = new Set(); centers.set(this.canvas, current); }
+      current.add(JSON.stringify(args.slice(0, 2)));
+      Object.assign(window, { drawnFileCenters: current });
+      return circle.apply(this, args);
+    };
+  });
   await openDemo(page);
   const canvas = page.getByTestId('graph-canvas');
+  const fileCenters = () => page.evaluate(() => [...((window as unknown as { drawnFileCenters?: Set<string> }).drawnFileCenters ?? [])].sort());
+  await expect.poll(async () => (await fileCenters()).length).toBe(212);
+  const initialFileCenters = await fileCenters();
+  const initialSceneBuilds = Number(await canvas.getAttribute('data-scene-cache-builds'));
   const initialScale = await canvas.getAttribute('data-camera-scale');
   const initialX = await canvas.getAttribute('data-camera-x');
   const initialY = await canvas.getAttribute('data-camera-y');
@@ -33,6 +55,8 @@ test('selecting PRs changes the footprint and keeps the graph mounted', async ({
   await page.getByTestId('source-pr-256').click();
   await expect(page.getByTestId('changed-count')).toContainText('57');
   await expect(page.getByTestId('overlap-count')).toContainText('2');
+  await expect.poll(async () => Number(await canvas.getAttribute('data-scene-cache-builds'))).toBeGreaterThan(initialSceneBuilds);
+  await expect.poll(fileCenters).toEqual(initialFileCenters);
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('graph-viewport')).toBeVisible();
   await expect(canvas).toHaveAttribute('data-camera-scale', initialScale!);

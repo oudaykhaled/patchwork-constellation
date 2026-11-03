@@ -1,5 +1,7 @@
 # Published implementation and verification
 
+Historical publication checkpoint. PR #32 is now merged; [current completion decisions](COMPLETION_STATUS.md) and the linked GitHub board supersede the issue-disposition and unmerged statements below. Measurements retain their original source/build scope.
+
 Updated 2026-11-03. The complete implementation is published on **feat/constellation-mvp** in [PR #32](https://github.com/oudaykhaled/patchwork-constellation/pull/32). The application code is at **2f6a59174ed981b27957218890ee75c4d6b9019a**; subsequent evidence commits change documentation only. The PR remains unmerged. GitHub CLI 2.103.3 authenticated as the owner through the Windows keyring and completed ordinary fast-forward pushes. Product GitHub App deployment configuration remains separately required for that product capability.
 
 There are **22 conditional closure candidates and nine partial issues**, with no implementation issue closed and no beta approved. The partial list is **#5, #15, #17, #18, #21, #26, #27, #28 and #31**. Their original native zoom, human accessibility/task review, live provider evaluation, manual GPU or deployed staging/release requirements remain. Current [acceptance audit](ISSUE_REMEDIATION.md) and [machine-readable verification](publication-verification.json) retain these limits.

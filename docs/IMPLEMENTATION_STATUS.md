@@ -1,5 +1,7 @@
 # Implementation status
 
+Historical implementation checkpoint. [Current completion decisions](COMPLETION_STATUS.md) and the linked GitHub issue states supersede the candidate/partial counts and unmerged statements below. Original measurement provenance is retained.
+
 Updated 2026-11-03 against local integration commit **`2f6a59174ed981b27957218890ee75c4d6b9019a`**. All 31 issue lanes are integrated locally. The tool now includes GitHub App authorization code, exact source footprints with bounded Git fallback, static and selected-head imports, durable jobs/recovery, signed webhook runtime, cancellable layout workers, accessible file exploration, durable grouping corrections and licensed release tooling. Live AI stays behind its evaluation gate.
 
 **Candidate** means scoped code and controlled/local acceptance evidence are supplied, subject to final combined checks and review. **Partial** names an unmet original acceptance requirement. There are **22 conditional candidates and nine partials**; no blanket completion or issue closure is claimed. The integrator's [final verification record](FINAL_VERIFICATION.md) now records the completed frozen-build results and measured limits.

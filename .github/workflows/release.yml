@@ -8,11 +8,15 @@ on:
         required: true
         type: string
       stage:
-        description: Artifact promotion stage; this workflow does not deploy hosting
+        description: Preview artifact, ephemeral staging deployment, or gated production artifact
         required: true
         default: preview
         type: choice
-        options: [preview, production]
+        options: [preview, staging, production]
+      rollback_commit:
+        description: Full reviewed compatible prior commit; required for staging
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -23,6 +27,7 @@ concurrency:
 
 jobs:
   artifact:
+    if: inputs.stage != 'staging'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: ${{ inputs.stage }}
@@ -40,7 +45,7 @@ jobs:
         run: |
           [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
           if [[ "$RELEASE_STAGE" == production && "$GITHUB_REF" != refs/heads/main ]]; then exit 1; fi
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4, same verified pin as checks
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, verified 2026-11-03
         with:
           ref: ${{ inputs.commit }}
           fetch-depth: 0
@@ -49,7 +54,7 @@ jobs:
         if: inputs.stage == 'production'
         run: git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0, verified 2026-11-03
         with:
           node-version: 24
           cache: pnpm
@@ -60,9 +65,89 @@ jobs:
         if: inputs.stage == 'production'
         run: node scripts/release-gate.mjs .release/acceptance.json "$RELEASE_COMMIT"
       - run: pnpm release:pack
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, verified 2026-11-03
         with:
           name: constellation-${{ inputs.commit }}-${{ inputs.stage }}
           path: release-artifacts/
+          retention-days: 14
+          if-no-files-found: error
+
+  staging:
+    if: inputs.stage == 'staging'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: staging
+    env:
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      ROLLBACK_COMMIT: ${{ inputs.rollback_commit }}
+      AI_ENABLED: 'false'
+      DATABASE_URL: ''
+      GITHUB_TOKEN: ''
+      TYPESAFE_API_KEY: ''
+      OPENAI_API_KEY: ''
+    steps:
+      - name: Validate reviewed staging inputs
+        shell: bash
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$ROLLBACK_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          [[ "$RELEASE_COMMIT" != "$ROLLBACK_COMMIT" ]] || exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, verified 2026-11-03
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a compatible prior ancestor
+        run: git merge-base --is-ancestor "$ROLLBACK_COMMIT" "$RELEASE_COMMIT"
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0, verified 2026-11-03
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test:release
+      - name: Package the exact candidate
+        run: pnpm release:pack
+      - name: Build and package the distinct reviewed rollback source
+        shell: bash
+        run: |
+          git worktree add --detach .cache/staging-prior-source "$ROLLBACK_COMMIT"
+          cd .cache/staging-prior-source
+          # Package blobs alone do not include pnpm's registry policy metadata.
+          # Qualify this prior lockfile with policies enabled before offline deployment.
+          pnpm install --frozen-lockfile --prod=false
+          pnpm build
+          RELEASE_OUT_DIR="$GITHUB_WORKSPACE/release-artifacts/prior" pnpm release:pack
+      - name: Start owned ephemeral staging PostgreSQL
+        run: node tools/release/ci-postgres.mjs start
+      - name: Verify real PostgreSQL persistence and process-loss recovery
+        run: pnpm exec vitest run packages/storage/src/storage.test.ts packages/storage/src/webhook-postgres.test.ts tests/backend-release/postgres.test.ts
+      - name: Verify deployed BFF isolation and resource boundaries
+        run: pnpm exec tsx tests/backend-release/staging.ts .tmp/staging/data-09.json
+      - name: Verify Git ground truth and adversarial input controls
+        run: pnpm exec vitest run tests/backend-release/correctness.test.ts tests/backend-release/isolation.test.ts
+      - name: Deploy candidate and rehearse database restore and traffic rollback
+        shell: bash
+        run: |
+          mapfile -t CANDIDATE < <(find release-artifacts -maxdepth 1 -name '*.tar.gz' -type f)
+          mapfile -t PREVIOUS < <(find release-artifacts/prior -maxdepth 1 -name '*.tar.gz' -type f)
+          [[ "${#CANDIDATE[@]}" == 1 && "${#PREVIOUS[@]}" == 1 ]] || exit 1
+          pnpm exec tsx tools/release/staging-rehearsal.ts "${CANDIDATE[0]}" "${PREVIOUS[0]}" .tmp/staging/release-31.json
+      - name: Stop owned staging PostgreSQL
+        if: always()
+        run: node tools/release/ci-postgres.mjs stop
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, verified 2026-11-03
+        if: always()
+        with:
+          name: constellation-staging-${{ inputs.commit }}
+          path: |
+            .tmp/staging/*.json
+            release-artifacts/*.tar.gz
+            release-artifacts/*.sha256
+            release-artifacts/*.manifest.json
+            release-artifacts/prior/*.tar.gz
+            release-artifacts/prior/*.sha256
+            release-artifacts/prior/*.manifest.json
           retention-days: 14
           if-no-files-found: error

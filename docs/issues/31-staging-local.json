@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "1",
+  "recordedAt": "2026-11-03T21:34:29.742Z",
+  "outcome": "passed",
+  "scope": "local-disposable-staging",
+  "harnessCommit": "ec1cad08e004eb5de068cb02f3def7456fe720a2",
+  "hosting": "isolated single-job Node services on loopback behind a stable-address HTTP traffic proxy; disposable PostgreSQL",
+  "publicDeployment": false,
+  "intelligence": "disabled",
+  "observations": [
+    {
+      "phase": "previous-before-deployment",
+      "artifact": "patchwork-constellation-0.1.0-c03f11599328",
+      "commit": "c03f115993286c033574fb7823648826825a7eba",
+      "checks": [
+        "same-address-traffic-switch",
+        "exact-built-html",
+        "real-worker-storage-queue-readiness",
+        "postgres-persisted-http-snapshot",
+        "212-file-demo",
+        "disabled-provider-zero-transfer"
+      ],
+      "databaseRole": "DML-only; schema CREATE denied",
+      "database": "migrated disposable database"
+    },
+    {
+      "phase": "candidate",
+      "artifact": "patchwork-constellation-0.1.0-ec1cad08e004",
+      "commit": "ec1cad08e004eb5de068cb02f3def7456fe720a2",
+      "checks": [
+        "same-address-traffic-switch",
+        "exact-built-html",
+        "real-worker-storage-queue-readiness",
+        "postgres-persisted-http-snapshot",
+        "212-file-demo",
+        "disabled-provider-zero-transfer"
+      ],
+      "databaseRole": "DML-only; schema CREATE denied",
+      "database": "migrated disposable database"
+    },
+    {
+      "phase": "rollback",
+      "artifact": "patchwork-constellation-0.1.0-c03f11599328",
+      "commit": "c03f115993286c033574fb7823648826825a7eba",
+      "checks": [
+        "same-address-traffic-switch",
+        "exact-built-html",
+        "real-worker-storage-queue-readiness",
+        "postgres-persisted-http-snapshot",
+        "212-file-demo",
+        "disabled-provider-zero-transfer"
+      ],
+      "databaseRole": "DML-only; schema CREATE denied",
+      "database": "restored disposable database"
+    }
+  ],
+  "artifacts": {
+    "candidate": {
+      "commit": "ec1cad08e004eb5de068cb02f3def7456fe720a2",
+      "sha256": "f949017567d6642aa39e777f54dacfebbc606439465f8aa5a3db75c647f171a0"
+    },
+    "previous": {
+      "commit": "c03f115993286c033574fb7823648826825a7eba",
+      "sha256": "bfb49555e33c79949019a03937bea1e730b05f4efaeffd127d06483f5b74a1e9"
+    }
+  },
+  "migration": {
+    "principal": "disposable database administrator",
+    "serving": "separate non-superuser DML-only role; auto-migration disabled; DDL denied",
+    "files": [
+      "001_storage.sql",
+      "002_webhook_inbox.sql"
+    ],
+    "restoreIdempotent": true
+  },
+  "databaseRestore": {
+    "serverVersion": "17.11",
+    "format": "native custom pg_dump/pg_restore to a fresh database",
+    "sha256": "1eac972ef20725741b00d29e8cc3e272537be9eedc3c6a15d7beca73dcedb571",
+    "bytes": 30759,
+    "snapshotDigest": "6134200a03f28bbfb45d671614bf9449441c02e00726eb3d7624f779502a0415",
+    "jobDigest": "b0daad24fcca2a1c527a1c8ce8d8d35a91aa27fc9ebc23cda2cc9991937367c1",
+    "equalityPassed": true
+  },
+  "conditions": {
+    "os": "win32",
+    "osRelease": "10.0.26200",
+    "cpuModel": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "memoryBytes": 33752997888,
+    "node": "v24.22.1",
+    "packageInstall": "offline frozen lockfile",
+    "sourceData": "synthetic only",
+    "externalGitHub": false,
+    "externalProviders": false
+  },
+  "boundaries": [
+    "No cloud/public endpoint, production data, real GitHub App account or paid provider call was used.",
+    "This automated staging rehearsal does not establish human screen-reader, live model evaluation or production release approval."
+  ],
+  "cleanup": {
+    "ownedServersStopped": true,
+    "disposableDatabasesDropped": 2,
+    "servingRoleDropped": true
+  }
+}
