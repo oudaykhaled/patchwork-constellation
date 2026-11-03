@@ -148,7 +148,9 @@ describe('baseline and provider boundary', () => {
 
 describe('revision and override invariants', () => {
   it('previews before apply, applies only for the same tenant and preserves facts', async () => {
-    const service = configured(providerMock({ moveToBilling: true })); const original = snapshot();
+    const service = configured(providerMock({ moveToBilling: true }), { membershipPolicy: { evaluatedJevModel: 'test-jev-2026', evaluationId: 'synthetic-unit-policy', minimumEvidenceCoverage: 1 } }); const original = snapshot();
+    // A supported move needs observed destination evidence, not only a high model number.
+    original.edges = [{ id: 'e1', source: 'a', target: 'c', kind: 'import', evidence: { path: 'src/auth/session.ts', line: 1 } }];
     const proposal = await service.propose(original, { enabled: true, tenantId: 'alice' });
     expect(original.nodes[0]!.groupId).toBe('auth');
     expect(() => service.apply(original, proposal.id, { tenantId: 'bob' })).toThrow('unavailable');

@@ -6,12 +6,14 @@ import { decideMembership, discoverJevModel, generateLabels, plainText, type Evi
 import { GroupingError, type GroupingConfig, type GroupingOperation, type GroupingProposal, type GroupingResult, type GroupingRevision, type RequestContext } from './types';
 import { AI_FIELDS_SENT, AI_POLICY_VERSION, createExternalDataPolicy, externalGroupingCacheKey } from './policy';
 import { ProviderBudgetLedger } from './budget';
+import { createGroupingEvidence, evaluateGroupingProposal, GROUPING_PIPELINE_VERSION } from './pipeline';
 
 export * from './types';
 export * from './contracts';
 import { GroupingRevisionSchema, validateGroupingProposal, validateGroupingRevision } from './contracts';
 export { validateCandidateLabels, TypeSafeDecisionProvider, OpenAIGenerativeProvider, PROVIDER_CONTRACT_VERSION, LABEL_PROMPT_VERSION, MEMBERSHIP_PROMPT_VERSION, type DecisionProvider, type GenerativeProvider, type ChoiceQuestion, type ScoreQuestion, type NoulQuestion, type ChoiceAnswer, type ScoreAnswer, type NoulAnswer, type DecisionResponse, type DiscoveredModel } from './providers';
 export { createExternalDataPolicy, externalGroupingCacheKey } from './policy';
+export { createGroupingEvidence, evaluateGroupingProposal, GROUPING_PIPELINE_VERSION } from './pipeline';
 
 const MAX_CONTEXTS = 100;
 const MAX_REVISIONS = 20;
@@ -39,19 +41,7 @@ function assertMembership(snapshot: GraphSnapshot, groups: Group[], membership: 
 }
 
 function makeEvidence(snapshot: GraphSnapshot, revision: GroupingRevision, maxFiles: number, policy: ReturnType<typeof createExternalDataPolicy>): { evidence: EvidenceBundle; excludedFiles: number } {
-  const eligible = snapshot.nodes.filter(node => !policy.excludeFile(node));
-  const unlocked = eligible.filter(node => !revision.lockedFileIds.includes(node.id));
-  const files = unlocked.slice().sort((a, b) => a.id.localeCompare(b.id)).slice(0, maxFiles);
-  // A bounded subset is explicit in dataPolicy; omitted files retain their existing membership.
-  const selectedIds = new Set(files.map(file => file.id));
-  const relevantGroups = revision.groups.filter(group => files.some(file => revision.membership[file.id] === group.id));
-  const groups = relevantGroups.slice(0, 64).map((group, index) => ({ id: group.id, label: policy.sanitizeLabel(group.label, `Island ${index + 1}`), paths: eligible.filter(node => revision.membership[node.id] === group.id).slice(0, 8).map(node => node.path.slice(0, 300)) }));
-  const groupIds = new Set(groups.map(group => group.id));
-  const evidenceFiles = files.filter(file => groupIds.has(revision.membership[file.id]!)).map(file => ({
-    id: file.id, path: file.path.slice(0, 300), groupId: revision.membership[file.id]!, evidenceId: `file:${file.id}`,
-    imports: snapshot.edges.filter(edge => edge.source === file.id && selectedIds.has(edge.target)).slice(0, 12).map(edge => edge.target),
-  }));
-  return { evidence: { files: evidenceFiles, groups, allowedEvidenceIds: evidenceFiles.map(file => file.evidenceId) }, excludedFiles: snapshot.nodes.length - eligible.length };
+  return createGroupingEvidence(snapshot, revision, maxFiles, { excludeFile: policy.excludeFile, sanitizeLabel: policy.sanitizeLabel });
 }
 
 interface ProposalEntry { tenantId: string; repository: string; proposal: GroupingProposal; expires: number }
@@ -162,7 +152,7 @@ export class GroupingService {
     if (JSON.stringify(evidence).length > this.config.maxInputCharacters) return baseline('The metadata budget was exceeded. Narrow the repository scope before requesting AI grouping.');
     const tenantId = options.tenantId ?? 'local';
     const repository = repositoryKey(snapshot);
-    const cacheKey = externalGroupingCacheKey({ tenantId, snapshot, revisionId: revision.id, evidence, jevModel: this.config.jevModel, generativeModel: this.config.generativeModel, policyDigest: this.policy.digest, minimumConfidence: this.config.minimumConfidence });
+    const cacheKey = externalGroupingCacheKey({ tenantId, snapshot, revisionId: revision.id, evidence, jevModel: this.config.jevModel, generativeModel: this.config.generativeModel, policyDigest: this.policy.digest, minimumConfidence: this.config.minimumConfidence, pipelineVersion: GROUPING_PIPELINE_VERSION, membershipPolicy: this.config.membershipPolicy });
     const cached = this.cached.get(cacheKey);
     if (cached) { this.registerProposal(snapshot, cached.proposal, options); this.telemetry(cached.proposal, 0, true); return copy(cached.proposal); }
     const running = this.inflight.get(cacheKey);
@@ -313,23 +303,12 @@ export class GroupingService {
     const generated = await generateLabels({ apiKey: this.config.generativeApiKey!, model: this.config.generativeModel! }, evidence, budget);
     const decisions = await decideMembership({ apiKey: this.config.jevApiKey!, model: this.config.jevModel! }, evidence, generated.labels, budget);
     actualTokens = generated.usage.inputTokens + generated.usage.outputTokens + decisions.usage.inputTokens + decisions.usage.outputTokens;
-    const groups = revision.groups.map(group => {
-      const proposed = generated.labels.find(label => label.groupId === group.id);
-      return proposed && !revision.lockedGroupIds.includes(group.id) ? { ...group, label: proposed.label, origin: 'ai' as const } : copy(group);
-    });
-    const membership = copy(revision.membership);
-    const detailed = decisions.decisions.map(decision => {
-      const accepted = decision.groupId !== null && typeof decision.confidence === 'number' && decision.confidence >= this.config.minimumConfidence && !revision.lockedFileIds.includes(decision.fileId);
-      if (accepted) membership[decision.fileId] = decision.groupId!;
-      return { schemaVersion: '1' as const, snapshotId: snapshot.id, fileId: decision.fileId, groupId: membership[decision.fileId]!, origin: 'ai-jev' as const, evidenceIds: [`file:${decision.fileId}`], confidence: decision.confidence, model: decisions.model,
-        rationale: accepted ? 'Jev selected this existing island from bounded path and import evidence. Confidence describes model uncertainty, not verified accuracy.' : 'Evidence was uncertain or a manual override is active; the existing island is retained.',
-      };
-    });
-    assertMembership(snapshot, groups, membership);
+    const evaluated = evaluateGroupingProposal({ snapshot, revision, evidence, labels: generated.labels, decisions: decisions.decisions, model: decisions.model, minimumConfidence: this.config.minimumConfidence, policy: this.config.membershipPolicy });
+    assertMembership(snapshot, evaluated.groups, evaluated.membership);
     return {
       schemaVersion: '1', provenance: { snapshotId: snapshot.id, contextSha: snapshot.contextSha, source: 'model', models: { generative: generated.model, jev: decisions.model } },
-      id: `proposal-${randomUUID()}`, snapshotId: snapshot.id, parentRevisionId: revision.id, status: 'proposed', origin: 'ai-jev', groups, membership, decisions: detailed,
-      message: `AI + Jev reviewed ${evidence.files.length} eligible files. Review this bounded proposal before applying; other files keep their current membership.`, createdAt: new Date().toISOString(),
+      ...evaluated, id: `proposal-${randomUUID()}`, snapshotId: snapshot.id, parentRevisionId: revision.id, status: 'proposed', origin: 'ai-jev',
+      message: `AI + Jev reviewed ${evidence.files.length} eligible files and proposed ${evaluated.changedMemberships.length} membership changes. ${evaluated.reviewItems.length} files retain their current island for review. Other files keep their current membership.`, createdAt: new Date().toISOString(),
       models: { generative: generated.model, jev: decisions.model },
       usage: { inputTokens: generated.usage.inputTokens + decisions.usage.inputTokens, outputTokens: generated.usage.outputTokens + decisions.usage.outputTokens, requests: budget.requests },
       dataPolicy: { fieldsSent: AI_FIELDS_SENT.slice(), excludedFiles, analyzedFiles: evidence.files.length },

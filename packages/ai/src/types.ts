@@ -16,6 +16,20 @@ export interface MembershipDecision {
   confidence?: number;
   model?: string;
   rationale: string;
+  proposedGroupId?: string | null;
+  outcome?: 'proposed' | 'retained';
+  evidenceCoverage?: number;
+  reviewReason?: MembershipReviewReason;
+}
+
+export type MembershipReviewReason = 'uncertain' | 'low-confidence' | 'missing-confidence' | 'unreviewed-model' | 'missing-evidence' | 'incomplete-evidence' | 'conflicting-evidence' | 'manual-override';
+export interface MembershipReviewItem { fileId: string; reason: MembershipReviewReason; message: string; evidenceIds: string[] }
+export interface MembershipChange { fileId: string; fromGroupId: string; toGroupId: string }
+export interface GroupingMembershipPolicy {
+  /** Exact response model version covered by the independent evaluation gate. */
+  evaluatedJevModel: string;
+  evaluationId: string;
+  minimumEvidenceCoverage: number;
 }
 
 /** Evidence is pinned to the immutable review context, independently of overlays. */
@@ -48,6 +62,10 @@ export interface GroupingProposal {
   models?: { generative: string; jev: string };
   usage?: { inputTokens: number; outputTokens: number; requests: number };
   dataPolicy: { fieldsSent: string[]; excludedFiles: number; analyzedFiles: number };
+  reviewItems?: MembershipReviewItem[];
+  changedMemberships?: MembershipChange[];
+  labelEvidence?: Array<{ groupId: string; label: string; rationale: string; evidenceIds: string[] }>;
+  evaluation?: { policyVersion: string; evaluationId: string | null; expectedModel: string | null; actualModel: string; status: 'evaluated' | 'unreviewed'; confidenceMeaning: string };
 }
 
 export interface GroupingRevision {
@@ -86,6 +104,7 @@ export interface GroupingConfig {
   maxRequestsPerTenant?: number;
   maxInputCharacters?: number;
   minimumConfidence?: number;
+  membershipPolicy?: GroupingMembershipPolicy;
   timeoutMs?: number;
   /** Additional repository-relative glob exclusions, applied before metadata leaves the server. */
   excludedPaths?: string[];

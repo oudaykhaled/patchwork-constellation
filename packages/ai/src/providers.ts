@@ -1,8 +1,10 @@
 import { GroupingError } from './types';
 
-export interface EvidenceFile { id: string; path: string; groupId: string; evidenceId: string; imports: string[] }
+export interface EvidenceFile { id: string; path: string; groupId: string; evidenceId: string; imports: string[]; evidenceCoverage?: number; coverageReasons?: string[] }
 export interface EvidenceGroup { id: string; label: string; paths: string[] }
-export interface EvidenceBundle { files: EvidenceFile[]; groups: EvidenceGroup[]; allowedEvidenceIds: string[] }
+export interface EvidenceImport { evidenceId: string; edgeId: string; source: string; target: string; relation: string; path: string; line?: number; snapshotSha?: string }
+export interface EvidencePackage { evidenceId: string; fileId: string; path: string; groupId: string }
+export interface EvidenceBundle { files: EvidenceFile[]; groups: EvidenceGroup[]; allowedEvidenceIds: string[]; importFacts?: EvidenceImport[]; packages?: EvidencePackage[]; snapshot?: { id: string; contextSha: string; coverage: string } }
 export interface CandidateLabel { groupId: string; label: string; rationale: string; evidenceIds: string[] }
 export interface ProviderUsage { inputTokens: number; outputTokens: number }
 
