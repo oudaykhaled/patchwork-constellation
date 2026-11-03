@@ -53,7 +53,7 @@ test('pan reuses all 8,000 cached connections and translates file pixels without
   expect(after.samples).toBeGreaterThan(100);
   expect(after.mismatch).toBeLessThan(.02);
   expect(after.bytes).toBeLessThanOrEqual(64_000_000);
-  await page.getByRole('searchbox', { name: 'Find a file, folder or island' }).fill('file-000001');
+  await page.getByRole('combobox', { name: 'Find a file, folder or island' }).fill('file-000001');
   await expect.poll(async () => Number(await canvas.getAttribute('data-scene-cache-builds'))).toBeGreaterThan(after.builds);
   const searchBuilds = Number(await canvas.getAttribute('data-scene-cache-builds'));
   await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
