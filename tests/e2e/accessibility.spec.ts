@@ -1,6 +1,52 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 
+test('search exposes one keyboard-operated combobox and preserves an inspected file when dismissed', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('changed-count')).toHaveText('68');
+  const search = page.getByRole('combobox', { name: 'Find a file, folder or island' });
+  await expect(search).toHaveAttribute('aria-expanded', 'false');
+  await search.fill('refresh.ts');
+  const results = page.getByRole('listbox', { name: 'Search results' });
+  await expect(search).toHaveAttribute('aria-controls', await results.getAttribute('id') || 'missing-listbox-id');
+  await expect(search).toHaveAttribute('aria-expanded', 'true');
+  await search.press('ArrowDown');
+  const first = results.getByRole('option').first();
+  await expect(first).toHaveAttribute('aria-selected', 'true');
+  await expect(search).toHaveAttribute('aria-activedescendant', await first.getAttribute('id') || 'missing-option-id');
+  await expect(search).toBeFocused();
+  await search.press('Enter');
+  await expect(page.getByTestId('file-inspector')).toContainText('refresh.ts');
+  await expect(page.getByRole('button', { name: 'Close file inspector' })).toBeFocused();
+  await search.fill('auth');
+  await search.press('ArrowUp');
+  await expect(results.getByRole('option').last()).toHaveAttribute('aria-selected', 'true');
+  await search.press('Escape');
+  await expect(results).toBeHidden();
+  await expect(search).toBeFocused();
+  await expect(page.getByTestId('file-inspector')).toContainText('refresh.ts');
+  await expect(search).not.toHaveAttribute('aria-activedescendant');
+  await search.fill('there-is-no-such-file-or-island');
+  await search.press('ArrowDown');
+  await expect(search).not.toHaveAttribute('aria-activedescendant');
+  await expect(search).toBeFocused();
+});
+
+test('source mode exposes its selected state without relying on color', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('changed-count')).toHaveText('68');
+  await page.getByTestId('source-selector').click();
+  const dialog = page.getByRole('dialog', { name: 'Choose your changes' });
+  const prs = dialog.getByRole('button', { name: 'Pull requests', exact: true });
+  const commits = dialog.getByRole('button', { name: 'Commits', exact: true });
+  await expect(prs).toHaveAttribute('aria-pressed', 'true');
+  await expect(commits).toHaveAttribute('aria-pressed', 'false');
+  await commits.focus(); await commits.press('Enter');
+  await expect(commits).toHaveAttribute('aria-pressed', 'true');
+  await expect(prs).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('changed-count')).toHaveText('24');
+});
+
 test('keyboard file exploration reaches every window, exposes overlap/evidence and returns focus', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByTestId('changed-count')).toHaveText('68');
@@ -39,6 +85,12 @@ test('automated WCAG 2.2 AA subset covers default, source selection, explorer an
     expect(result.violations, JSON.stringify(result.violations.map(item => ({ id: item.id, nodes: item.nodes.map(node => node.target) })))).toEqual([]);
   };
   await scan('graph');
+  await page.getByTestId('file-search').fill('auth');
+  await page.getByTestId('file-search').press('ArrowDown');
+  await scan('keyboard-search');
+  await page.getByTestId('file-search').fill('there-is-no-such-file-or-island');
+  await scan('empty-search');
+  await page.getByTestId('file-search').press('Escape');
   await page.getByTestId('source-selector').click(); await scan('sources'); await page.keyboard.press('Escape');
   await page.getByTestId('accessible-list-toggle').click(); await scan('explorer');
   await page.getByLabel('Filter file list').fill('refresh.ts');
