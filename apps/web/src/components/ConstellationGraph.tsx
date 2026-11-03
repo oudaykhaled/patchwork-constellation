@@ -208,7 +208,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     };
     animationRef.current = requestAnimationFrame(tick);
   }, [reducedMotion, setCamera, stopAnimation]);
-  const fitAll = useCallback(() => { onFocusGroup?.(null); moveCamera(fitBounds(layout.bounds)); }, [layout.bounds, moveCamera, onFocusGroup, fitBounds]);
+  const fitAll = useCallback(() => { setScopeGroupId(null); onFocusGroup?.(null); moveCamera(fitBounds(layout.bounds)); }, [layout.bounds, moveCamera, onFocusGroup, fitBounds]);
   const fitIsland = useCallback((id: string) => {
     const island = layout.islands.find(group => group.id === id);
     if (island) { onFocusGroup?.(id); moveCamera(fitBounds(islandBounds(island))); }
@@ -377,7 +377,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     } else if (event.key === 'Home' || event.key === '0') { event.preventDefault(); fitAll(); }
   };
 
-  const visibleFiles = useMemo(() => layout.nodes.reduce((count, node) => count + Number(Math.abs((node.x - camera.x) * camera.zoom) < size.width / 2 + 25 && Math.abs((node.y - camera.y) * camera.zoom) < size.height / 2 + 25), 0), [layout.nodes, camera, size]);
+  const visibleFiles = useMemo(() => layout.nodes.reduce((count, node) => count + Number((!scopeGroupId || node.groupId === scopeGroupId) && Math.abs((node.x - camera.x) * camera.zoom) < size.width / 2 + 25 && Math.abs((node.y - camera.y) * camera.zoom) < size.height / 2 + 25), 0), [layout.nodes, camera, size, scopeGroupId]);
   const suppressedEdges = useMemo(() => {
     if (!showImports) return snapshot.edges.length;
     if (snapshot.edges.length <= 10000 || camera.zoom >= .6) return 0;
@@ -411,7 +411,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       })}
     </div>
     {exceedsGraphEnvelope(snapshot) && <div className="graph-scope-control" aria-label="Large repository scope">
-      <label htmlFor="graph-scope">Explore scope <select id="graph-scope" value={scopeGroupId ?? ''} onChange={event => {
+      <label htmlFor="graph-scope">Explore scope <select id="graph-scope" aria-label="Explore scope" value={scopeGroupId ?? ''} onChange={event => {
         const id = event.target.value || null; setScopeGroupId(id); onFocusGroup?.(id);
         const island = id ? layout.islands.find(group => group.id === id) : undefined;
         moveCamera(fitBounds(island ? islandBounds(island) : layout.bounds));

@@ -1,9 +1,9 @@
 import { performance } from 'node:perf_hooks';
-import { createScaleFixture } from '../../fixtures/src/index';
+import { createDemoSnapshot, createScaleFixture } from '../../fixtures/src/index';
 import { layoutGraph, neighborsOf, selectedMembership } from './index';
 
 const results = [212, 2000, 10000].map(count => {
-  const graph = createScaleFixture(count, count === 212 ? 235 : count * 4, 42);
+  const graph = count === 212 ? createDemoSnapshot() : createScaleFixture(count, count * 4, 42);
   const timings: number[] = [];
   for (let run = 0; run < 25; run++) {
     const start = performance.now();
