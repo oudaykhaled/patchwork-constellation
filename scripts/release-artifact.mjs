@@ -5,7 +5,7 @@ import { dirname, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
-const rootFiles = new Set(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts', 'LICENSE', 'README.md', 'CONTRIBUTING.md', 'SECURITY.md', '.env.example', '.gitattributes', '.release/acceptance.json']);
+const rootFiles = new Set(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts', 'playwright.performance.config.ts', 'playwright.authenticated-performance.config.ts', 'LICENSE', 'README.md', 'CONTRIBUTING.md', 'SECURITY.md', '.env.example', '.gitattributes', '.release/acceptance.json']);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const frontendPackages = ['react', 'react-dom', 'scheduler', 'lucide-react', 'zod', '@fontsource/geist', '@fontsource/geist-mono'];
 export function thirdPartyNoticeRecord(text, provenance) {
