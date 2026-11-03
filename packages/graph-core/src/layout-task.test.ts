@@ -44,6 +44,15 @@ describe('settled worker layout protocol', () => {
     expect(Math.abs(-400 - island.y)).toBeLessThan(island.ry);
     expect(layout.bounds.x).toBeLessThan(-200); expect(layout.bounds.y).toBeLessThan(-400);
   });
+  it('retains an explicit pin and surviving file coordinates when a refreshed snapshot adds context files', () => {
+    const file = graph.nodes[0], pin = { x: -180, y: -210 }, pins = { [file.id]: pin };
+    const previous = executeLayoutTask({ id: 1, graph, pins });
+    const refreshed = { ...graph, id: 'new-immutable-context', nodes: [...graph.nodes, { ...graph.nodes[1], id: 'refresh-added', path: 'src/auth/refresh-added.ts', sourceIds: [] }] };
+    const next = executeLayoutTask({ id: 2, graph: refreshed, previous, pins });
+    expect(next.nodeById.get(file.id)).toMatchObject(pin);
+    for (const before of previous.nodes) expect(next.nodeById.get(before.id)).toMatchObject({ x: before.x, y: before.y });
+    expect(next.nodeById.has('refresh-added')).toBe(true);
+  });
   it('previews a regrouped file and positions a new island outside surviving hulls', () => {
     const before = executeLayoutTask({ id: 1, graph });
     const nextGraph = { ...graph, nodes: graph.nodes.map((node, index) => index === 0 ? { ...node, groupId: 'new-island' } : node), groups: [...graph.groups, { id: 'new-island', label: 'New island' }] };

@@ -9,8 +9,8 @@ import { demoSnapshot } from '@patchwork/fixtures';
 import { listRepositorySources } from '@patchwork/analysis';
 import { runAnalysisInWorker, runSourceAnalysisInWorker } from '../worker/src/index';
 import { GroupingService, ownerGroupingStoragePath } from '@patchwork/ai';
-import { parseRepository } from '@patchwork/github';
-import { createStore, type SnapshotStore, type StoreScope } from '@patchwork/storage';
+import { parseRepository, invalidateGitHubRepositoryCache, purgeGitHubRepositoryCache } from '@patchwork/github';
+import { createStore, type SnapshotStore, type StoreScope, type WebhookInbox } from '@patchwork/storage';
 import { BusyError, WorkerAdmission } from './worker-admission';
 import { AnalysisJobs, pinAnalysisInput, type PinnedAnalysisInput } from './analysis-jobs';
 import { graphMetadata, graphChunk, fileDetail } from './graph-api';
@@ -19,6 +19,7 @@ import { checkWorkerHealth } from '../worker/src/health';
 import { ConfigurationError, validateEnvironment } from './environment';
 import { GitHubAppAuth, githubAuthConfig, AuthError, type GitHubSession } from './github-auth';
 import { publicErrorCode, publicErrorMessage, PRODUCTION_CONTENT_SECURITY_POLICY } from './public-errors';
+import { createConfiguredWebhookRefresh, handleGitHubWebhook, type WebhookRefreshService } from './webhook-refresh';
 
 let environmentLoadFailure = false;
 try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') environmentLoadFailure = true; }
@@ -45,7 +46,7 @@ const analyzeRequest = z.object({ repository: z.string().trim().min(3).max(250),
 const idRequest = z.object({ snapshotId: z.string().max(500) });
 const revisionRequest = idRequest.extend({ expectedRevisionId: z.string().min(1).max(500) });
 
-export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput>; auth?: GitHubAppAuth | null; grouping?: GroupingService } = {}) {
+export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput>; auth?: GitHubAppAuth | null; grouping?: GroupingService; webhooks?: WebhookRefreshService; webhookInbox?: WebhookInbox } = {}) {
   if (environmentLoadFailure) throw new ConfigurationError(['The .env file could not be read. Check its format and file permissions.']);
   const { apiRequestsPerMinute } = validateEnvironment();
   const requestScope = new AsyncLocalStorage<{ ownerId: string; epochs: Map<string, number> }>();
@@ -69,12 +70,13 @@ export async function createApplicationServer(options: { production?: boolean; s
   const rateWindows = new Map<string, { start: number; requests: number }>();
   const repositoryFences = new RepositoryFences();
   const useProduction = options.production ?? production;
+  const authConfig = options.auth === undefined ? githubAuthConfig() : undefined;
+  const auth = options.auth === undefined ? (authConfig ? new GitHubAppAuth(authConfig) : undefined) : options.auth ?? undefined;
+  if (process.env.GITHUB_WEBHOOK_SECRET && !auth && !options.webhooks) throw new ConfigurationError(['GITHUB_WEBHOOK_SECRET requires GitHub App configuration.']);
   const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100 });
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
   const loadSources = options.runSources ?? runSourceAnalysisInWorker;
   const admission = new WorkerAdmission(2);
-  const authConfig = options.auth === undefined ? githubAuthConfig() : undefined;
-  const auth = options.auth === undefined ? (authConfig ? new GitHubAppAuth(authConfig) : undefined) : options.auth ?? undefined;
   const ownerGroupings = new Map<string, GroupingService>();
   const groupingForOwner = () => {
     if (!auth) return grouping;
@@ -89,6 +91,7 @@ export async function createApplicationServer(options: { production?: boolean; s
   const snapshotPending = new Map<string, number>();
   let workerHealth: { checkedAt: number; result: Promise<{ status: 'ok'; schemaVersion: '1' }> } | undefined;
   const scopeKey = (scope: StoreScope) => JSON.stringify([scope.ownerId, scope.repository.toLowerCase()]);
+  const refreshContexts = new Map<string, string | undefined>();
   const expectedEpoch = (scope: StoreScope) => {
     const epochs = requestScope.getStore()?.epochs, key = scopeKey(scope);
     if (epochs?.has(key)) return epochs.get(key)!;
@@ -140,7 +143,7 @@ export async function createApplicationServer(options: { production?: boolean; s
       });
     }),
     auth ? scope => auth.credentialsForOwner(scope.ownerId, scope.repository) : undefined);
-  const resolveAnalysisInput = options.resolveAnalysisInput ?? (options.runAnalysis ? async (input: Parameters<typeof runAnalysisInWorker>[0]) => input : pinAnalysisInput);
+  const resolveAnalysisInput: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput> = options.resolveAnalysisInput ?? (options.runAnalysis ? async (input: Parameters<typeof runAnalysisInWorker>[0]) => input : pinAnalysisInput);
   if (!auth) analysisJobs.startRecovery();
   async function mutateGrouping<T extends { snapshot: GraphSnapshot }>(snapshot: GraphSnapshot, operation: () => Promise<T> | T) {
     const scope = scopeFor(snapshot.repository.fullName), epoch = expectedEpoch(scope);
@@ -161,6 +164,7 @@ export async function createApplicationServer(options: { production?: boolean; s
   }
   async function purgeRepository(requestedScope: StoreScope) {
     const scope = { ownerId: requestedScope.ownerId, repository: parseRepository(requestedScope.repository).fullName.toLowerCase() };
+    refreshContexts.delete(scopeKey(scope)); purgeGitHubRepositoryCache(scope.repository);
     const invalidation = analysisJobs.invalidateRepository(scope); void invalidation.catch(() => {});
     for (const request of sourceRequests.values()) if (scopeKey(request.scope) === scopeKey(scope)) request.controller.abort();
     for (const request of groupingRequests) if (scopeKey(request.scope) === scopeKey(scope)) request.controller.abort();
@@ -173,6 +177,26 @@ export async function createApplicationServer(options: { production?: boolean; s
     });
     analysisJobs.finishInvalidation(scope);
   }
+  const webhookBinding = (value: ReturnType<GitHubAppAuth['knownRepositoryBindings']>[number]) => ({ scope: { ownerId: value.ownerId, repository: value.repository }, installationId: value.installationId, repositoryId: value.repositoryId, contextRef: refreshContexts.get(scopeKey(value)) });
+  let webhooks: WebhookRefreshService | undefined;
+  try { webhooks = options.webhooks ?? (auth ? await createConfiguredWebhookRefresh({
+    resolveInstallation: async installationId => auth.knownRepositoryBindings(installationId).map(webhookBinding),
+    resolveScope: async scope => {
+      await auth.credentialsForOwner(scope.ownerId, scope.repository);
+      const binding = auth.knownRepositoryBindings().find(value => value.ownerId === scope.ownerId && value.repository.toLowerCase() === scope.repository.toLowerCase());
+      return binding ? webhookBinding(binding) : undefined;
+    },
+    enqueueRefresh: async task => {
+      const credentials = await auth.credentialsForOwner(task.scope.ownerId, task.scope.repository);
+      const pinned = await resolveAnalysisInput({ repository: task.scope.repository, contextRef: task.contextRef, mode: 'pr' }, credentials);
+      return analysisJobs.submit(task.scope, { ...pinned, refreshVersion: task.refreshVersion });
+    },
+    invalidateMetadata: repository => { invalidateGitHubRepositoryCache(repository); },
+    invalidateAuthorization: (installationId, repositoryId) => { if (repositoryId === undefined) auth.invalidateInstallation(installationId); else auth.invalidateRepository(installationId, repositoryId); },
+    purgeRepository,
+  }, process.env, options.webhookInbox) : undefined); }
+  catch (error) { await Promise.allSettled([analysisJobs.close(), store.close()]); throw error; }
+  webhooks?.start();
   await saveSnapshot(structuredClone(demoSnapshot));
   const vite = useProduction ? null : await (await import('vite')).createServer({ configFile: resolve(root, 'apps/web/vite.config.ts'), server: { middlewareMode: true }, appType: 'spa' });
   const server = createServer((req, res) => requestScope.run({ ownerId: 'local-public', epochs: new Map() }, async () => {
@@ -180,6 +204,7 @@ export async function createApplicationServer(options: { production?: boolean; s
     if (useProduction) res.setHeader('Content-Security-Policy', PRODUCTION_CONTENT_SECURITY_POLICY);
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      if (url.pathname === '/api/webhooks/github') return await handleGitHubWebhook(req, res, webhooks);
       if (url.pathname.startsWith('/api/')) {
         // This runnable edition is a local, single-user tool. It only analyzes public repositories.
         const host = req.headers.host ?? '';
@@ -218,6 +243,15 @@ export async function createApplicationServer(options: { production?: boolean; s
           if (repository) { scopeFor(repository); repositoryToken = await auth.repositoryToken(session, repository); }
         } else if (auth && url.pathname === '/api/demo') { const optionalSession = auth.session(req); if (optionalSession) requestScope.getStore()!.ownerId = optionalSession.ownerId; }
         const grouping = groupingForOwner();
+        if (req.method === 'GET' && url.pathname === '/api/refresh') {
+          const repository = z.string().min(3).max(250).parse(url.searchParams.get('repository'));
+          return json(res, 200, { available: Boolean(webhooks), state: await webhooks?.state(scopeFor(repository)) });
+        }
+        if (req.method === 'POST' && url.pathname === '/api/refresh/reconcile') {
+          if (!webhooks) return json(res, 503, { code: 'WEBHOOK_UNCONFIGURED', error: 'Refresh delivery is not configured. Analyze the repository again to reconcile it.' });
+          const input = z.object({ repository: z.string().min(3).max(250), contextRef: z.string().min(1).max(200).optional() }).parse(await body(req));
+          return json(res, 202, { available: true, state: await webhooks.reconcile(scopeFor(input.repository), input.contextRef) });
+        }
         if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.1.0', mode: 'local-public' });
         if (req.method === 'GET' && url.pathname === '/api/health/worker') {
           if (!workerHealth || Date.now() - workerHealth.checkedAt > 10_000) workerHealth = { checkedAt: Date.now(), result: checkWorkerHealth() };
@@ -241,6 +275,8 @@ export async function createApplicationServer(options: { production?: boolean; s
           const input = analyzeRequest.parse(await body(req));
           input.repository = parseRepository(input.repository).fullName;
           const pinned = await resolveAnalysisInput(input, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken) });
+          refreshContexts.set(scopeKey(scopeFor(input.repository)), pinned.displayContextRef ?? input.contextRef);
+          while (refreshContexts.size > 128) refreshContexts.delete(refreshContexts.keys().next().value!);
           return json(res, 202, await analysisJobs.submit(scopeFor(input.repository), pinned));
         }
         const jobMatch = url.pathname.match(/^\/api\/jobs\/([a-zA-Z0-9-]+)(\/cancel)?$/);
@@ -350,8 +386,8 @@ export async function createApplicationServer(options: { production?: boolean; s
       if (!res.headersSent) json(res, status >= 400 && status < 600 ? status : 500, { error: safeError(error), code }); else res.end();
     }
   }));
-  server.on('close', () => { for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void Promise.allSettled([...runningTasks, analysisJobs.close()]).then(() => store.close()); });
-  return Object.assign(server, { purgeRepository, analysisJobs });
+  server.on('close', () => { for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void Promise.allSettled([...runningTasks, analysisJobs.close(), webhooks?.close()]).then(() => store.close()); });
+  return Object.assign(server, { purgeRepository, analysisJobs, webhooks });
 }
 function safeError(error: unknown) { return publicErrorMessage(error); }
 
