@@ -10,6 +10,7 @@ export type Movement = ReturnType<typeof previewLayoutChanges>[number];
 type Props = {
   snapshot: GraphSnapshot; presentationSnapshot?: GraphSnapshot | null; proposal: ReviewProposal | null; revision: ReviewRevision | null;
   busy: boolean; error: string; hasUndo: boolean; persistence?: string; available?: boolean;
+  availabilityMessage?: string; configured?: boolean; evaluation?: { passed: boolean; reason?: string };
   explainedGroupId: string | null; activeLayout: GraphLayout | null;
   onExplain: (id: string) => void; onRequest: () => void; onUndo: () => void;
   onApply: () => void; onReject: () => void; onReload: () => void; onMutate: (operation: unknown) => void;
@@ -20,7 +21,8 @@ function DecisionEvidence({ snapshot, decision }: { snapshot: GraphSnapshot; dec
     <strong>{snapshot.nodes.find(node => node.id === decision.fileId)?.path}</strong>
     <p>{decision.rationale || 'No model rationale was supplied. Inspect the observed facts before accepting.'}</p>
     <small>{typeof decision.confidence === 'number' ? `Model uncertainty score: ${Math.round(decision.confidence * 100)}% confidence` : 'Model confidence was not provided'} · not measured accuracy</small>
-    {decision.origin === 'rules' && <small>Baseline membership retained; review is needed before any reassignment.</small>}
+    {decision.evidenceCoverage !== undefined && <small>Observed evidence coverage: {Math.round(decision.evidenceCoverage * 100)}% · independent of model confidence</small>}
+    {(decision.origin === 'rules' || decision.outcome === 'retained') && <small>Baseline membership retained; review is needed before any reassignment.</small>}
     <ul aria-label="Supporting evidence">{(decision.evidenceIds ?? []).map(id => <li key={id}>{describeEvidence(snapshot, id) || 'Evidence is unavailable in this snapshot.'}</li>)}</ul>
   </div>;
 }
@@ -60,6 +62,7 @@ function MovementPreview({ snapshot, proposal, activeLayout }: { snapshot: Graph
       {movements.map(change => { const before = point(change.before); const after = point(change.after); return <g key={change.fileId}><line x1={before.x} y1={before.y} x2={after.x} y2={after.y} /><circle cx={before.x} cy={before.y} r={3} className="movement-before" /><circle cx={after.x} cy={after.y} r={3} className="movement-after" /></g>; })}
     </svg>}
     {state === 'ready' && movements.length > 0 && <p className="small muted">Hollow circle: current position. Filled circle: proposed position. Lines show movement, not imports.</p>}
+    {state === 'ready' && movements.length < review.changes.length && <p className="small muted">Positions are available for {movements.length} of {review.changes.length} moved files in the active scope. Every changed membership remains listed below.</p>}
     {review.changes.length > 0 && <details><summary>Review every changed membership ({review.changes.length})</summary><ul className="membership-changes">{review.changes.map(change => <li key={change.fileId}><code>{snapshot.nodes.find(node => node.id === change.fileId)?.path}</code><span>{snapshot.groups.find(group => group.id === change.fromGroupId)?.label}<ArrowRight size={12} />{proposal.groups?.find(group => group.id === change.toGroupId)?.label}</span></li>)}</ul></details>}
     <p className="small muted">This preview never moves the active map. Applying creates a revision; undo restores its prior membership and cached layout.</p>
   </section>;
@@ -77,6 +80,7 @@ export function GroupingReview(props: Props) {
   const explainedFiles = snapshot.nodes.filter(node => canonicalExplained ? node.groupId === canonicalExplained.id : displayedFileIds.has(node.id));
   const explainedDecisions = (revision?.decisions ?? []).filter(decision => explainedFiles.some(node => node.id === decision.fileId));
   const importCount = snapshot.edges.filter(edge => explainedFiles.some(node => node.id === edge.source || node.id === edge.target)).length;
+  const availabilityMessage = props.configured && props.evaluation && !props.evaluation.passed ? props.evaluation.reason || 'Quality evaluation is pending. External AI remains disabled.' : props.availabilityMessage || (props.available ? 'Jev adapter configured; account/model evaluation is a separate release gate.' : 'Server credentials required for live AI + Jev.');
   return <>
     <p className="modal-intro">Start with repository structure. Review evidence before applying a new organization.</p>
     <div className="grouping-status"><ShieldCheck size={20} /><div><strong>{groupingSource(snapshot, revision)}</strong><p>Your current map stays usable while AI is disabled or unavailable.</p></div><span className="status-tag">Active</span></div>
@@ -93,7 +97,8 @@ export function GroupingReview(props: Props) {
         {review?.valid && <><div className="proposal-islands">{proposal.groups?.map(group => {
           const decisions = (proposal.decisions ?? []).filter(decision => (decision.groupId ?? decision.islandId) === group.id);
           const files = snapshot.nodes.filter(node => proposal.membership?.[node.id] === group.id);
-          return <details key={group.id}><summary><strong>{group.label}</strong><span>{files.length} files · {decisions.length} reviewed decisions</span></summary><p className="small muted">AI-generated name; observed file paths remain unchanged.</p>{decisions.length ? decisions.map(decision => <DecisionEvidence key={decision.fileId} snapshot={snapshot} decision={decision} />) : <p className="small muted">No model decision was recorded for this island. Existing membership is retained.</p>}<details><summary>Observed member paths</summary><ul className="observed-paths">{files.map(file => <li key={file.id}><code>{file.path}</code></li>)}</ul></details></details>;
+          const labelEvidence = proposal.labelEvidence?.find(label => label.groupId === group.id);
+          return <details key={group.id}><summary><strong>{group.label}</strong><span>{files.length} files · {decisions.length} reviewed decisions</span></summary><p className="small muted">AI-generated name; observed file paths remain unchanged.</p>{labelEvidence && <div className="review-decision"><strong>Why this name?</strong><p>{labelEvidence.rationale}</p><ul>{labelEvidence.evidenceIds.map(id => <li key={id}>{describeEvidence(snapshot, id)}</li>)}</ul></div>}{decisions.length ? decisions.map(decision => <DecisionEvidence key={decision.fileId} snapshot={snapshot} decision={decision} />) : <p className="small muted">No model decision was recorded for this island. Existing membership is retained.</p>}<details><summary>Observed member paths</summary><ul className="observed-paths">{files.map(file => <li key={file.id}><code>{file.path}</code></li>)}</ul></details></details>;
         })}</div><MovementPreview snapshot={snapshot} proposal={proposal} activeLayout={props.activeLayout} /></>}
         <div className="proposal-review-actions"><button className="button accent" disabled={busy || !revision || !review?.valid} onClick={props.onApply}>Apply reviewed grouping</button><button className="button" disabled={busy || !revision} onClick={props.onReject}>Reject proposal</button></div>
       </>}
@@ -111,6 +116,6 @@ export function GroupingReview(props: Props) {
     <div className="advanced-footer"><span className="subtle small">Changes create a revision and can be undone.</span><button className="button accent" disabled={busy || !revision || !label.trim() || (action === 'merge' ? mergeIds.length < 2 : splitFiles.length === 0 || splitFiles.length >= snapshot.nodes.filter(node => node.groupId === (splitId || snapshot.groups[0]?.id)).length)} onClick={() => { props.onMutate(action === 'merge' ? { type: 'merge', groupIds: mergeIds, label } : { type: 'split', groupId: splitId || snapshot.groups[0]?.id, fileIds: splitFiles, label }); setMergeIds([]); setSplitFiles([]); setLabel(''); }}>{action === 'merge' ? 'Merge selected islands' : 'Create new island'}</button></div></details>
     <p className="inline-note">AI output is displayed as text and cannot run instructions or change observed imports, physical paths, or source-change counts.</p>
     {error && <div className="form-error" role="alert"><p>{error}</p><button className="button" onClick={props.onReload} disabled={busy}>Review latest revision</button></div>}
-    <p className="subtle small">{props.available ? 'Jev adapter configured; account/model evaluation is a separate release gate.' : 'Server credentials required for live AI + Jev.'}</p>
+    <p className="subtle small" role="status">{availabilityMessage}</p>
   </>;
 }

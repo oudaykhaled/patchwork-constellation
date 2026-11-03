@@ -51,6 +51,13 @@ test('provider budget failure retains baseline with readable recovery', async ({
   await expect(page.getByTestId('changed-count')).toHaveText('68');
 });
 
+test('configured providers with a blocked evaluation show the gate reason', async ({ page }) => {
+  await page.route('**/api/config', route => route.fulfill({ json: { ai: { configured: true, available: false, evaluation: { passed: false, reason: 'Human-reviewed holdout evaluation is pending. AI stays disabled.' } } } }));
+  await fixture(page, { status: 'baseline', message: 'Evaluation pending.' });
+  await expect(page.getByRole('dialog')).toContainText('Human-reviewed holdout evaluation is pending.');
+  await expect(page.getByRole('dialog')).not.toContainText('Server credentials required for live AI');
+});
+
 test('structurally invalid model output keeps the complete current grouping', async ({ page }) => {
   await fixture(page, { status: 'proposed', groups: { unexpected: 'object' }, message: { unsafe: 'shape' } });
   await page.getByRole('button', { name: 'Review with AI + Jev', exact: true }).click();
