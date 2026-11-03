@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { fitCamera, islandBounds, layoutGraph, neighborsOf, preserveLayout, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
-import type { Bounds, Camera, GraphData, GraphLayout, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
+import { fitCamera, islandBounds, neighborsOf, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
+import type { Bounds, Camera, GraphData, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
+import { useSettledLayout } from './useSettledLayout';
 import './constellation-graph.css';
 
 export interface ConstellationGraphProps {
-  snapshot: GraphData & { id?: string };
+  snapshot: GraphData & { id?: string; repository?: { fullName: string }; mode?: string };
   selectedSourceIds: string[];
   selectedFileId: string | null;
   onSelectFile: (id: string | null) => void;
@@ -15,6 +16,8 @@ export interface ConstellationGraphProps {
   showImports?: boolean;
   onOpenFiles?: () => void;
   className?: string;
+  layoutSeed?: number;
+  layoutPins?: Record<string, Point>;
 }
 
 type Size = { width: number; height: number };
@@ -36,7 +39,7 @@ function islandPath(context: CanvasRenderingContext2D, island: Island) {
   context.closePath();
 }
 
-export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, onOpenFiles, className = '' }: ConstellationGraphProps) {
+export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, onOpenFiles, className = '', layoutSeed = 0, layoutPins }: ConstellationGraphProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(DEFAULT_CAMERA);
@@ -53,16 +56,13 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const [canvasFailed, setCanvasFailed] = useState(false);
   const [canvasAttempt, setCanvasAttempt] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(false);
-  const layoutCache = useRef<{ key: string | undefined; layout: GraphLayout } | null>(null);
-  const layout = useMemo(() => {
-    const computed = layoutGraph(snapshot);
-    const next = layoutCache.current && layoutCache.current.key === snapshot.id ? preserveLayout(layoutCache.current.layout, computed) : computed;
-    layoutCache.current = { key: snapshot.id, layout: next };
-    return next;
-  }, [snapshot.id, snapshot.nodes, snapshot.groups]);
+  const { layout, layoutState, layoutError, resetLayout } = useSettledLayout(snapshot, layoutSeed, layoutPins);
+  const framedRepository = useRef<string | null>(null);
   const membership = useMemo(() => selectedMembership(snapshot, selectedSourceIds), [snapshot, selectedSourceIds]);
   const neighbors = useMemo(() => neighborsOf(snapshot.edges, selectedFileId), [snapshot.edges, selectedFileId]);
   const search = searchQuery.trim().toLowerCase();
+  const selectedPosition = selectedFileId ? layout.nodeById.get(selectedFileId) : undefined;
+  const focusedIsland = focusGroupId ? layout.islands.find(island => island.id === focusGroupId) : undefined;
   const hovered = hoveredId ? layout.nodeById.get(hoveredId) : undefined;
   const fit = useMemo(() => fitCamera(layout.bounds, size.width, size.height, 12), [layout.bounds, size]);
   const latest = useRef({ layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports });
@@ -209,19 +209,25 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   }, [requestDraw]);
   // A source response can replace arrays while retaining the same context snapshot.
   // Only a new snapshot/grouping key resets framing; source toggles never do.
-  useEffect(() => { moveCamera(fitCamera(latest.current.layout.bounds, sizeRef.current.width, sizeRef.current.height, 12), false); }, [snapshot.id, moveCamera]);
+  useEffect(() => {
+    if (layoutState !== 'ready') return;
+    const repository = snapshot.repository?.fullName ?? snapshot.id ?? 'graph';
+    if (framedRepository.current === repository) return;
+    framedRepository.current = repository;
+    moveCamera(fitCamera(latest.current.layout.bounds, sizeRef.current.width, sizeRef.current.height, 12), false);
+  }, [snapshot.id, snapshot.repository?.fullName, layoutState, moveCamera]);
   useEffect(() => { requestDraw(); }, [layout, snapshot.edges, membership, neighbors, selectedFileId, hoveredId, search, showImports, requestDraw]);
   useEffect(() => {
     if (!focusGroupId) return;
     const island = layout.islands.find(group => group.id === focusGroupId);
     if (island) moveCamera(fitCamera(islandBounds(island), sizeRef.current.width, sizeRef.current.height, 130));
-  }, [focusGroupId, snapshot.id, moveCamera]);
+  }, [focusGroupId, focusedIsland?.x, focusedIsland?.y, focusedIsland?.rx, focusedIsland?.ry, moveCamera]);
   useEffect(() => {
     if (!selectedFileId) return;
     const node = layout.nodeById.get(selectedFileId); if (!node) return;
     const current = cameraRef.current;
     moveCamera({ ...current, x: node.x + (window.innerWidth > 900 ? 90 : 0) / current.zoom, y: node.y, zoom: Math.max(current.zoom, fit.zoom * 1.75) });
-  }, [selectedFileId, snapshot.id, moveCamera]);
+  }, [selectedFileId, selectedPosition?.x, selectedPosition?.y, moveCamera]);
   useEffect(() => () => {
     stopAnimation();
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
@@ -303,9 +309,11 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       })}
     </div>
     {hovered && !dragging && <div className="graph-tooltip" role="tooltip" style={{ left: Math.min(hoverPosition.x + 20, size.width - 285), top: Math.max(8, hoverPosition.y - 48) }}><strong>{basename(hovered.path)}</strong><span>{hovered.path}</span><small>{membership.get(hovered.id) ? `${membership.get(hovered.id)} selected source${membership.get(hovered.id) === 1 ? '' : 's'}` : 'Unchanged context'} · Click to inspect</small></div>}
-    {canvasFailed && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>Use Files to explore the complete repository and its connections.</p>{onOpenFiles && <button type="button" onClick={onOpenFiles}>Open file list</button>} <button type="button" onClick={() => { const available = !!canvasRef.current?.getContext('2d'); setCanvasFailed(!available); if (available) { setCanvasAttempt(value => value + 1); requestDraw(); } }}>Retry graph</button></div>}
+    {layoutState === 'pending' && <div className="graph-layout-status" role="status">Settling repository islands…</div>}
+    {(canvasFailed || layoutState === 'failed') && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>{layoutError || 'Use Files to explore the complete repository and its connections.'}</p>{onOpenFiles && <button type="button" onClick={onOpenFiles}>Open file list</button>}{layoutState === 'failed' && <button type="button" onClick={resetLayout}>Retry layout</button>}{canvasFailed && <button type="button" onClick={() => { const available = !!canvasRef.current?.getContext('2d'); setCanvasFailed(!available); if (available) { setCanvasAttempt(value => value + 1); requestDraw(); } }}>Retry graph</button>}</div>}
     {snapshot.edges.length > 10000 && camera.zoom < .6 && <div className="graph-detail-notice">Overview detail: one third of import lines shown. All {snapshot.nodes.length.toLocaleString()} files are retained. Zoom in for connections.</div>}
     <div className="graph-navigation" aria-label="Graph navigation">
+      <button type="button" className="graph-reset-layout" onClick={resetLayout} disabled={layoutState === 'pending'}>Reset island layout</button>
       <span className="graph-pan-hint">Drag to pan · scroll to zoom</span>
       <button className="graph-minimap" type="button" title="Repository minimap. Click to pan, arrows to move." aria-label="Repository minimap. Click to reposition. Arrow keys pan the graph." onClick={event => { if (event.detail === 0) return; stopAnimation(); const rect = event.currentTarget.getBoundingClientRect(); setCamera({ ...cameraRef.current, x: layout.bounds.x + (event.clientX - rect.left) / rect.width * layout.bounds.width, y: layout.bounds.y + (event.clientY - rect.top) / rect.height * layout.bounds.height }); }} onKeyDown={event => { if (event.key.startsWith('Arrow')) { event.preventDefault(); stopAnimation(); const c = cameraRef.current; setCamera({ ...c, x: c.x + (event.key === 'ArrowRight' ? 100 : event.key === 'ArrowLeft' ? -100 : 0) / c.zoom, y: c.y + (event.key === 'ArrowDown' ? 100 : event.key === 'ArrowUp' ? -100 : 0) / c.zoom }); } }}>
         <svg viewBox={`${layout.bounds.x} ${layout.bounds.y} ${layout.bounds.width} ${layout.bounds.height}`} preserveAspectRatio="none" aria-hidden="true">{layout.islands.map(island => <ellipse key={island.id} cx={island.x} cy={island.y} rx={island.rx} ry={island.ry} fill={alpha(island.color, '77')} />)}<rect x={viewport.x} y={viewport.y} width={viewport.width} height={viewport.height} fill="none" stroke="#a2f4ba" strokeWidth={10} /></svg>
