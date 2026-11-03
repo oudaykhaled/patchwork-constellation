@@ -75,21 +75,30 @@
     }
   ],
   "publication": {
-    "complete": false,
-    "remotePartialHead": "630bbe9e5a8a372ac86106d7bbbb33a17225f82e",
-    "initialFilesPublished": 118,
-    "initialFilesAttempted": 221,
-    "connector": "403 Resource not accessible by integration",
-    "git": "No saved noninteractive GitHub account",
-    "webEditor": "File could not be edited, including fresh verified tabs; cause not established",
-    "remediationPullRequestCreated": false,
-    "existingDraftPr": 32,
-    "kanbanChanged": false
+    "complete": true,
+    "activeBranch": "feat/constellation-mvp",
+    "applicationCommit": "2f6a59174ed981b27957218890ee75c4d6b9019a",
+    "pullRequest": 32,
+    "merged": false,
+    "previousIncompleteUpload": {
+      "complete": false,
+      "remotePartialHead": "630bbe9e5a8a372ac86106d7bbbb33a17225f82e",
+      "initialFilesPublished": 118,
+      "initialFilesAttempted": 221,
+      "connector": "403 Resource not accessible by integration",
+      "git": "No saved noninteractive GitHub account",
+      "webEditor": "File could not be edited, including fresh verified tabs; cause not established",
+      "remediationPullRequestCreated": false,
+      "existingDraftPr": 32,
+      "kanbanChanged": false
+    }
   },
   "limits": [
     "No native 200% browser-zoom or human assistive-technology/task-study acceptance claimed.",
     "No current hosted CI, deployed staging isolation, manual GPU matrix or hosted traffic rollback claimed.",
     "No live paid provider call, reviewed account terms or human holdout model evaluation; intelligence remains disabled.",
     "10k rendering is stress-only; all files remain counted and accessible through scope/Files."
-  ]
+  ],
+  "historicalMeasurement": true,
+  "currentReport": "publication-verification.json"
 }

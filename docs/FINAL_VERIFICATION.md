@@ -1,6 +1,8 @@
+> Historical pre-publication measurement record. The complete source has since been published and hosted CI regressions corrected; see [current publication and verification](PUBLICATION_STATUS.md). Metrics below identify their original source commit.
+
 # Final integrated verification
 
-Recorded 2026-11-03. The application implementation is frozen at **bcfa5110ee0c4f30568b730e868d5be658c3aae9**. Later commits contain these reports only. All 31 issue lanes were implemented in isolated worktrees with up to 16 agents at once; bounded integration follow-ups resolved shared contracts, authorization/purge races, incremental refresh and the camera reload defect. Apache-2.0 is applied, with the exact bundled MIT/ISC/OFL notices retained.
+Recorded 2026-11-03. This pre-publication application was measured at **bcfa5110ee0c4f30568b730e868d5be658c3aae9**. Subsequent renderer/harness fixes are recorded separately in the current publication report. All 31 issue lanes were implemented in isolated worktrees with up to 16 agents at once; bounded integration follow-ups resolved shared contracts, authorization/purge races, incremental refresh and the camera reload defect. Apache-2.0 is applied, with the exact bundled MIT/ISC/OFL notices retained.
 
 The final audit has **21 conditional closure candidates and 10 partial issues**. No issue was closed and the complete implementation has not been published. The [acceptance audit](ISSUE_REMEDIATION.md) identifies each original requirement; [machine-readable verification](final-verification.json) records scope and limits.
 

@@ -1,0 +1,217 @@
+{
+  "schemaVersion": "1",
+  "measuredAt": "2026-11-03T20:30:22.748Z",
+  "commit": "2f6a59174ed981b27957218890ee75c4d6b9019a",
+  "status": "passed",
+  "sampleKind": "controlled-authenticated-BFF",
+  "files": 2000,
+  "edges": 8000,
+  "seed": 42,
+  "sampleCount": 20,
+  "p95Ms": 149.29999995231628,
+  "targetMs": 2000,
+  "samples": [
+    {
+      "responseEndMs": 226,
+      "usefulPixelsMs": 396.39999997615814,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 170.39999997615814,
+      "warm": false
+    },
+    {
+      "responseEndMs": 103,
+      "usefulPixelsMs": 240.30000007152557,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 137.30000007152557,
+      "warm": true
+    },
+    {
+      "responseEndMs": 100.89999997615814,
+      "usefulPixelsMs": 237.39999997615814,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 136.5,
+      "warm": true
+    },
+    {
+      "responseEndMs": 107.79999995231628,
+      "usefulPixelsMs": 249.60000002384186,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 141.80000007152557,
+      "warm": true
+    },
+    {
+      "responseEndMs": 105.30000007152557,
+      "usefulPixelsMs": 219,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 113.69999992847443,
+      "warm": true
+    },
+    {
+      "responseEndMs": 102.10000002384186,
+      "usefulPixelsMs": 216.80000007152557,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 114.70000004768372,
+      "warm": true
+    },
+    {
+      "responseEndMs": 104.29999995231628,
+      "usefulPixelsMs": 225.10000002384186,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 120.80000007152557,
+      "warm": true
+    },
+    {
+      "responseEndMs": 101,
+      "usefulPixelsMs": 238.10000002384186,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 137.10000002384186,
+      "warm": true
+    },
+    {
+      "responseEndMs": 101.20000004768372,
+      "usefulPixelsMs": 250.5,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 149.29999995231628,
+      "warm": true
+    },
+    {
+      "responseEndMs": 102,
+      "usefulPixelsMs": 248.29999995231628,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 146.29999995231628,
+      "warm": true
+    },
+    {
+      "responseEndMs": 103.89999997615814,
+      "usefulPixelsMs": 229,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 125.10000002384186,
+      "warm": true
+    },
+    {
+      "responseEndMs": 104.89999997615814,
+      "usefulPixelsMs": 218.80000007152557,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 113.90000009536743,
+      "warm": true
+    },
+    {
+      "responseEndMs": 109.30000007152557,
+      "usefulPixelsMs": 263.90000009536743,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 154.60000002384186,
+      "warm": true
+    },
+    {
+      "responseEndMs": 105.20000004768372,
+      "usefulPixelsMs": 241.10000002384186,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 135.89999997615814,
+      "warm": true
+    },
+    {
+      "responseEndMs": 104.89999997615814,
+      "usefulPixelsMs": 247.10000002384186,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 142.20000004768372,
+      "warm": true
+    },
+    {
+      "responseEndMs": 107.30000007152557,
+      "usefulPixelsMs": 225.80000007152557,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 118.5,
+      "warm": true
+    },
+    {
+      "responseEndMs": 102.5,
+      "usefulPixelsMs": 239.30000007152557,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 136.80000007152557,
+      "warm": true
+    },
+    {
+      "responseEndMs": 104.39999997615814,
+      "usefulPixelsMs": 243.89999997615814,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 139.5,
+      "warm": true
+    },
+    {
+      "responseEndMs": 104.80000007152557,
+      "usefulPixelsMs": 238.70000004768372,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 133.89999997615814,
+      "warm": true
+    },
+    {
+      "responseEndMs": 129.39999997615814,
+      "usefulPixelsMs": 254.10000002384186,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 124.70000004768372,
+      "warm": true
+    },
+    {
+      "responseEndMs": 102.89999997615814,
+      "usefulPixelsMs": 241.19999992847443,
+      "workerCount": 1,
+      "payloadBytes": 2851117,
+      "responseToUsefulMs": 138.29999995231628,
+      "warm": true
+    }
+  ],
+  "conditions": {
+    "build": "production",
+    "platform": "win32",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "memoryBytes": 33752997888,
+    "node": "v24.22.1",
+    "browser": "156.0.8078.80",
+    "viewport": {
+      "width": 1600,
+      "height": 1000
+    },
+    "dpr": 1,
+    "network": "same-origin loopback HTTP; no artificial network throttling",
+    "concurrentActivity": "Single local post-publication measurement; local issue-agent tests stopped; ordinary desktop background uncontrolled",
+    "origin": "ephemeral loopback test server"
+  },
+  "controls": {
+    "noSession": "401",
+    "tamperedSession": "401",
+    "missingCsrf": "403",
+    "removedRepository": "403",
+    "unauthorizedAnalysisCalls": 0,
+    "analysisCalls": 1,
+    "liveDiscoveryCalls": 130,
+    "externalRequests": 0
+  },
+  "timer": "Browser ResourceTiming.responseEnd for the authenticated ready-job JSON body containing the graph, through actual Canvas2D file pixels and data-layout-state=ready. Module navigation and synthetic analysis generation are outside this interval.",
+  "limitations": [
+    "Synthetic identity and authored graph only; no live GitHub App registration/private-repository permission or provider credential is verified.",
+    "Actual production opaque-session issuance/lookup, CSRF, BFF authorization and user-installation intersection run with controlled GitHub responses. Only token minting and repository analysis/source transport are dependency-injected test doubles.",
+    "No App private key is loaded or generated, no production bypass route is added, and no browser API response is intercepted.",
+    "Warm samples reuse the actual completed owner-scoped BFF job. This is a declared local reference, not WAN/staging/GPU or human-journey evidence."
+  ]
+}

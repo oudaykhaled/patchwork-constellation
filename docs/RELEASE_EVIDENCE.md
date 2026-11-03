@@ -91,3 +91,7 @@ Rerun the three final integrated fixtures and linked dependency suites on one im
 ## Final integrated measurement
 
 The original samples above are historical. [Final verification](FINAL_VERIFICATION.md) and [final raw evidence](evidence/final/) now record the same-commit worker-era renderer, 1,000-toggle retention, controlled authenticated BFF and real-Git phase measurements at bcfa511. All proposed 2k targets passed; 10k is stress-only. The aggregate release gate remains partial for explicitly unverified reference/GPU/deployed acceptance.
+
+## Post-publication verification
+
+The application at `2f6a591` passed hosted three-engine and supported 2k budget checks. Fresh same-source renderer, 1,000-toggle, authenticated BFF and backend evidence is in [the publication report](PUBLICATION_STATUS.md) and [raw published evidence](evidence/published/). The 10k startup task/manual-GPU/staging/live/human gates remain explicit; fast cached pan does not approve broader capacity or a beta.

@@ -95,3 +95,5 @@ Licensed under [Apache License 2.0](LICENSE), selected by the repository owner o
 The frontend and distributed fonts retain the exact installed [third-party license notices](apps/web/public/THIRD_PARTY_NOTICES.txt), with [package/version/source digests](apps/web/public/THIRD_PARTY_NOTICES.json). Builds verify these notices and copy them into `dist`; Geist and Geist Mono remain under OFL-1.1.
 
 See [final integrated verification](docs/FINAL_VERIFICATION.md) for the 31-issue acceptance audit, current production measurements, incremental refresh and publication status.
+
+The complete implementation is published in [PR #32](https://github.com/oudaykhaled/patchwork-constellation/pull/32). [Current publication verification](docs/PUBLICATION_STATUS.md) records the hosted three-engine/budget checks and nine remaining acceptance gates.
