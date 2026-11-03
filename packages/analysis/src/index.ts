@@ -4,14 +4,16 @@ import { GitHubClient, GitHubError, parseRepository, type GitHubOptions } from '
 import { deriveGroups, nodeForPath } from './groups';
 import { languageFor } from './imports';
 import { buildStaticGraph } from './static-graph';
-export { extractImports, scanImports, resolveImport, languageFor, isSourceFile, RESOLVER_VERSION } from './imports';
+import { ANALYZER_VERSION } from './incremental';
+export { extractImports, scanImports, resolveImport, languageFor, isSourceFile, RESOLVER_VERSION, PARSER_VERSION } from './imports';
+export { ANALYZER_VERSION, createIncrementalAnalysisBaseline } from './incremental';
 export { buildStaticGraph } from './static-graph';
 export { analyzeSourceDependencies, enrichSelectedSourceDependencies } from './source-dependencies';
 export { deriveGroups, groupKeyFor, deriveRepositoryHierarchy, applyHierarchy, RepositoryMappingSchema, GROUPING_RULES_VERSION } from './groups';
 export type { RepositoryHierarchy, RepositoryMapping, HierarchyOptions, ManifestBoundary } from './groups';
 
 export interface AnalysisProgress { stage: 'fetching' | 'indexing' | 'sources' | 'ready'; progress: number; message: string; }
-export interface AnalysisOptions extends GitHubOptions { onProgress?: (progress: AnalysisProgress) => void; maxFiles?: number; maxSourceFiles?: number; sourcePages?: number; gitFallback?: (input: import('./git-fallback').GitDiffRequest) => Promise<import('./git-fallback').GitDiffFile[]>; gitComparisonFallback?: (input: import('./git-fallback').GitDiffRequest) => Promise<import('./git-fallback').GitDiffComparison>; }
+export interface AnalysisOptions extends GitHubOptions { onProgress?: (progress: AnalysisProgress) => void; maxFiles?: number; maxSourceFiles?: number; sourcePages?: number; /** Server-only projection of an authorized stored snapshot. Never a public request input. */ incrementalBaseline?: unknown; gitFallback?: (input: import('./git-fallback').GitDiffRequest) => Promise<import('./git-fallback').GitDiffFile[]>; gitComparisonFallback?: (input: import('./git-fallback').GitDiffRequest) => Promise<import('./git-fallback').GitDiffComparison>; }
 export interface AnalyzeInput { repository: string; contextRef?: string; mode?: 'pr' | 'commit'; }
 interface ApiRepository { name: string; full_name: string; private: boolean; default_branch: string; html_url: string; owner: { login: string }; }
 interface ApiCommit { sha: string; html_url?: string; commit: { message: string }; parents: { sha: string }[]; files?: ApiFile[]; }
@@ -19,7 +21,6 @@ interface ApiPull { number: number; title: string; html_url: string; state: stri
 interface ApiFile { filename: string; previous_filename?: string; status: string; additions?: number; deletions?: number; sha?: string; }
 interface ApiComparison { merge_base_commit: { sha: string }; files?: ApiFile[]; }
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
-export const ANALYZER_VERSION = 'static-v3';
 const hash = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 20);
 const unique = (values: string[]) => [...new Set(values)];
 const prefixFor = (fullName: string) => `/repos/${fullName.split('/').map(encodeURIComponent).join('/')}`;
@@ -53,7 +54,7 @@ export async function analyzeRepository(input: AnalyzeInput, options: AnalysisOp
   const commit = await client.get<ApiCommit>(`${prefix}/commits/${encodeURIComponent(contextRef)}`);
   if (!/^[a-f0-9]{40,64}$/i.test(commit.sha)) throw new GitHubError('GitHub did not return an immutable context SHA.', 502, 'INVALID_RESPONSE');
   emit('fetching', 12, 'Reading the pinned repository tree');
-  const staticGraph = await buildStaticGraph(client, address, commit.sha, { maxFiles: options.maxFiles, maxSourceFiles: options.maxSourceFiles, signal: options.signal, onProgress: (analyzed, eligible) => emit('indexing', 24 + Math.round((analyzed / Math.max(eligible, 1)) * 45), `Indexed ${analyzed} source files`) });
+  const staticGraph = await buildStaticGraph(client, address, commit.sha, { maxFiles: options.maxFiles, maxSourceFiles: options.maxSourceFiles, signal: options.signal, incrementalBaseline: options.incrementalBaseline, onProgress: (analyzed, eligible, incremental) => emit('indexing', 24 + Math.round((analyzed / Math.max(eligible, 1)) * 45), `Indexed ${analyzed} source files; reused ${incremental.reusedFiles} unchanged blobs`) });
   const { nodes, edges, hierarchy, parserLimits } = staticGraph; const groups = hierarchy.groups;
   reasons.push(...staticGraph.coverage.reasons);
   emit('sources', 76, 'Loading recent pull requests and commits');
@@ -69,7 +70,7 @@ export async function analyzeRepository(input: AnalyzeInput, options: AnalysisOp
     sources.push(...(kind === 'pr' ? (page.items as ApiPull[]).map(sourceFromPull) : (page.items as ApiCommit[]).map(sourceFromCommit)));
     sourcePagination[kind] = page.nextPage;
   });
-  const snapshot: GraphSnapshot = { schemaVersion: '1', id: `snapshot:${hash(`${repository.full_name}:${commit.sha}:${ANALYZER_VERSION}`)}`, repository: { owner: repository.owner.login, name: repository.name, fullName: repository.full_name, defaultBranch: repository.default_branch, htmlUrl: repository.html_url }, contextSha: commit.sha, contextRef, nodes, edges: edges.sort((a, b) => a.id.localeCompare(b.id)), groups, sources, coverage: { ...staticGraph.coverage, status: reasons.length ? 'partial' : 'complete', reasons: unique(reasons) }, createdAt: new Date().toISOString(), mode: 'github', sourcePagination, analyzerVersion: ANALYZER_VERSION, groupingRevision: hierarchy.revision, hierarchy, parserLimits, defaultSelection: [] };
+  const snapshot: GraphSnapshot = { schemaVersion: '1', id: `snapshot:${hash(`${repository.full_name}:${commit.sha}:${ANALYZER_VERSION}`)}`, repository: { owner: repository.owner.login, name: repository.name, fullName: repository.full_name, defaultBranch: repository.default_branch, htmlUrl: repository.html_url }, contextSha: commit.sha, contextRef, nodes, edges: edges.sort((a, b) => a.id.localeCompare(b.id)), groups, sources, coverage: { ...staticGraph.coverage, status: reasons.length ? 'partial' : 'complete', reasons: unique(reasons) }, createdAt: new Date().toISOString(), mode: 'github', sourcePagination, analyzerVersion: ANALYZER_VERSION, groupingRevision: hierarchy.revision, hierarchy, parserLimits, incremental: staticGraph.incremental, defaultSelection: [] };
   emit('ready', 100, `Ready: ${nodes.length} files and ${edges.length} evidenced connections`);
   return validateGraphSnapshot(snapshot);
 }
