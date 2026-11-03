@@ -55,6 +55,8 @@ describe('external metadata policy', () => {
   it('versions every cache authority and evidence dimension', () => {
     const base = { tenantId: 'alice', snapshot: snapshot(), revisionId: 'r1', evidence: { files: ['safe'] }, jevModel: 'jev-v1', generativeModel: 'g-v1', policyDigest: 'p-v1', minimumConfidence: 0.8 };
     const original = externalGroupingCacheKey(base);
+    expect(externalGroupingCacheKey({ ...base, pipelineVersion: 'new-pipeline' })).not.toBe(original);
+    expect(externalGroupingCacheKey({ ...base, membershipPolicy: { evaluationId: 'other' } })).not.toBe(original);
     for (const change of [{ tenantId: 'bob' }, { revisionId: 'r2' }, { evidence: { files: ['other'] } }, { jevModel: 'jev-v2' }, { generativeModel: 'g-v2' }, { policyDigest: 'p-v2' }, { promptVersion: 'prompt-v2' }, { schemaVersion: 'schema-v2' }, { snapshot: { ...base.snapshot, contextSha: 'b'.repeat(40) } }, { snapshot: { ...base.snapshot, repository: { ...base.snapshot.repository, fullName: 'other/repo' } } }]) expect(externalGroupingCacheKey({ ...base, ...change })).not.toBe(original);
   });
 });
