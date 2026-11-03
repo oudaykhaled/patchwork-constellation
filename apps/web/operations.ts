@@ -7,7 +7,7 @@ export class OperationalMetrics {
   private readonly started = Date.now();
   private analysis = distribution(); private analysisFailures = 0;
   private github = { requests: 0, rateLimited: 0, cacheHits: 0, retries: 0, minimumRemaining: null as number | null };
-  private provider = { observations: 0, failures: 0, requests: 0, inputTokens: 0, outputTokens: 0, unknownUsage: 0, durationMs: distribution() };
+  private provider = { observations: 0, failures: 0, requests: 0, inputTokens: 0, outputTokens: 0, unknownUsage: 0, durationMs: distribution(), outcomes: { proposed: 0, baseline: 0, disabled: 0, unavailable: 0, 'canary-excluded': 0, cancelled: 0, excluded: 0, 'budget-exhausted': 0, busy: 0, 'cache-hit': 0, 'rate-limited': 0, timeout: 0, 'invalid-output': 0, 'auth-failed': 0, 'provider-failed': 0, revoked: 0, conflict: 0, other: 0 } };
   recordAnalysis(durationMs: number, failed: boolean) { observe(this.analysis, durationMs); if (failed) this.analysisFailures++; }
   observeGitHub(event: { event: string; status?: number; remaining?: number }) {
     if (event.event === 'request') { this.github.requests++; if (event.status === 429 || event.status === 403 && event.remaining === 0) this.github.rateLimited++; }
@@ -16,14 +16,15 @@ export class OperationalMetrics {
     if (typeof event.remaining === 'number' && Number.isFinite(event.remaining) && event.remaining >= 0) this.github.minimumRemaining = Math.min(this.github.minimumRemaining ?? event.remaining, event.remaining);
   }
   observeGrouping(event: { outcome: string; durationMs: number; requests: number; inputTokens: number | null; outputTokens: number | null }) {
-    this.provider.observations++; if (!['success', 'baseline', 'cache-hit', 'disabled'].includes(event.outcome)) this.provider.failures++;
+    this.provider.observations++; if (!['success', 'proposed', 'baseline', 'cache-hit', 'disabled', 'unavailable', 'canary-excluded', 'excluded', 'busy', 'cancelled'].includes(event.outcome)) this.provider.failures++;
+    const outcome = Object.hasOwn(this.provider.outcomes, event.outcome) ? event.outcome as keyof typeof this.provider.outcomes : 'other'; this.provider.outcomes[outcome]++;
     observe(this.provider.durationMs, event.durationMs); if (Number.isInteger(event.requests) && event.requests >= 0) this.provider.requests += event.requests;
     if (event.inputTokens === null || event.outputTokens === null) this.provider.unknownUsage++;
     if (typeof event.inputTokens === 'number' && Number.isFinite(event.inputTokens) && event.inputTokens >= 0) this.provider.inputTokens += event.inputTokens;
     if (typeof event.outputTokens === 'number' && Number.isFinite(event.outputTokens) && event.outputTokens >= 0) this.provider.outputTokens += event.outputTokens;
   }
   snapshot(queue?: QueueOperations) {
-    return { schemaVersion: '1', uptimeSeconds: Math.floor((Date.now() - this.started) / 1000), scope: 'process-local-aggregate', queue: queue ?? null, analysis: { durationMs: { ...this.analysis }, failures: this.analysisFailures }, github: { ...this.github, observationStatus: this.github.requests ? 'observed' : 'not-observed' }, provider: { ...this.provider, durationMs: { ...this.provider.durationMs }, observationStatus: this.provider.observations ? 'observed' : 'not-observed', costUsd: null, costStatus: 'unverified-provider-prices' } };
+    return { schemaVersion: '1', uptimeSeconds: Math.floor((Date.now() - this.started) / 1000), scope: 'owner-process-aggregate', queue: queue ?? null, analysis: { durationMs: { ...this.analysis }, failures: this.analysisFailures }, github: { ...this.github, observationStatus: this.github.requests ? 'observed' : 'not-observed' }, provider: { ...this.provider, outcomes: { ...this.provider.outcomes }, durationMs: { ...this.provider.durationMs }, observationStatus: this.provider.observations ? 'observed' : 'not-observed', costUsd: null, costStatus: 'unverified-provider-prices' } };
   }
 }
 export async function readiness(probes: { storage: () => Promise<unknown>; queue?: () => Promise<QueueOperations>; worker?: () => Promise<unknown>; productionAssets: () => Promise<unknown> }, timeoutMs = 2_000) {

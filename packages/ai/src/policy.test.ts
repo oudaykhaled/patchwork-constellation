@@ -121,7 +121,13 @@ describe('reservations, shared cancellation and retention', () => {
     await grouping.propose(snapshot(), { enabled: true, tenantId: 'private-tenant' });
     const fail = vi.fn(async () => new Response('private error with server-only-key', { status: 401 }));
     await service(fail as ReturnType<typeof mockProviders>, { onTelemetry: (event: unknown) => events.push(event) }).propose(snapshot(), { enabled: true });
-    expect(events).toMatchObject([{ outcome: 'proposed', requests: 3, inputTokens: 20, outputTokens: 10, cacheHit: false }, { requests: 0, cacheHit: true }, { outcome: 'baseline', requests: 1, inputTokens: null, outputTokens: null }]);
+    expect(events).toMatchObject([{ outcome: 'proposed', requests: 3, inputTokens: 20, outputTokens: 10, cacheHit: false }, { outcome: 'cache-hit', requests: 0, cacheHit: true }, { outcome: 'auth-failed', requests: 1, inputTokens: null, outputTokens: null }]);
     expect(JSON.stringify(events)).not.toMatch(/server-only-key|private-tenant|core\.ts|example\/repo|private error/);
+  });
+  it('records disabled and unavailable gates as observed zero-transfer outcomes', async () => {
+    const events: unknown[] = []; const transport = mockProviders();
+    await service(transport, { enabled: false, onTelemetry: (event: unknown) => events.push(event) }).propose(snapshot(), { enabled: true });
+    await service(transport, { evaluationManifest: {}, onTelemetry: (event: unknown) => events.push(event) }).propose(snapshot(), { enabled: true });
+    expect(transport).not.toHaveBeenCalled(); expect(events).toMatchObject([{ outcome: 'disabled', requests: 0, inputTokens: 0, outputTokens: 0 }, { outcome: 'unavailable', requests: 0, inputTokens: 0, outputTokens: 0 }]);
   });
 });

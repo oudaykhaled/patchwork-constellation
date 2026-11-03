@@ -19,6 +19,7 @@ import { checkWorkerHealth } from '../worker/src/health';
 import { ConfigurationError, validateEnvironment } from './environment';
 import { GitHubAppAuth, githubAuthConfig, AuthError, type GitHubSession } from './github-auth';
 import { publicErrorCode, publicErrorMessage, PRODUCTION_CONTENT_SECURITY_POLICY } from './public-errors';
+import { OperationalMetrics, readiness } from './operations';
 
 let environmentLoadFailure = false;
 try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') environmentLoadFailure = true; }
@@ -52,10 +53,12 @@ export async function createApplicationServer(options: { production?: boolean; s
   const ownerId = () => requestScope.getStore()?.ownerId ?? 'local-public';
   const snapshotKey = (id: string) => `${ownerId()}:${id}`;
   const snapshots = new Map<string, GraphSnapshot>();
+  const ownerOperations = new Map<string, OperationalMetrics>();
+  const metricsForOwner = (owner: string) => { let metrics = ownerOperations.get(owner); if (!metrics) { if (ownerOperations.size >= 128) ownerOperations.delete(ownerOperations.keys().next().value!); metrics = new OperationalMetrics(); ownerOperations.set(owner, metrics); } return metrics; };
   const groupingStorageBase = process.env.GROUPING_STORAGE_PATH ?? (process.env.NODE_ENV === 'test' ? undefined : resolve(root, '.cache/grouping.json'));
   const comparablePath = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
   if (groupingStorageBase && (comparablePath(groupingStorageBase) === comparablePath(dist) || comparablePath(groupingStorageBase).startsWith(comparablePath(dist) + sep))) throw new ConfigurationError(['GROUPING_STORAGE_PATH must be outside the served build directory.']);
-  const createGrouping = (owner: string) => new GroupingService({ enabled: process.env.AI_ENABLED === 'true', jevApiKey: process.env.TYPESAFE_API_KEY, jevModel: process.env.JEV_MODEL, generativeApiKey: process.env.OPENAI_API_KEY, generativeModel: process.env.OPENAI_MODEL, storagePath: ownerGroupingStoragePath(groupingStorageBase, owner), excludedPaths: process.env.AI_EXCLUDED_PATHS?.split(/[,\r\n]+/).map(path => path.trim()).filter(Boolean) });
+  const createGrouping = (owner: string) => new GroupingService({ enabled: process.env.AI_ENABLED === 'true', jevApiKey: process.env.TYPESAFE_API_KEY, jevModel: process.env.JEV_MODEL, generativeApiKey: process.env.OPENAI_API_KEY, generativeModel: process.env.OPENAI_MODEL, storagePath: ownerGroupingStoragePath(groupingStorageBase, owner), excludedPaths: process.env.AI_EXCLUDED_PATHS?.split(/[,\r\n]+/).map(path => path.trim()).filter(Boolean), onTelemetry: event => metricsForOwner(owner).observeGrouping(event) });
   const grouping = options.grouping ?? createGrouping('local-public');
   function remember(snapshot: GraphSnapshot) {
     validateGraphSnapshot(snapshot);
@@ -139,7 +142,9 @@ export async function createApplicationServer(options: { production?: boolean; s
         return saveSnapshot(groupingForOwner().view(snapshot, { tenantId: scope.ownerId }).snapshot, isCurrent, true);
       });
     }),
-    auth ? scope => auth.credentialsForOwner(scope.ownerId, scope.repository) : undefined);
+    auth ? scope => auth.credentialsForOwner(scope.ownerId, scope.repository) : undefined,
+    { onGitHub: (scope, event) => metricsForOwner(scope.ownerId).observeGitHub(event), onAnalysis: (scope, event) => metricsForOwner(scope.ownerId).recordAnalysis(event.durationMs, event.failed) });
+  const workerReady = () => { if (!workerHealth || Date.now() - workerHealth.checkedAt > 10_000) workerHealth = { checkedAt: Date.now(), result: checkWorkerHealth() }; return workerHealth.result; };
   const resolveAnalysisInput = options.resolveAnalysisInput ?? (options.runAnalysis ? async (input: Parameters<typeof runAnalysisInWorker>[0]) => input : pinAnalysisInput);
   if (!auth) analysisJobs.startRecovery();
   async function mutateGrouping<T extends { snapshot: GraphSnapshot }>(snapshot: GraphSnapshot, operation: () => Promise<T> | T) {
@@ -198,7 +203,7 @@ export async function createApplicationServer(options: { production?: boolean; s
           return json(res, 404, { error: 'Authentication route not found.' });
         }
         let session: GitHubSession | undefined; let repositoryToken: string | undefined;
-        const publicRoute = ['/api/health', '/api/health/worker', '/api/config', '/api/demo'].includes(url.pathname);
+        const publicRoute = ['/api/health', '/api/health/worker', '/api/readiness', '/api/config', '/api/demo'].includes(url.pathname);
         if (auth && !publicRoute) {
           session = auth.requireSession(req); requestScope.getStore()!.ownerId = session.ownerId;
           if (!['GET', 'HEAD'].includes(req.method ?? '')) auth.csrf(req, session);
@@ -219,9 +224,13 @@ export async function createApplicationServer(options: { production?: boolean; s
         } else if (auth && url.pathname === '/api/demo') { const optionalSession = auth.session(req); if (optionalSession) requestScope.getStore()!.ownerId = optionalSession.ownerId; }
         const grouping = groupingForOwner();
         if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.1.0', mode: 'local-public' });
+        if (req.method === 'GET' && url.pathname === '/api/readiness') {
+          const result = await readiness({ storage: () => store.getSnapshot({ ownerId: 'local-public', repository: demoSnapshot.repository.fullName.toLowerCase() }, demoSnapshot.id), queue: () => analysisJobs.operationalStatus('local-public'), worker: workerReady, productionAssets: () => useProduction ? stat(resolve(dist, 'index.html')) : Promise.resolve(true) });
+          return json(res, result.status === 'ready' ? 200 : 503, result);
+        }
+        if (req.method === 'GET' && url.pathname === '/api/metrics' && process.env.OPS_METRICS_ENABLED === 'true') return json(res, 200, metricsForOwner(ownerId()).snapshot(await analysisJobs.operationalStatus(ownerId())));
         if (req.method === 'GET' && url.pathname === '/api/health/worker') {
-          if (!workerHealth || Date.now() - workerHealth.checkedAt > 10_000) workerHealth = { checkedAt: Date.now(), result: checkWorkerHealth() };
-          try { return json(res, 200, await workerHealth.result); }
+          try { return json(res, 200, await workerReady()); }
           catch { return json(res, 503, { status: 'unavailable', code: 'WORKER_UNAVAILABLE', error: 'The analysis worker could not start. Restart the server and check the Node.js installation.' }); }
         }
         if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: auth ? 'github-app' : 'local-public', github: { publicRepositories: true, privateRepositories: Boolean(auth), configuredToken: Boolean(process.env.GITHUB_TOKEN), appConfigured: Boolean(auth), loginUrl: auth ? '/api/auth/login' : null }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: store.kind === 'postgres' } });
@@ -240,7 +249,8 @@ export async function createApplicationServer(options: { production?: boolean; s
         if (req.method === 'POST' && url.pathname === '/api/analyze') {
           const input = analyzeRequest.parse(await body(req));
           input.repository = parseRepository(input.repository).fullName;
-          const pinned = await resolveAnalysisInput(input, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken) });
+          const metrics = metricsForOwner(ownerId());
+          const pinned = await resolveAnalysisInput(input, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), onTelemetry: event => metrics.observeGitHub(event) });
           return json(res, 202, await analysisJobs.submit(scopeFor(input.repository), pinned));
         }
         const jobMatch = url.pathname.match(/^\/api\/jobs\/([a-zA-Z0-9-]+)(\/cancel)?$/);
@@ -262,7 +272,8 @@ export async function createApplicationServer(options: { production?: boolean; s
           const result = await serialSnapshot(input.snapshotId, async () => {
             const snapshot = await lookupSnapshot(input.snapshotId, url.searchParams.get('repository'));
             if (snapshot.mode === 'demo') return { sources: snapshot.sources.filter(source => source.kind === input.kind), nextPage: null, snapshot };
-            const page = await listRepositorySources(snapshot.repository.fullName, input.kind, input.page, snapshot.contextSha, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal: AbortSignal.timeout(30_000) });
+            const metrics = metricsForOwner(ownerId());
+            const page = await listRepositorySources(snapshot.repository.fullName, input.kind, input.page, snapshot.contextSha, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal: AbortSignal.timeout(30_000), onTelemetry: event => metrics.observeGitHub(event) });
             const byId = new Map(snapshot.sources.map(source => [source.id, source]));
             for (const source of page.sources) if (!byId.has(source.id)) byId.set(source.id, source);
             const updated = await saveSnapshot({ ...snapshot, sources: [...byId.values()], sourcePagination: { ...(snapshot.sourcePagination as Record<string, number | null> | undefined), [input.kind]: page.nextPage } });
@@ -290,7 +301,8 @@ export async function createApplicationServer(options: { production?: boolean; s
           const superseded = () => { if (signal.aborted || sourceRequests.get(sourceKey) !== request) throw Object.assign(new Error('This selection was superseded or cancelled. Retry the latest selection.'), { status: 409, code: 'SUPERSEDED' }); };
           const task = (async () => {
             try {
-              const loaded = await loadSources(snapshot, input.kind, ids, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal });
+              const metrics = metricsForOwner(ownerId());
+              const loaded = await loadSources(snapshot, input.kind, ids, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal, onTelemetry: event => metrics.observeGitHub(event) });
               superseded();
               return await serialSnapshot(input.snapshotId, async () => {
                 superseded();
