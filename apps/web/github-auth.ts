@@ -42,6 +42,7 @@ export class GitHubAppAuth {
   private pending = new Map<string, { browser: string; verifier: string; expires: number }>();
   private installationTokens = new Map<string, { value: string; expires: number }>();
   private tokenRequests = new Map<string, Promise<string>>();
+  private knownScopes = new Map<string, { installationId: number; repositoryId: number; ownerId: string; repository: string }>();
   private now: () => number;
   private fetcher: typeof fetch;
   constructor(readonly config: GitHubAuthConfig, options: { fetch?: typeof fetch; now?: () => number } = {}) { this.fetcher = options.fetch ?? fetch; this.now = options.now ?? Date.now; }
@@ -120,6 +121,9 @@ export class GitHubAppAuth {
   async authorize(session: GitHubSession, repository: string, installationId?: number) {
     const found = (await this.repositories(session)).find(value => value.full_name.toLowerCase() === repository.toLowerCase() && (installationId === undefined || installationId === value.installationId));
     if (!found) throw new AuthError('Repository access was removed or this App is not installed for your account. Reconnect and select an accessible repository.', 403, 'REPOSITORY_DENIED');
+    const key = `${found.installationId}:${found.id}:${session.ownerId}`;
+    if (this.knownScopes.size >= 1_000 && !this.knownScopes.has(key)) this.knownScopes.delete(this.knownScopes.keys().next().value!);
+    this.knownScopes.set(key, { installationId: found.installationId, repositoryId: found.id, ownerId: session.ownerId, repository: found.full_name.toLowerCase() });
     return found;
   }
   async repositoryToken(session: GitHubSession, repository: string, installationId?: number) {
@@ -147,5 +151,8 @@ export class GitHubAppAuth {
     return { token: await this.repositoryToken(this.publicSession(session), repository), allowPrivate: true as const };
   }
   /** Webhook revocation can immediately expire tokens. Every read also checks live user access. */
-  invalidateInstallation(id: number) { for (const key of this.installationTokens.keys()) if (key.startsWith(`${id}:`)) this.installationTokens.delete(key); }
+  invalidateInstallation(id: number) { for (const key of this.installationTokens.keys()) if (key.startsWith(`${id}:`)) this.installationTokens.delete(key); for (const [key, scope] of this.knownScopes) if (scope.installationId === id) this.knownScopes.delete(key); }
+  /** Routing hints only, populated by live authorization; never use as permission to read. Resolve BEFORE invalidating. */
+  knownRepositoryScopes(installationId: number, repositoryId?: number) { return [...this.knownScopes.values()].filter(scope => scope.installationId === installationId && (repositoryId === undefined || scope.repositoryId === repositoryId)).map(({ ownerId, repository }) => ({ ownerId, repository })); }
+  invalidateRepository(installationId: number, repositoryId: number) { this.installationTokens.delete(`${installationId}:${repositoryId}`); for (const [key, scope] of this.knownScopes) if (scope.installationId === installationId && scope.repositoryId === repositoryId) this.knownScopes.delete(key); }
 }
