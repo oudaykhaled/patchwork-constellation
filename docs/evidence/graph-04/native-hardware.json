@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1",
+  "recordedAt": "2026-11-03T21:24:48.2393841+00:00",
+  "sourceCommit": "2100fbe7d36ed8bdfa86d9129339dbb39a2b8bd7",
+  "observationKind": "native operating-system inventory; not a rendering or performance result",
+  "operatingSystem": {
+    "Caption": "Microsoft Windows 11 Home",
+    "Version": "10.0.26200",
+    "BuildNumber": "26200"
+  },
+  "machine": {
+    "Manufacturer": "Acer",
+    "Model": "Predator PHN16-73",
+    "TotalPhysicalMemory": 33752997888
+  },
+  "processor": {
+    "Name": "Intel(R) Core(TM) Ultra 9 275HX",
+    "NumberOfCores": 24,
+    "NumberOfLogicalProcessors": 24
+  },
+  "graphicsAdapters": [
+    {
+      "Name": "Intel(R) Graphics",
+      "DriverVersion": "32.0.101.8132"
+    },
+    {
+      "Name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+      "DriverVersion": "32.0.15.7713"
+    }
+  ],
+  "activeBrowserBackend": "not established by OS inventory; inspect browser GPU diagnostics in the interactive review",
+  "limits": [
+    "Installed adapters do not identify the adapter actively rendering the browser.",
+    "WMI AdapterRAM is omitted because its 32-bit value can truncate modern GPU memory.",
+    "No browser/GPU memory or frame timing is measured by this inventory.",
+    "No hostname, serial number, device identifier, user account or credentials collected."
+  ]
+}
