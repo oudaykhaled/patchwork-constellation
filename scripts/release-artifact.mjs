@@ -5,10 +5,10 @@ import { dirname, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
-const rootFiles = new Set(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'LICENSE', 'README.md', '.env.example']);
+const rootFiles = new Set(['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'vitest.config.ts', 'playwright.config.ts', 'LICENSE', 'README.md', 'CONTRIBUTING.md', 'SECURITY.md', '.env.example', '.release/acceptance.json']);
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 export function safeReleasePath(path) {
-  if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').some(part => !part || part === '.' || part === '..') || /[\x00-\x1f\x7f]/.test(path)) throw new Error('Unsafe release path');
+  if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part) || /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(part)) || /[\x00-\x1f\x7f:]/.test(path)) throw new Error('Unsafe release path');
   if (/(?:^|\/)(?:node_modules|\.git|\.cache|\.tmp)(?:\/|$)/.test(path) || /(?:^|\/)\.env(?:\.|$)/.test(path) && path !== '.env.example' || /\.(?:pem|key|p12|pfx)$/i.test(path)) throw new Error('Private or generated source path excluded from release');
   return path;
 }
@@ -27,11 +27,15 @@ export function inspectReleaseArchive(bytes) {
   if (!entries.some(entry => entry.path === 'release-manifest.json')) throw new Error('Archive manifest missing'); return entries;
 }
 export async function extractReleaseArchive(bytes, directory) {
-  const root = resolve(directory); const entries = inspectReleaseArchive(bytes); await mkdir(root, { recursive: false });
+  const root = resolve(directory); const entries = inspectReleaseArchive(bytes);
+  const manifest = JSON.parse(entries.find(entry => entry.path === 'release-manifest.json').bytes.toString('utf8'));
+  if (manifest.schemaVersion !== '1' || !Array.isArray(manifest.files) || manifest.files.length > 5000 || entries.length !== manifest.files.length + 1) throw new Error('Archive and manifest entries differ');
+  const expected = new Set(manifest.files.map(file => safeReleasePath(file.path))); if (expected.size !== manifest.files.length || expected.has('release-manifest.json') || entries.some(entry => entry.path !== 'release-manifest.json' && !expected.has(entry.path))) throw new Error('Archive has undeclared entries');
+  await mkdir(root, { recursive: false });
   for (const entry of entries) { const path = resolve(root, entry.path); if (!path.startsWith(root + sep)) throw new Error('Unsafe archive target'); await mkdir(dirname(path), { recursive: true }); await writeFile(path, entry.bytes, { flag: 'wx' }); }
   return verifyRelease(root);
 }
-function sourceFile(path) { return rootFiles.has(path) || /^(?:apps|packages|database|scripts)\//.test(path) || /^docs\/(?:RELEASE|CAPABILITIES|RELEASE_NOTES|STORAGE|GITHUB_APP)/.test(path); }
+function sourceFile(path) { return rootFiles.has(path) || /^(?:apps|packages|database|scripts|docs|planning|tests|tools|\.github)\//.test(path); }
 function tarEntry(name, bytes, epoch) {
   safeReleasePath(name); const header = Buffer.alloc(512); const encoded = Buffer.from(name); let prefix = '', short = name;
   if (encoded.length > 100) { const split = name.lastIndexOf('/'); prefix = name.slice(0, split); short = name.slice(split + 1); if (Buffer.byteLength(prefix) > 155 || Buffer.byteLength(short) > 100) throw new Error('Release path exceeds ustar limit'); }
@@ -44,7 +48,7 @@ export async function verifyRelease(directory) {
   const root = resolve(directory); const manifest = JSON.parse(await readFile(resolve(root, 'release-manifest.json'), 'utf8'));
   if (manifest.schemaVersion !== '1' || !Array.isArray(manifest.files) || manifest.files.length > 5000) throw new Error('Invalid release manifest');
   const seen = new Set();
-  for (const file of manifest.files) { safeReleasePath(file.path); if (seen.has(file.path)) throw new Error('Duplicate release path'); seen.add(file.path); const absolute = resolve(root, file.path); if (!absolute.startsWith(root + sep) || !(await lstat(absolute)).isFile()) throw new Error('Release entry must be a regular file'); const bytes = await readFile(absolute); if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256) throw new Error('Release integrity check failed'); }
+  for (const file of manifest.files) { safeReleasePath(file.path); if (!Number.isSafeInteger(file.bytes) || file.bytes < 0 || file.bytes > 100_000_000 || !/^[a-f0-9]{64}$/.test(file.sha256)) throw new Error('Invalid release file digest'); if (seen.has(file.path)) throw new Error('Duplicate release path'); seen.add(file.path); const absolute = resolve(root, file.path); if (!absolute.startsWith(root + sep) || !(await lstat(absolute)).isFile()) throw new Error('Release entry must be a regular file'); const bytes = await readFile(absolute); if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256) throw new Error('Release integrity check failed'); }
   return { id: manifest.id, commit: manifest.commit, mode: manifest.mode, files: seen.size };
 }
 export async function createRelease(root, outputDirectory = resolve(root, 'release-artifacts'), { allowDirty = false } = {}) {

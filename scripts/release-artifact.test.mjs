@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { releaseGate } from './release-gate.mjs';
 test('release paths reject traversal, credentials and symlink container directories', () => {
-  for (const path of ['../escape', '/absolute', 'apps/../secret', '.env', 'apps/.env.local', 'secret.pem', 'node_modules/runtime']) assert.throws(() => safeReleasePath(path));
+  for (const path of ['../escape', '/absolute', 'apps/../secret', '.env', 'apps/.env.local', 'secret.pem', 'node_modules/runtime', 'C:/escape', 'file:stream', 'NUL.txt', 'folder/ends.']) assert.throws(() => safeReleasePath(path));
   assert.equal(safeReleasePath('.env.example'), '.env.example'); assert.equal(safeReleasePath('dist/assets/app.js'), 'dist/assets/app.js');
 });
 test('production cannot promote missing or mismatched release evidence', () => {
