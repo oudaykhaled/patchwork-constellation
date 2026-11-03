@@ -2,7 +2,7 @@ import './graph-legend.css';
 
 /** The compact key stays on the map; its explanation is available at every width. */
 export function GraphLegend({ sourceKind, fileCount }: { sourceKind: 'pr' | 'commit'; fileCount: number }) {
-  return <div className="graph-legend panel" data-node-id="17:3125" aria-label="Graph legend">
+  return <div role="group" className="graph-legend panel" data-node-id="17:3125" aria-label="Graph legend">
     <span>1 circle = 1 file</span>
     <span><img className="legend-symbol" src="/design/5-imgEllipse.svg" alt="" />Changed</span>
     <span><img className="legend-symbol" src="/design/5-imgEllipse1.svg" alt="" />Unchanged</span>

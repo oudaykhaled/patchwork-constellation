@@ -403,7 +403,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   return <div ref={hostRef} className={`constellation-graph ${dragging ? 'is-dragging' : ''} ${className}`} style={{ '--graph-inspector-width': `${inspectorWidth}px` } as CSSProperties} data-testid="graph-surface" data-layout-state={layoutState}>
     <canvas ref={canvasRef} data-testid="graph-canvas" data-camera-x={camera.x} data-camera-y={camera.y} data-camera-scale={camera.zoom} data-visible-file-count={visibleFiles} data-selection-cue={selectedFileId ? 'corner-brackets' : 'none'} className="constellation-canvas" tabIndex={0} aria-label={`Repository file graph. ${snapshot.nodes.length} files in ${layout.islands.length} islands. Arrow keys pan. Plus and minus zoom. Zero fits all islands. Use the Files view for accessible file details.`} aria-describedby="graph-instructions" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={pointerUp} onPointerLeave={() => !pointers.current.size && setHoveredId(null)} onKeyDown={keyDown} />
     <p id="graph-instructions" className="graph-sr-only">One circle is one file. Green circles changed in the selected sources; an outer ring means multiple sources. Corner brackets identify the selected file. Lines are directed imports. Drag to pan, scroll or pinch to zoom. Control or Command modified wheel and keyboard shortcuts retain browser zoom. Select a labeled island to focus it. Filename labels are prioritized to avoid collisions; the synchronized Files view retains every file.</p>
-    <div className="island-controls" aria-label="Repository islands">
+    <div role="group" className="island-controls" aria-label="Repository islands">
       {islandLabels.map(({ island, point, hidden }) => {
         if (scopeGroupId && island.id !== scopeGroupId) return null;
         const count = island.nodes.reduce((total, node) => total + Number(membership.has(node.id)), 0);
@@ -412,7 +412,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
         </button>;
       })}
     </div>
-    {exceedsGraphEnvelope(snapshot) && <div className="graph-scope-control" aria-label="Large repository scope">
+    {exceedsGraphEnvelope(snapshot) && <div role="group" className="graph-scope-control" aria-label="Large repository scope">
       <label htmlFor="graph-scope">Explore scope <select id="graph-scope" aria-label="Explore scope" value={scopeGroupId ?? ''} onChange={event => {
         const id = event.target.value || null; setScopeGroupId(id); onFocusGroup?.(id);
         const island = id ? layout.islands.find(group => group.id === id) : undefined;
@@ -425,7 +425,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     {layoutState === 'pending' && <div className="graph-layout-status" role="status">Settling repository islands…</div>}
     {(canvasFailed || layoutState === 'failed') && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>{layoutError || 'Use Files to explore the complete repository and its connections.'}</p>{onOpenFiles && <button type="button" onClick={onOpenFiles}>Open file list</button>} {layoutState === 'failed' && <button type="button" onClick={resetLayout}>Retry layout</button>} {canvasFailed && <button type="button" onClick={() => { const available = !!canvasRef.current?.getContext('2d'); setCanvasFailed(!available); if (available) { setCanvasAttempt(value => value + 1); requestDraw(); } }}>Retry graph</button>}</div>}
     {showImports && suppressedEdges > 0 && <div className="graph-detail-notice">Overview detail: {suppressedEdges.toLocaleString()} of {snapshot.edges.length.toLocaleString()} background import lines suppressed. All {snapshot.nodes.length.toLocaleString()} files are retained. Zoom in or inspect a file for its connections.</div>}
-    <div className="graph-navigation" aria-label="Graph navigation">
+    <div role="group" className="graph-navigation" aria-label="Graph navigation">
       <button type="button" className="graph-reset-layout" onClick={resetLayout} disabled={layoutState === 'pending'}>Reset island layout</button>
       <output className="graph-detail-summary" aria-label="Graph detail" aria-live="off">{visibleFiles.toLocaleString()} / {snapshot.nodes.length.toLocaleString()} files in view</output>
       <span className="graph-pan-hint">Drag to pan · scroll to zoom</span>
