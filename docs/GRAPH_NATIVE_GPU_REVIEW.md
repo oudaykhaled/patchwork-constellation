@@ -12,7 +12,7 @@ The [hosted production benchmark](evidence/published/hosted-renderer/fixture-200
 
 Use the existing native browser and production demo. Keep data synthetic and providers disabled. Record the exact application commit, browser version, actual viewport and displayed native zoom. Do not change browser flags or system GPU assignments merely to obtain a preferred result.
 
-1. Open the browser's GPU diagnostics (`chrome://gpu` in Chrome) and capture the active renderer plus Canvas/compositing feature status. A hardware model in Windows inventory is insufficient; software fallback must be labeled as such.
+1. Record the active renderer plus Canvas/compositing feature status from a maintainer's browser diagnostic record when available through the permitted review surface. A hardware model in Windows inventory is insufficient; software fallback must be labeled as such. If the review surface blocks browser internals, leave the backend unverified and request maintainer confirmation; do not bypass that policy through another automation surface.
 2. Open the212-file/six-island demo. Confirm that file circles, island labels and connections appear, with68 directly changed files and14 overlaps for the default three-PR selection. Capture the graph in context.
 3. Pan using pointer and keyboard; zoom at a file and Fit all. Check that circles, labels and edges remain aligned, that no persistent trails or blank regions remain after movement, and that the final view is stable.
 4. Toggle sources, switch to commits, open and close a file inspector, resize, and navigate back to the overview. Check that changed/overlap counts and selected sources remain correct. Use an actual diff in the inspector; inspect its immutable source link without treating fixture content as instructions.
@@ -27,9 +27,9 @@ For another native browser or hardware path, record a separate row instead of co
 | --- | --- |
 | Native machine/installed driver inventory | Recorded; active renderer not established by this record. |
 | Dedicated software-reference2k budgets | Passed, linked above; pan-only frame percentiles. |
-| Native active GPU/backend screenshot | Awaiting root's exclusive CUA inspection. |
+| Native active GPU/backend screenshot | Unverified: the browser review policy blocked the internal diagnostic scheme. No workaround attempted. Maintainer confirmation remains required. |
 | Native graph pan/zoom/resize/source/Files observations | Awaiting root's exclusive CUA inspection. |
-| Native browser200% zoom | Awaiting root; owned jointly by issues #5/#15. |
+| Native browser200% zoom | Root observed actual200% in the Windows Chrome menu; screenshots retained outside the repository. Full short-height interaction readback is owned jointly by issues #5/#15. |
 | Human accessibility/usability review | Separate issues #17/#18; automated interaction is not human evidence. |
 
-Until the native inspection is recorded with its actual backend and observations, the last acceptance item of #27 remains partial. This checklist is a runnable review artifact, not a completed review or a reason to mark the issue Done.
+Until the native inspection is recorded with its actual backend and observations, the last acceptance item of #27 remains partial. Root's actual200% menu observation is useful native-zoom evidence but does not establish the active GPU. This checklist is a runnable review artifact, not a completed GPU review or a reason to mark the issue Done.
