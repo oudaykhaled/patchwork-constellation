@@ -57,7 +57,7 @@ try {
 
 const report = {
   schemaVersion: '1', status: 'partial', measuredAt: new Date().toISOString(), commit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-  conditions: { platform: platform(), osRelease: release(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, totalMemoryBytes: totalmem(), runtime: process.version, database: 'memory', concurrency: 'single measurement while up to 16 agent worktrees were active; not an isolated capacity benchmark', externalServices: 'all GitHub responses controlled; no external GitHub, models or webhook delivery' },
+  conditions: { platform: platform(), osRelease: release(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, totalMemoryBytes: totalmem(), runtime: process.version, database: 'memory', concurrency: process.env.BACKEND_RELEASE_ACTIVITY || 'Concurrent activity was not recorded; do not treat this sample as reference-runner certification.', externalServices: 'all GitHub responses controlled; no external GitHub, models or webhook delivery' },
   checks: [
     { id: 'authored-git-pr-counts', status: 'passed', evidence: '8 directly touched files / 1 overlapping file; real Git histories, hand-declared expected sets' },
     { id: 'progressive-10k-http', status: 'passed', evidence: '10,000 nodes and 40,000 edges across bounded pages; complete item counts' },
