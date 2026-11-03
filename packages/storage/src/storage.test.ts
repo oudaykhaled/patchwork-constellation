@@ -127,6 +127,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('PostgreSQL persistence (opt-in 
       expect(await first.cancelJob(scope, 'pg-job')).toBe(true);
       expect(await second.completeJob(scope, 'pg-job', claims[0]?.leaseOwner ?? claims[1]!.leaseOwner!, { status: 'ready' })).toBe(false);
       expect(await first.recordWebhookDelivery(scope, 'delivery-1234')).toBe(true); expect(await second.recordWebhookDelivery(scope, 'delivery-1234')).toBe(false);
+      const same = newJob({ contextRef: 'a'.repeat(40) }, { id: 'idempotent' });
+      const submitted = await Promise.all([first.enqueueJob(scope, same), second.enqueueJob(scope, same)]);
+      expect(submitted.filter(result => result.created)).toHaveLength(1);
+      expect((await first.listJobs(scope.ownerId)).map(entry => entry.job.id)).toContain('idempotent');
+      expect(await first.listJobs('unrelated-owner')).toEqual([]);
+      await first.enqueueJob(scope, newJob({}, { id: 'second-active' })); await first.enqueueJob(scope, newJob({}, { id: 'third-active' }));
+      expect(await first.claimJob(scope, 'owner-one', 30_000, 'idempotent')).toBeDefined();
+      expect(await second.claimJob(scope, 'owner-two', 30_000, 'second-active')).toBeDefined();
+      expect(await first.claimJob(scope, 'owner-three', 30_000, 'third-active')).toBeUndefined();
+      expect(await first.updateJobProgress(scope, 'idempotent', 'owner-one', { status: 'indexing', progress: 70, message: 'Indexing' })).toBe(true);
+      expect(await second.updateJobProgress(scope, 'idempotent', 'owner-one', { status: 'fetching', progress: 3, message: 'Retry' })).toBe(true);
+      expect((await first.getJob(scope, 'idempotent'))?.progress).toBe(70);
+      expect(await second.updateJobProgress(scope, 'idempotent', 'wrong-worker', { status: 'grouping', progress: 99, message: 'Forged' })).toBe(false);
     } finally { await first.deleteRepository(scope); await first.close(); await second?.close(); }
   });
 });

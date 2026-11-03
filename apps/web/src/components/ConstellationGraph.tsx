@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { islandBounds, neighborsOf, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
-import type { Bounds, Camera, GraphData, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
+import type { Bounds, Camera, GraphData, GraphLayout, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
 import { boundsIntersect, connectionInViewport, exceedsGraphEnvelope, scopeSummary, viewportBounds } from '../../../../packages/graph-core/src/render-policy';
 import { useSettledLayout } from './useSettledLayout';
 import { fitVisibleCamera, isValidCamera, MAX_RELATIVE_ZOOM, MIN_RELATIVE_ZOOM, minimapPoint, navigationInsets, pinchCamera } from './camera-navigation';
@@ -23,6 +23,7 @@ export interface ConstellationGraphProps {
   className?: string;
   layoutSeed?: number;
   layoutPins?: Record<string, Point>;
+  onLayoutReady?: (layout: GraphLayout) => void;
 }
 
 type Size = { width: number; height: number };
@@ -44,7 +45,7 @@ function islandPath(context: CanvasRenderingContext2D, island: Island) {
   context.closePath();
 }
 
-export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, onOpenFiles, initialCamera, onCameraChange, overviewRequest = 0, className = '', layoutSeed = 0, layoutPins }: ConstellationGraphProps) {
+export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, onOpenFiles, initialCamera, onCameraChange, overviewRequest = 0, className = '', layoutSeed = 0, layoutPins, onLayoutReady }: ConstellationGraphProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(DEFAULT_CAMERA);
@@ -68,6 +69,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const [reducedMotion, setReducedMotion] = useState(false);
   const [scopeGroupId, setScopeGroupId] = useState<string | null>(null);
   const { layout, layoutState, layoutError, resetLayout } = useSettledLayout(snapshot, layoutSeed, layoutPins);
+  useEffect(() => { if (layoutState === 'ready') onLayoutReady?.(layout); }, [layout, layoutState, onLayoutReady]);
   const framedRepository = useRef<string | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(0);
   const membership = useMemo(() => selectedMembership(snapshot, selectedSourceIds), [snapshot, selectedSourceIds]);

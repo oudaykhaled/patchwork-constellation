@@ -7,7 +7,7 @@ const API = 'https://api.github.com';
 const VERSION = '2026-03-10';
 const token = () => randomBytes(32).toString('base64url');
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
-const equal = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const equal = (a: string, b: string) => { const left = Buffer.from(a), right = Buffer.from(b); return left.byteLength === right.byteLength && timingSafeEqual(left, right); };
 const cookieValue = (req: IncomingMessage, name: string) => req.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith(name + '='))?.slice(name.length + 1);
 const positiveId = z.number().int().positive().safe();
 async function boundedJson(response: Response, max: number): Promise<unknown> {

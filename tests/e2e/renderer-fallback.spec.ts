@@ -12,11 +12,15 @@ test('renderer failure preserves source selection, file inspection and retry', a
   });
   await page.goto('/');
   await expect(page.getByText('Graph rendering is unavailable')).toBeVisible();
-  await expect(page.getByText('68 affected files, 14 overlapping files.', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('changed-count')).toHaveText('68');
+  await expect(page.getByTestId('review-announcement')).toContainText('14 overlapping files');
   await page.locator('.graph-canvas-error').getByRole('button', { name: 'Open file list', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Files in your constellation' })).toBeVisible();
-  await expect(page.locator('.accessible-file-list > button')).toHaveCount(212);
-  await page.locator('.accessible-file-list > button').first().click();
+  const explorer = page.getByRole('dialog', { name: 'Files in your constellation' });
+  await expect(explorer.getByRole('status')).toContainText('212 matching files');
+  await expect(explorer.getByTestId('windowed-file-list').getByRole('button')).toHaveCount(36);
+  await explorer.getByLabel('Filter file list').fill('refresh.ts');
+  await explorer.getByTestId('windowed-file-list').getByRole('button').first().click();
   await expect(page.getByTestId('file-inspector')).toBeVisible();
   await page.getByRole('button', { name: 'Close file inspector', exact: true }).click();
   await page.getByRole('button', { name: 'Retry graph', exact: true }).click();

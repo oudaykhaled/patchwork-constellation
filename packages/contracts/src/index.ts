@@ -4,6 +4,10 @@ export const CONTRACT_VERSION = '1' as const;
 const IdSchema = z.string().min(1);
 const TimestampSchema = z.string().refine(value => Number.isFinite(Date.parse(value)), 'Invalid timestamp');
 const GitShaSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i, 'Expected immutable Git object SHA');
+export const GitHubWebUrlSchema = z.string().url().refine(value => {
+  try { const url = new URL(value); return url.protocol === 'https:' && url.hostname === 'github.com' && !url.port && !url.username && !url.password; }
+  catch { return false; }
+}, 'Expected a credential-free HTTPS GitHub link');
 export const RepositoryPathSchema = z.string().min(1).max(1_024).refine(path => !path.startsWith('/') && !/[:\\\u0000-\u001f\u007f]/.test(path) && !path.split('/').some(segment => segment === '..' || segment === '.' || segment === ''), 'Expected repository-relative path');
 const FolderPathSchema = z.union([z.literal(''), RepositoryPathSchema]);
 export const CoverageStatusSchema = z.enum(['complete', 'partial', 'unsupported', 'failed', 'excluded']);
@@ -29,7 +33,7 @@ export const RepositorySchema = z.object({
   name: z.string().min(1),
   fullName: z.string().min(3),
   defaultBranch: z.string().min(1),
-  htmlUrl: z.string().url(),
+  htmlUrl: GitHubWebUrlSchema,
 }).passthrough().refine(repository => repository.fullName.toLowerCase() === `${repository.owner}/${repository.name}`.toLowerCase(), { path: ['fullName'], message: 'Repository identity does not match owner/name' });
 export type Repository = z.infer<typeof RepositorySchema>;
 
@@ -149,7 +153,7 @@ export const ChangeSourceSchema = z.object({
   baseSha: z.string().optional(),
   headSha: z.string().optional(),
   comparisonKind: z.enum(['merge-base', 'first-parent', 'empty-tree']).optional(),
-  url: z.string().url(),
+  url: GitHubWebUrlSchema,
   files: z.array(FileChangeSchema),
   coverage: CoverageSchema.optional(),
   importEdges: z.array(ImportEdgeSchema).optional(),

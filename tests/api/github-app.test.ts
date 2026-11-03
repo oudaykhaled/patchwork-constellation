@@ -11,6 +11,11 @@ class ControlledAuth extends GitHubAppAuth {
   override session(req: IncomingMessage): GitHubSession | undefined { const name = req.headers.cookie; return name === 'alice' || name === 'bob' ? { id: name, ownerId: `github:${name}`, login: name, csrf: 'synthetic-csrf', expiresAt: Date.now() + 100_000 } : undefined; }
   override async authorize(session: GitHubSession, repository: string) { if (repository !== 'acme/private' || this.removed.has(session.ownerId)) throw new AuthError('Repository access removed.', 403, 'REPOSITORY_DENIED'); return { id: 1, full_name: repository, private: true, installationId: 2 }; }
   override async repositoryToken(session: GitHubSession, repository: string) { await this.authorize(session, repository); return `test-token-${session.ownerId}`; }
+  override async credentialsForOwner(ownerId: string, repository: string) {
+    const session = this.session({ headers: { cookie: ownerId.replace(/^github:/, '') } } as IncomingMessage);
+    if (!session) throw new AuthError('Reconnect GitHub.', 403, 'AUTH_SESSION_REQUIRED');
+    return { token: await this.repositoryToken(session, repository), allowPrivate: true as const };
+  }
 }
 let server: Server, base: string;
 const auth = new ControlledAuth();
