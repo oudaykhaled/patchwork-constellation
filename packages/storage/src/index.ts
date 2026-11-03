@@ -273,3 +273,5 @@ export async function createStore(config: StoreConfig = {}): Promise<SnapshotSto
 }
 
 export { verifyWebhook, acceptWebhookDelivery } from './webhooks.js';
+export { createPostgresWebhookInbox, PostgresWebhookInbox, MemoryWebhookInbox } from './webhook-inbox.js';
+export type { WebhookInbox, RefreshTask, RefreshState, WebhookEnvelope, LeasedWebhook } from './webhook-inbox.js';

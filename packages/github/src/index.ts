@@ -51,7 +51,7 @@ export function parseRepository(value: string): RepositoryAddress {
 }
 
 interface CacheEntry { value: unknown; etag?: string; link?: string; expires: number; immutable?: boolean; }
-interface PendingEntry { promise: Promise<CacheEntry>; controller: AbortController; subscribers: number; }
+interface PendingEntry { promise: Promise<CacheEntry>; controller: AbortController; subscribers: number; immutable: boolean; }
 interface QueueWaiter { resolve: (release: () => void) => void; reject: (reason: unknown) => void; signal: AbortSignal; abort: () => void; }
 interface RequestQueue { active: boolean; waiting: QueueWaiter[]; }
 const cache = new Map<string, CacheEntry>();
@@ -175,7 +175,7 @@ export class GitHubClient {
     if (shared && !shared.controller.signal.aborted) { this.emit({ event: 'deduplicated', resource }); return structuredClone(await this.subscribe(shared)); }
     if (pending.size >= MAX_PENDING_REQUESTS) throw new GitHubError('GitHub request queue is full. Retry shortly.', 429, 'QUEUE_FULL', 1);
     const controller = new AbortController();
-    const entry: PendingEntry = { controller, subscribers: 0, promise: Promise.resolve(undefined as never) };
+    const entry: PendingEntry = { controller, subscribers: 0, immutable, promise: Promise.resolve(undefined as never) };
     entry.promise = this.execute(url, old, immutable, raw, maxBytes, resource, controller.signal).then(result => {
       controller.signal.throwIfAborted();
       if (cache.size >= MAX_CACHE_ENTRIES && !cache.has(key)) cache.delete(cache.keys().next().value!);
@@ -284,5 +284,20 @@ export function invalidateGitHubRepositoryCache(repository: string): number {
     const href = key.slice(urlStart).toLowerCase();
     if (!entry.immutable && (href === prefix || href.startsWith(`${prefix}/`) || href.startsWith(`${prefix}?`))) { entry.expires = 0; invalidated++; }
   }
+  for (const [key, entry] of pending) {
+    const href = key.slice(key.indexOf('https://')).toLowerCase();
+    if (!entry.immutable && (href === prefix || href.startsWith(`${prefix}/`) || href.startsWith(`${prefix}?`))) { entry.controller.abort(); pending.delete(key); invalidated++; }
+  }
   return invalidated;
+}
+
+/** Revocation removes immutable private response entries too and aborts pending fills. */
+export function purgeGitHubRepositoryCache(repository: string): number {
+  const address = parseRepository(repository);
+  const prefixes = [`https://api.github.com/repos/${address.owner}/${address.name}`, `https://raw.githubusercontent.com/${address.owner}/${address.name}`].map(value => value.toLowerCase());
+  const matches = (key: string) => { const href = key.slice(key.indexOf('https://')).toLowerCase(); return prefixes.some(prefix => href === prefix || href.startsWith(`${prefix}/`) || href.startsWith(`${prefix}?`)); };
+  let purged = 0;
+  for (const key of cache.keys()) if (matches(key)) { cache.delete(key); purged++; }
+  for (const [key, work] of pending) if (matches(key)) { work.controller.abort(); pending.delete(key); }
+  return purged;
 }

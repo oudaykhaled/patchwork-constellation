@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { GitHubClient, GitHubError, clearGitHubCacheForTests, invalidateGitHubRepositoryCache, parseRepository, type GitHubTelemetry } from './index';
+import { GitHubClient, GitHubError, clearGitHubCacheForTests, invalidateGitHubRepositoryCache, purgeGitHubRepositoryCache, parseRepository, type GitHubTelemetry } from './index';
 beforeEach(() => clearGitHubCacheForTests());
 describe('repository addressing and outbound boundaries', () => {
   it('accepts only repository identifiers or exact HTTPS GitHub URLs', () => {
@@ -148,6 +148,24 @@ describe('bounded ingestion replay', () => {
     expect(invalidateGitHubRepositoryCache('acme/tool')).toBe(1);
     await client.get('/repos/acme/tool'); await client.get('/repos/acme/tool/git/trees/' + 'a'.repeat(40), true); await client.get('/repos/acme/other');
     expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+  it('a webhook invalidation prevents an older in-flight mutable ref from refilling the cache', async () => {
+    let complete!: (value: Response) => void;
+    const fetcher = vi.fn(async () => fetcher.mock.calls.length === 1 ? new Promise<Response>(resolve => { complete = resolve; }) : Response.json({ sha: 'current-head' }));
+    const client = new GitHubClient({ fetch: fetcher as typeof fetch });
+    const pending = client.get('/repos/acme/tool/commits/main').catch(error => error);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    expect(invalidateGitHubRepositoryCache('acme/tool')).toBe(1);
+    complete(Response.json({ sha: 'outdated-head' })); expect(await pending).toMatchObject({ name: 'AbortError' });
+    expect(await client.get('/repos/acme/tool/commits/main')).toEqual({ sha: 'current-head' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it('revocation purges immutable private responses while retaining unrelated repository caches', async () => {
+    const fetcher = vi.fn(async () => Response.json({ ok: true })), client = new GitHubClient({ token: 'synthetic-private-token', fetch: fetcher as typeof fetch });
+    await client.get('/repos/acme/tool/git/trees/' + 'a'.repeat(40), true); await client.get('/repos/acme/other', true);
+    expect(purgeGitHubRepositoryCache('acme/tool')).toBe(1);
+    await client.get('/repos/acme/tool/git/trees/' + 'a'.repeat(40), true); await client.get('/repos/acme/other', true);
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
   it('emits source-free quota, cache and truncation/cap telemetry', async () => {
     const events: GitHubTelemetry[] = [];

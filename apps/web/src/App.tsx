@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { ArrowLeft, ArrowRight, Check, CheckCheck, CircleHelp, FileCode2, FolderGit2, GitCommitHorizontal, GitPullRequest, Layers3, List, LoaderCircle, RefreshCw, RotateCcw, Search, ShieldCheck, Unplug, X } from 'lucide-react';
 import type { ChangeSource, GraphSnapshot, Group } from '@patchwork/contracts';
 import { ConstellationGraph } from './components/ConstellationGraph';
+import { SnapshotRefreshNotice } from './components/SnapshotRefreshNotice';
 import { GroupingReview } from './components/GroupingReview';
 import type { GraphLayout } from '../../../packages/graph-core/src/index';
 import { groupingSource, parseReviewPolicy, parseReviewProposal, type ReviewPolicy, type ReviewProposal, type ReviewRevision } from './grouping-review';
@@ -116,6 +117,17 @@ export default function App() {
     if (next.mode === 'demo' && selection.ids.some(id => !next.sources.some(source => source.id === id && source.kind === selection.kind))) {
       setSelectionPhase('failed'); setError('Some saved sample changes no longer exist. Choose available changes or clear the selection.');
     }
+  };
+  const applyRefreshedSnapshot = (next: GraphSnapshot) => {
+    if (!snapshot || snapshot.repository.fullName.toLowerCase() !== next.repository.fullName.toLowerCase()) return;
+    contextEpoch.current++; groupingRequest.current++; groupingAbortRef.current?.abort();
+    selectionRequest.current++; selectionAbortRef.current?.abort(); sourcePageRequest.current++;
+    setProposal(null); setGroupingRevision(null); setPolicyPreview(null); setGroupingLoading(false); setHasUndo(false);
+    setNextSourcePage(null); setLoadingSources(false); setSelectionPhase('loading');
+    if (selectedFileId && !next.nodes.some(node => node.id === selectedFileId)) { pendingSharedFile.current = selectedFileId; setSelectedFileId(null); }
+    setFocusGroupId(current => next.groups.some(group => group.id === current) ? current : null);
+    setSnapshot(next);
+    flash('Refresh applied. Surviving file focus and source selection are preserved.');
   };
   useEffect(() => {
     const controller = new AbortController(); setBusy('Opening constellation…');
@@ -316,6 +328,7 @@ export default function App() {
         {selectedFile && <FileInspector key={selectedFile.id} onExplainGroup={() => explainGroup(selectedFile.groupId)} snapshot={snapshot} file={selectedFile} selectedSources={selectedSources} closeRef={inspectorCloseRef} onClose={() => chooseFile(null)} onBack={() => { chooseFile(null); setFocusGroupId(null); setOverviewRequest(value => value + 1); }} onSelectFile={chooseFile} onFocusGroup={() => focusIsland(presentationSnapshot?.nodes.find(node => node.id === selectedFile.id)?.groupId || selectedFile.groupId)} organizeControls={<details className="move-file"><summary>Organize this file</summary><label>Primary island<select value={moveGroup || selectedFile.groupId} onChange={event => setMoveGroup(event.target.value)}>{snapshot.groups.map(group => <option key={group.id} value={group.id}>{group.label}</option>)}</select></label><button className="button" disabled={!moveGroup || moveGroup === selectedFile.groupId || !!busy} onClick={() => void mutateGrouping({ type: 'move', fileIds: [selectedFile.id], groupId: moveGroup })}>Move file</button></details>} />}
       </>}
       {busy && <div className="activity-indicator panel" role="status"><LoaderCircle size={15} className="spinning" /><span>{busy}</span>{(abortRef.current || selectionAbortRef.current) && <button className="text-button" onClick={cancelAnalysis}>Cancel</button>}</div>}
+      {snapshot && <SnapshotRefreshNotice snapshot={snapshot} request={api} onApply={applyRefreshedSnapshot} />}
       {error && snapshot && <div className="error-banner panel" role="alert"><CircleHelp size={17} /><span>{error}</span>{selectionPhase === 'failed' && <button className="text-button" onClick={() => void updateSelection(selectedIds, kind)}>Retry selection</button>}{snapshot.mode === 'github' && <button className="text-button" onClick={() => void analyzeTarget(snapshot.repository.fullName, snapshot.contextSha)}>Refresh analysis</button>}<button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={15} /></button></div>}
       {notice && <div className="toast panel" role="status"><CheckCheck size={16} />{notice}</div>}
       {snapshot && <ReviewAnnouncements busy={!!busy} changedFiles={changedNodes.length} overlapFiles={overlapCount} selectedPath={selectedFile?.path} sourceCount={selectedIds.length} coverage={snapshot.coverage.status} />}

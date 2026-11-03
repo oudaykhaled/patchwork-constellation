@@ -2,21 +2,28 @@ import { createHash, randomUUID } from 'node:crypto';
 import { GitHubClient, parseRepository, type GitHubOptions, type GitHubTelemetry } from '@patchwork/github';
 import { newJob, type SnapshotStore, type StoreScope, type StoredJob } from '@patchwork/storage';
 import { ANALYZER_VERSION, GROUPING_RULES_VERSION, type AnalyzeInput } from '@patchwork/analysis';
-import { AnalysisJobSchema, type AnalysisJob, type GraphSnapshot } from '@patchwork/contracts';
+import { AnalysisJobSchema, type AnalysisJob, type GraphSnapshot, type ImportEdge } from '@patchwork/contracts';
 import type { runAnalysisInWorker } from '../worker/src/index';
 import { WorkerAdmission } from './worker-admission';
 import { publicErrorCode, publicErrorMessage } from './public-errors';
 
 export const ANALYSIS_VERSION = ANALYZER_VERSION;
 export const GROUPING_VERSION = GROUPING_RULES_VERSION;
-export interface PinnedAnalysisInput extends AnalyzeInput { displayContextRef?: string }
+export interface PinnedAnalysisInput extends AnalyzeInput { displayContextRef?: string; /** Server-created refresh generation; never accepted from public analysis input. */ refreshVersion?: string }
 export type AnalysisJobView = AnalysisJob & { stage: StoredJob['status']; version: string; graphUrl?: string; snapshot?: GraphSnapshot; code?: string; retryable?: boolean };
 const terminal = (job: StoredJob) => ['ready', 'partial', 'failed', 'cancelled'].includes(job.status);
 const errorMessage = publicErrorMessage;
+function refreshIdentity(snapshot: GraphSnapshot, version?: string): GraphSnapshot {
+  if (!version) return snapshot;
+  const id = `${snapshot.id}:refresh:${createHash('sha256').update(version).digest('hex').slice(0, 16)}`;
+  const edgeIdentity = (edge: ImportEdge) => edge.evidence && typeof edge.evidence === 'object' && edge.evidence.snapshotId === snapshot.id ? { ...edge, evidence: { ...edge.evidence, snapshotId: id } } : edge;
+  return { ...snapshot, id, edges: snapshot.edges.map(edgeIdentity), sources: snapshot.sources.map(source => source.importEdges ? { ...source, importEdges: source.importEdges.map(edgeIdentity) } : source) };
+}
 const failureCode = (error: unknown, status: number) => { const code = publicErrorCode(error); return code !== 'REQUEST_FAILED' ? code : status >= 500 ? 'ANALYSIS_FAILED' : 'PERMANENT_ANALYSIS'; };
 
 export function analysisJobId(scope: StoreScope, input: PinnedAnalysisInput) {
-  return createHash('sha256').update(JSON.stringify([scope.ownerId, scope.repository.toLowerCase(), input.contextRef, input.mode ?? 'pr', ANALYSIS_VERSION, GROUPING_VERSION])).digest('hex');
+  if (input.refreshVersion !== undefined && (!/^[A-Za-z0-9-]{8,100}$/.test(input.refreshVersion))) throw Object.assign(new Error('Invalid refresh generation.'), { status: 400 });
+  return createHash('sha256').update(JSON.stringify([scope.ownerId, scope.repository.toLowerCase(), input.contextRef, input.mode ?? 'pr', ANALYSIS_VERSION, GROUPING_VERSION, ...(input.refreshVersion ? [input.refreshVersion] : [])])).digest('hex');
 }
 
 /** Resolve mutable refs once; the durable input contains only the resulting immutable SHA. */
@@ -181,7 +188,8 @@ export class AnalysisJobs {
       controller.signal.throwIfAborted(); await writes;
       const current = await this.store.getJob(scope, id); if (!current || current.status === 'cancelled') return;
       if (!isCurrent()) return;
-      const saved = await this.save({ ...snapshot, contextRef: String(job.input.displayContextRef ?? snapshot.contextRef) }, scope, isCurrent);
+      const refreshed = refreshIdentity(snapshot, typeof job.input.refreshVersion === 'string' ? job.input.refreshVersion : undefined);
+      const saved = await this.save({ ...refreshed, contextRef: String(job.input.displayContextRef ?? snapshot.contextRef) }, scope, isCurrent);
       if (!isCurrent()) return;
       const status = snapshot.coverage.status === 'complete' ? 'ready' : 'partial';
       if (await this.store.completeJob(scope, id, this.workerId, { snapshotId: saved.id, status })) {

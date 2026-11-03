@@ -154,5 +154,7 @@ export class GitHubAppAuth {
   invalidateInstallation(id: number) { for (const key of this.installationTokens.keys()) if (key.startsWith(`${id}:`)) this.installationTokens.delete(key); for (const [key, scope] of this.knownScopes) if (scope.installationId === id) this.knownScopes.delete(key); }
   /** Routing hints only, populated by live authorization; never use as permission to read. Resolve BEFORE invalidating. */
   knownRepositoryScopes(installationId: number, repositoryId?: number) { return [...this.knownScopes.values()].filter(scope => scope.installationId === installationId && (repositoryId === undefined || scope.repositoryId === repositoryId)).map(({ ownerId, repository }) => ({ ownerId, repository })); }
+  /** Numeric routing hints only. Call credentialsForOwner before any read or refresh. */
+  knownRepositoryBindings(installationId?: number, repositoryId?: number) { return [...this.knownScopes.values()].filter(scope => (installationId === undefined || scope.installationId === installationId) && (repositoryId === undefined || scope.repositoryId === repositoryId)).map(scope => ({ ...scope })); }
   invalidateRepository(installationId: number, repositoryId: number) { this.installationTokens.delete(`${installationId}:${repositoryId}`); for (const [key, scope] of this.knownScopes) if (scope.installationId === installationId && scope.repositoryId === repositoryId) this.knownScopes.delete(key); }
 }
