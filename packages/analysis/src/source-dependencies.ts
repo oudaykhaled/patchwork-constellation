@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import type { ChangeSource, Coverage, GraphSnapshot, ImportEdge } from '@patchwork/contracts';
+import { CoverageStatusSchema, type ChangeSource, type Coverage, type GraphSnapshot, type ImportEdge, type SourceImportFileCoverage } from '@patchwork/contracts';
 import { GitHubClient, parseRepository, type GitHubOptions } from '@patchwork/github';
 import { buildStaticGraph } from './static-graph';
 
 export interface SourceDependencyResult {
   schemaVersion: '1'; sourceId: string; headSha: string; contextSha: string;
   edges: ImportEdge[]; coverage: Coverage;
-  files: { fileId: string; path: string; status: string; reasons: string[] }[];
+  files: SourceImportFileCoverage[];
 }
 /**
  * An independent source-head layer, not a merged graph. Only direct-change outgoing
@@ -44,10 +44,10 @@ export async function analyzeSourceDependencies(snapshot: GraphSnapshot, source:
   const reasons = [...graph.coverage.reasons, 'Source-head dependency analysis covers outgoing imports of directly changed files only; it is not a merged code state or a complete source-head graph.'];
   if (unresolvedIdentities) reasons.push(`${unresolvedIdentities} source-head edges have targets without confirmed context/source identity and are omitted rather than guessing lineage.`);
   const headByPath = new Map(graph.nodes.map(node => [node.path, node]));
-  const files = source.files.map(file => {
+  const files: SourceImportFileCoverage[] = source.files.map(file => {
     const node = headByPath.get(file.path);
     if (file.status === 'removed' || file.status === 'deleted') return { fileId: file.fileId, path: file.path, status: 'excluded', reasons: ['Deleted file has no source-head blob; inspect context/base evidence separately.'] };
-    return { fileId: file.fileId, path: file.path, status: identityReasons.has(file.path) ? 'partial' : typeof node?.importCoverage === 'string' ? node.importCoverage : 'partial', reasons: [...(Array.isArray(node?.importReasons) ? node.importReasons as string[] : ['File is outside the bounded source-head inventory.']), ...(identityReasons.get(file.path) ?? [])] };
+    return { fileId: file.fileId, path: file.path, status: identityReasons.has(file.path) ? 'partial' : CoverageStatusSchema.safeParse(node?.importCoverage).data ?? 'partial', reasons: [...(Array.isArray(node?.importReasons) ? node.importReasons as string[] : ['File is outside the bounded source-head inventory.']), ...(identityReasons.get(file.path) ?? [])] };
   });
   return { schemaVersion: '1', sourceId: source.id, headSha: source.headSha, contextSha: snapshot.contextSha, edges, coverage: { ...graph.coverage, status: 'partial', reasons }, files };
 }

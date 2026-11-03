@@ -89,4 +89,3 @@ describe('deterministic repository hierarchy', () => {
     expect(hierarchy.groups.find(group => group.id === 'group:ungrouped')?.fileCount).toBe(1);
   });
 });
-

@@ -12,6 +12,8 @@ export interface StoredJob {
   input: Record<string, unknown>;
   snapshotId?: string;
   error?: string;
+  errorCode?: string;
+  retryable?: boolean;
   createdAt: string;
   updatedAt: string;
   attempts: number;
@@ -36,11 +38,16 @@ export interface SnapshotStore {
   getSnapshot(scope: StoreScope, id: string): Promise<GraphSnapshot | undefined>;
   deleteRepository(scope: StoreScope): Promise<void>;
   putJob(scope: StoreScope, job: StoredJob): Promise<void>;
+  /** Atomic insert without replacing an existing idempotency key. */
+  enqueueJob(scope: StoreScope, job: StoredJob): Promise<{ job: StoredJob; created: boolean }>;
+  /** Recovery discovery is explicitly owner-scoped and bounded. */
+  listJobs(ownerId: string, limit?: number): Promise<{ scope: StoreScope; job: StoredJob }[]>;
   getJob(scope: StoreScope, id: string): Promise<StoredJob | undefined>;
   /** Lease only jobs in this caller's scope; expired leases may be reclaimed. */
-  claimJob(scope: StoreScope, workerId: string, leaseMs?: number): Promise<StoredJob | undefined>;
+  claimJob(scope: StoreScope, workerId: string, leaseMs?: number, id?: string): Promise<StoredJob | undefined>;
+  updateJobProgress(scope: StoreScope, id: string, workerId: string, update: { status: 'fetching' | 'indexing' | 'grouping'; progress: number; message: string }): Promise<boolean>;
   renewLease(scope: StoreScope, id: string, workerId: string, leaseMs?: number): Promise<boolean>;
-  completeJob(scope: StoreScope, id: string, workerId: string, result: { snapshotId?: string; status: 'ready' | 'partial' | 'failed'; error?: string }): Promise<boolean>;
+  completeJob(scope: StoreScope, id: string, workerId: string, result: { snapshotId?: string; status: 'ready' | 'partial' | 'failed'; error?: string; errorCode?: string; retryable?: boolean }): Promise<boolean>;
   retryJob(scope: StoreScope, id: string, workerId: string, error: string, delayMs?: number): Promise<boolean>;
   cancelJob(scope: StoreScope, id: string): Promise<boolean>;
   /** Atomic insert; true is the first delivery, false is a replay. Call after signature verification. */
@@ -123,11 +130,21 @@ class MemoryStore implements SnapshotStore {
     const key = this.key(scope, id), entry = this.jobs.get(key); if (!entry) return undefined;
     if (entry.expires <= this.now()) { this.jobs.delete(key); return undefined; } return structuredClone(entry.value);
   }
-  async claimJob(scope: StoreScope, workerId: string, leaseMs = 30_000): Promise<StoredJob | undefined> {
+  async enqueueJob(scope: StoreScope, job: StoredJob): Promise<{ job: StoredJob; created: boolean }> {
+    const entry = this.jobs.get(this.key(scope, job.id));
+    if (entry && entry.expires > this.now() && !['failed', 'cancelled'].includes(entry.value.status)) return { job: structuredClone(entry.value), created: false };
+    // No await between capacity validation/insertion: competing local submissions cannot overwrite.
+    await this.putJob(scope, job); return { job: structuredClone(job), created: true };
+  }
+  async listJobs(ownerId: string, limit = 100): Promise<{ scope: StoreScope; job: StoredJob }[]> {
+    normalizeScope({ ownerId, repository: 'scope/check' }); limit = bounded(limit, 100, 100);
+    return [...this.jobs.values()].filter(entry => entry.scope.ownerId === ownerId && entry.expires > this.now() && !terminal.has(entry.value.status)).slice(0, limit).map(entry => ({ scope: structuredClone(entry.scope), job: structuredClone(entry.value) }));
+  }
+  async claimJob(scope: StoreScope, workerId: string, leaseMs = 30_000, id?: string): Promise<StoredJob | undefined> {
     const s = normalizeScope(scope); validateId(workerId); leaseMs = bounded(leaseMs, 30_000, 3_600_000); const now = this.now();
     for (const entry of this.jobs.values()) {
       const job = entry.value;
-      if (entry.scope.ownerId !== s.ownerId || entry.scope.repository !== s.repository || entry.expires <= now || terminal.has(job.status) || Date.parse(job.availableAt) > now || (job.leaseExpiresAt && Date.parse(job.leaseExpiresAt) > now)) continue;
+      if ((id && job.id !== id) || entry.scope.ownerId !== s.ownerId || entry.scope.repository !== s.repository || entry.expires <= now || terminal.has(job.status) || Date.parse(job.availableAt) > now || (job.leaseExpiresAt && Date.parse(job.leaseExpiresAt) > now)) continue;
       if (job.attempts >= job.maxAttempts) { job.status = 'failed'; job.error = 'Maximum attempts reached'; job.updatedAt = new Date(now).toISOString(); continue; }
       job.status = 'fetching'; job.attempts++; job.leaseOwner = workerId; job.leaseExpiresAt = new Date(now + leaseMs).toISOString(); job.updatedAt = new Date(now).toISOString(); return structuredClone(job);
     }
@@ -137,16 +154,22 @@ class MemoryStore implements SnapshotStore {
     const entry = this.jobs.get(this.key(scope, id)); const job = entry?.value;
     return entry && entry.expires > this.now() && job && !terminal.has(job.status) && job.leaseOwner === worker && job.leaseExpiresAt && Date.parse(job.leaseExpiresAt) > this.now() ? job : undefined;
   }
+  async updateJobProgress(scope: StoreScope, id: string, workerId: string, update: { status: 'fetching' | 'indexing' | 'grouping'; progress: number; message: string }): Promise<boolean> {
+    const job = this.leased(scope, id, workerId); if (!job) return false;
+    if (!['fetching', 'indexing', 'grouping'].includes(update.status) || !Number.isFinite(update.progress)) throw new Error('Invalid job progress');
+    job.progress = Math.max(job.progress, Math.min(99, Math.max(0, update.progress))); job.status = update.status;
+    job.input.progressMessage = update.message.slice(0, 500); job.updatedAt = new Date(this.now()).toISOString(); return true;
+  }
   async renewLease(scope: StoreScope, id: string, workerId: string, leaseMs = 30_000): Promise<boolean> {
     const job = this.leased(scope, id, workerId); if (!job) return false; job.leaseExpiresAt = new Date(this.now() + bounded(leaseMs, 30_000, 3_600_000)).toISOString(); job.updatedAt = new Date(this.now()).toISOString(); return true;
   }
-  async completeJob(scope: StoreScope, id: string, workerId: string, result: { snapshotId?: string; status: 'ready' | 'partial' | 'failed'; error?: string }): Promise<boolean> {
+  async completeJob(scope: StoreScope, id: string, workerId: string, result: { snapshotId?: string; status: 'ready' | 'partial' | 'failed'; error?: string; errorCode?: string; retryable?: boolean }): Promise<boolean> {
     const job = this.leased(scope, id, workerId); if (!job) return false;
-    job.status = result.status; job.progress = 100; job.snapshotId = result.snapshotId; job.error = result.error?.slice(0, 2_000); job.leaseOwner = undefined; job.leaseExpiresAt = undefined; job.updatedAt = new Date(this.now()).toISOString(); return true;
+    job.status = result.status; if (result.status !== 'failed') job.progress = 100; job.snapshotId = result.snapshotId; job.error = result.error?.slice(0, 2_000); job.errorCode = result.errorCode; job.retryable = result.retryable; job.leaseOwner = undefined; job.leaseExpiresAt = undefined; job.updatedAt = new Date(this.now()).toISOString(); return true;
   }
   async retryJob(scope: StoreScope, id: string, workerId: string, error: string, delayMs = 1_000): Promise<boolean> {
     const job = this.leased(scope, id, workerId); if (!job) return false;
-    job.status = job.attempts >= job.maxAttempts ? 'failed' : 'queued'; job.error = error.slice(0, 2_000); job.availableAt = new Date(this.now() + Math.max(0, Math.min(delayMs, 3_600_000))).toISOString(); job.leaseOwner = undefined; job.leaseExpiresAt = undefined; job.updatedAt = new Date(this.now()).toISOString(); return true;
+    job.status = job.attempts >= job.maxAttempts ? 'failed' : 'queued'; job.error = error.slice(0, 2_000); job.errorCode = 'RETRYABLE_ANALYSIS'; job.retryable = true; job.availableAt = new Date(this.now() + Math.max(0, Math.min(delayMs, 3_600_000))).toISOString(); job.leaseOwner = undefined; job.leaseExpiresAt = undefined; job.updatedAt = new Date(this.now()).toISOString(); return true;
   }
   async cancelJob(scope: StoreScope, id: string): Promise<boolean> {
     const entry = this.jobs.get(this.key(scope, id)); if (!entry || entry.expires <= this.now() || terminal.has(entry.value.status)) return false;
@@ -181,11 +204,32 @@ class PostgresStore implements SnapshotStore {
     const j = checkedJob(job); await this.pool.query('INSERT INTO patchwork_jobs(owner_id,repository,id,payload,status,available_at,lease_owner,lease_expires_at,attempts,max_attempts,expires_at) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,NOW()+$11*INTERVAL \'1 millisecond\') ON CONFLICT(owner_id,repository,id) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status,available_at=EXCLUDED.available_at,lease_owner=EXCLUDED.lease_owner,lease_expires_at=EXCLUDED.lease_expires_at,attempts=EXCLUDED.attempts,max_attempts=EXCLUDED.max_attempts,expires_at=EXCLUDED.expires_at', [...this.params(scope), j.id, JSON.stringify(j), j.status, j.availableAt, j.leaseOwner ?? null, j.leaseExpiresAt ?? null, j.attempts, j.maxAttempts, this.retention]);
   }
   async getJob(scope: StoreScope, id: string): Promise<StoredJob | undefined> { validateId(id); const r = await this.pool.query<{ payload: StoredJob }>('SELECT payload FROM patchwork_jobs WHERE owner_id=$1 AND repository=$2 AND id=$3 AND expires_at>NOW()', [...this.params(scope), id]); return r.rows[0]?.payload; }
-  async claimJob(scope: StoreScope, workerId: string, leaseMs = 30_000): Promise<StoredJob | undefined> {
+  async enqueueJob(scope: StoreScope, job: StoredJob): Promise<{ job: StoredJob; created: boolean }> {
+    const j = checkedJob(job), p = this.params(scope);
+    return this.transaction(async client => {
+      // Serialize submissions for one owner so queue capacity and idempotency are atomic.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [p[0]]);
+      const existing = await client.query<{ payload: StoredJob }>('SELECT payload FROM patchwork_jobs WHERE owner_id=$1 AND repository=$2 AND id=$3 AND expires_at>NOW()', [...p, j.id]);
+      if (existing.rows[0] && !['failed', 'cancelled'].includes(existing.rows[0].payload.status)) return { job: existing.rows[0].payload, created: false };
+      const count = await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM patchwork_jobs WHERE owner_id=$1 AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [p[0]]);
+      if (Number(count.rows[0]?.count) >= 100) throw new Error('Durable job capacity reached');
+      await client.query('INSERT INTO patchwork_jobs(owner_id,repository,id,payload,status,available_at,attempts,max_attempts,expires_at) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8,NOW()+$9*INTERVAL \'1 millisecond\') ON CONFLICT(owner_id,repository,id) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status,available_at=EXCLUDED.available_at,lease_owner=NULL,lease_expires_at=NULL,attempts=EXCLUDED.attempts,max_attempts=EXCLUDED.max_attempts,expires_at=EXCLUDED.expires_at WHERE patchwork_jobs.expires_at<=NOW() OR patchwork_jobs.status IN (\'failed\',\'cancelled\')', [...p, j.id, JSON.stringify(j), j.status, j.availableAt, j.attempts, j.maxAttempts, this.retention]);
+      return { job: j, created: true };
+    });
+  }
+  async listJobs(ownerId: string, limit = 100): Promise<{ scope: StoreScope; job: StoredJob }[]> {
+    normalizeScope({ ownerId, repository: 'scope/check' });
+    const result = await this.pool.query<{ repository: string; payload: StoredJob }>("SELECT repository,payload FROM patchwork_jobs WHERE owner_id=$1 AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled') ORDER BY available_at,id LIMIT $2", [ownerId, bounded(limit, 100, 100)]);
+    return result.rows.map(row => ({ scope: { ownerId, repository: row.repository }, job: row.payload }));
+  }
+  async claimJob(scope: StoreScope, workerId: string, leaseMs = 30_000, id?: string): Promise<StoredJob | undefined> {
     validateId(workerId); leaseMs = bounded(leaseMs, 30_000, 3_600_000); const p = this.params(scope);
     return this.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [p[0]]);
+      const active = await client.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM patchwork_jobs WHERE owner_id=$1 AND lease_expires_at>NOW() AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [p[0]]);
+      if (Number(active.rows[0]?.count) >= 2) return undefined;
       await client.query("UPDATE patchwork_jobs SET status='failed',payload=payload||jsonb_build_object('status','failed','error','Maximum attempts reached','updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled') AND attempts>=max_attempts AND (lease_expires_at IS NULL OR lease_expires_at<=NOW())", p);
-      const row = await client.query<{ id: string; payload: StoredJob }>("SELECT id,payload FROM patchwork_jobs WHERE owner_id=$1 AND repository=$2 AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled') AND attempts<max_attempts AND available_at<=NOW() AND (lease_expires_at IS NULL OR lease_expires_at<=NOW()) ORDER BY available_at,id FOR UPDATE SKIP LOCKED LIMIT 1", p);
+      const row = await client.query<{ id: string; payload: StoredJob }>("SELECT id,payload FROM patchwork_jobs WHERE owner_id=$1 AND repository=$2 AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled') AND attempts<max_attempts AND available_at<=NOW() AND (lease_expires_at IS NULL OR lease_expires_at<=NOW()) AND ($3::text IS NULL OR id=$3) ORDER BY available_at,id FOR UPDATE SKIP LOCKED LIMIT 1", [...p, id ?? null]);
       if (!row.rows[0]) return undefined;
       const result = await client.query<{ payload: StoredJob }>("UPDATE patchwork_jobs SET status='fetching',attempts=attempts+1,lease_owner=$4,lease_expires_at=NOW()+$5*INTERVAL '1 millisecond',payload=payload||jsonb_build_object('status','fetching','attempts',attempts+1,'leaseOwner',$4::text,'leaseExpiresAt',NOW()+$5*INTERVAL '1 millisecond','updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND id=$3 RETURNING payload", [...p, row.rows[0].id, workerId, leaseMs]); return result.rows[0]?.payload;
     });
@@ -193,12 +237,17 @@ class PostgresStore implements SnapshotStore {
   async renewLease(scope: StoreScope, id: string, workerId: string, leaseMs = 30_000): Promise<boolean> {
     validateId(id); validateId(workerId); const r = await this.pool.query("UPDATE patchwork_jobs SET lease_expires_at=NOW()+$5*INTERVAL '1 millisecond',payload=payload||jsonb_build_object('leaseExpiresAt',NOW()+$5*INTERVAL '1 millisecond','updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND id=$3 AND lease_owner=$4 AND lease_expires_at>NOW() AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [...this.params(scope), id, workerId, bounded(leaseMs, 30_000, 3_600_000)]); return r.rowCount === 1;
   }
-  async completeJob(scope: StoreScope, id: string, workerId: string, result: { snapshotId?: string; status: 'ready' | 'partial' | 'failed'; error?: string }): Promise<boolean> {
-    validateId(id); const patch = { status: result.status, progress: 100, snapshotId: result.snapshotId, error: result.error?.slice(0, 2_000) };
-    const r = await this.pool.query("UPDATE patchwork_jobs SET status=$5,lease_owner=NULL,lease_expires_at=NULL,payload=(payload-'leaseOwner'-'leaseExpiresAt')||$6::jsonb||jsonb_build_object('updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND id=$3 AND lease_owner=$4 AND lease_expires_at>NOW() AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [...this.params(scope), id, workerId, result.status, JSON.stringify(patch)]); return r.rowCount === 1;
+  async updateJobProgress(scope: StoreScope, id: string, workerId: string, update: { status: 'fetching' | 'indexing' | 'grouping'; progress: number; message: string }): Promise<boolean> {
+    validateId(id); validateId(workerId);
+    if (!['fetching', 'indexing', 'grouping'].includes(update.status) || !Number.isFinite(update.progress)) throw new Error('Invalid job progress');
+    const r = await this.pool.query("UPDATE patchwork_jobs SET status=$5,payload=payload||jsonb_build_object('status',$5::text,'progress',GREATEST((payload->>'progress')::numeric,$6::numeric),'input',(payload->'input')||jsonb_build_object('progressMessage',$7::text),'updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND id=$3 AND lease_owner=$4 AND lease_expires_at>NOW() AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [...this.params(scope), id, workerId, update.status, Math.min(99, Math.max(0, update.progress)), update.message.slice(0, 500)]); return r.rowCount === 1;
+  }
+  async completeJob(scope: StoreScope, id: string, workerId: string, result: { snapshotId?: string; status: 'ready' | 'partial' | 'failed'; error?: string; errorCode?: string; retryable?: boolean }): Promise<boolean> {
+    validateId(id); const patch = { status: result.status, ...(result.status !== 'failed' ? { progress: 100 } : {}), snapshotId: result.snapshotId, error: result.error?.slice(0, 2_000), errorCode: result.errorCode, retryable: result.retryable };
+    const r = await this.pool.query("UPDATE patchwork_jobs SET status=$5,lease_owner=NULL,lease_expires_at=NULL,payload=(payload-'leaseOwner'-'leaseExpiresAt'-'error'-'errorCode'-'retryable'-'snapshotId')||$6::jsonb||jsonb_build_object('updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND id=$3 AND lease_owner=$4 AND lease_expires_at>NOW() AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [...this.params(scope), id, workerId, result.status, JSON.stringify(patch)]); return r.rowCount === 1;
   }
   async retryJob(scope: StoreScope, id: string, workerId: string, error: string, delayMs = 1_000): Promise<boolean> {
-    validateId(id); const r = await this.pool.query("UPDATE patchwork_jobs SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'queued' END,available_at=NOW()+$5*INTERVAL '1 millisecond',lease_owner=NULL,lease_expires_at=NULL,payload=(payload-'leaseOwner'-'leaseExpiresAt')||jsonb_build_object('status',CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'queued' END,'error',$6::text,'availableAt',NOW()+$5*INTERVAL '1 millisecond','updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND id=$3 AND lease_owner=$4 AND lease_expires_at>NOW() AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [...this.params(scope), id, workerId, Math.max(0, Math.min(delayMs, 3_600_000)), error.slice(0, 2_000)]); return r.rowCount === 1;
+    validateId(id); const r = await this.pool.query("UPDATE patchwork_jobs SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'queued' END,available_at=NOW()+$5*INTERVAL '1 millisecond',lease_owner=NULL,lease_expires_at=NULL,payload=(payload-'leaseOwner'-'leaseExpiresAt')||jsonb_build_object('status',CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'queued' END,'error',$6::text,'errorCode','RETRYABLE_ANALYSIS','retryable',true,'availableAt',NOW()+$5*INTERVAL '1 millisecond','updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND id=$3 AND lease_owner=$4 AND lease_expires_at>NOW() AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [...this.params(scope), id, workerId, Math.max(0, Math.min(delayMs, 3_600_000)), error.slice(0, 2_000)]); return r.rowCount === 1;
   }
   async cancelJob(scope: StoreScope, id: string): Promise<boolean> { validateId(id); const r = await this.pool.query("UPDATE patchwork_jobs SET status='cancelled',lease_owner=NULL,lease_expires_at=NULL,payload=(payload-'leaseOwner'-'leaseExpiresAt')||jsonb_build_object('status','cancelled','updatedAt',NOW()) WHERE owner_id=$1 AND repository=$2 AND id=$3 AND expires_at>NOW() AND status NOT IN ('ready','partial','failed','cancelled')", [...this.params(scope), id]); return r.rowCount === 1; }
   async recordWebhookDelivery(scope: StoreScope, deliveryId: string): Promise<boolean> { validateId(deliveryId); const r = await this.pool.query('INSERT INTO patchwork_webhook_deliveries(owner_id,repository,delivery_id,expires_at) VALUES($1,$2,$3,NOW()+$4*INTERVAL \'1 millisecond\') ON CONFLICT(owner_id,repository,delivery_id) DO UPDATE SET expires_at=EXCLUDED.expires_at WHERE patchwork_webhook_deliveries.expires_at<=NOW() RETURNING delivery_id', [...this.params(scope), deliveryId, this.retention]); return r.rowCount === 1; }
@@ -224,3 +273,5 @@ export async function createStore(config: StoreConfig = {}): Promise<SnapshotSto
 }
 
 export { verifyWebhook, acceptWebhookDelivery } from './webhooks.js';
+export { createPostgresWebhookInbox, PostgresWebhookInbox, MemoryWebhookInbox } from './webhook-inbox.js';
+export type { WebhookInbox, RefreshTask, RefreshState, WebhookEnvelope, LeasedWebhook } from './webhook-inbox.js';

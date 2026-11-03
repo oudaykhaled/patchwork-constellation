@@ -1,0 +1,68 @@
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full reviewed commit SHA
+        required: true
+        type: string
+      stage:
+        description: Artifact promotion stage; this workflow does not deploy hosting
+        required: true
+        default: preview
+        type: choice
+        options: [preview, production]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.stage }}
+  cancel-in-progress: false
+
+jobs:
+  artifact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.stage }}
+    env:
+      RELEASE_COMMIT: ${{ inputs.commit }}
+      RELEASE_STAGE: ${{ inputs.stage }}
+      AI_ENABLED: 'false'
+      DATABASE_URL: ''
+      GITHUB_TOKEN: ''
+      TYPESAFE_API_KEY: ''
+      OPENAI_API_KEY: ''
+    steps:
+      - name: Validate dispatch inputs
+        shell: bash
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || exit 1
+          if [[ "$RELEASE_STAGE" == production && "$GITHUB_REF" != refs/heads/main ]]; then exit 1; fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4, same verified pin as checks
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require production source on default branch
+        if: inputs.stage == 'production'
+        run: git merge-base --is-ancestor "$RELEASE_COMMIT" origin/main
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test:release
+      - name: Enforce production acceptance
+        if: inputs.stage == 'production'
+        run: node scripts/release-gate.mjs .release/acceptance.json "$RELEASE_COMMIT"
+      - run: pnpm release:pack
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: constellation-${{ inputs.commit }}-${{ inputs.stage }}
+          path: release-artifacts/
+          retention-days: 14
+          if-no-files-found: error

@@ -1,5 +1,10 @@
 import type { ChangeSource, FileChange, FileNode, GraphSnapshot, Group, ImportEdge } from '@patchwork/contracts';
 
+/** Explicit synthetic declaration, never a default for an unanalyzed real repository. */
+export function authoredFileFacts(coverage: FileNode['importCoverage']): Pick<FileNode, 'fileKind' | 'presence' | 'status' | 'importCoverage' | 'importReasons' | 'externalImports' | 'unresolvedImports'> {
+  return { fileKind: 'file', presence: 'context', status: 'unchanged', importCoverage: coverage, importReasons: [coverage === 'complete' ? 'Complete within the author-declared synthetic dependency graph; no live parser result is claimed.' : 'Dependency analysis is intentionally incomplete in this authored fixture.'], externalImports: [], unresolvedImports: [] };
+}
+
 /** Authored, synthetic repository. None of these source links claims a real PR exists. */
 export const DEMO_REPOSITORY = {
   owner: 'patchwork-demo',
@@ -92,8 +97,8 @@ const sourceSpecs: SourceSpec[] = [
   { id: 'pr-251', kind: 'pr', title: 'Add subscription checkout', label: '#251', number: 251, url: `${DEMO_REPOSITORY.htmlUrl}/pull/251`, comparisonKind: 'merge-base', baseSha: SNAPSHOT_SHA, headSha: '2510000000000000000000000000000000000000', commitCount: 6 },
   { id: 'pr-256', kind: 'pr', title: 'Consolidate request validation', label: '#256', number: 256, url: `${DEMO_REPOSITORY.htmlUrl}/pull/256`, comparisonKind: 'merge-base', baseSha: SNAPSHOT_SHA, headSha: '2560000000000000000000000000000000000000', commitCount: 3 },
   { id: 'pr-259', kind: 'pr', title: 'Update docs navigation', label: '#259', number: 259, url: `${DEMO_REPOSITORY.htmlUrl}/pull/259`, comparisonKind: 'merge-base', baseSha: SNAPSHOT_SHA, headSha: '2590000000000000000000000000000000000000', commitCount: 2 },
-  { id: 'commit-a81f3c2', kind: 'commit', title: 'Rotate refresh tokens', label: 'a81f3c2', sha: 'a81f3c20000000000000000000000000000000000', baseSha: SNAPSHOT_SHA, headSha: 'a81f3c20000000000000000000000000000000000', comparisonKind: 'first-parent', url: `${DEMO_REPOSITORY.htmlUrl}/commit/a81f3c2` },
-  { id: 'commit-b72d9e1', kind: 'commit', title: 'Normalize input validation', label: 'b72d9e1', sha: 'b72d9e10000000000000000000000000000000000', baseSha: SNAPSHOT_SHA, headSha: 'b72d9e10000000000000000000000000000000000', comparisonKind: 'first-parent', url: `${DEMO_REPOSITORY.htmlUrl}/commit/b72d9e1` },
+  { id: 'commit-a81f3c2', kind: 'commit', title: 'Rotate refresh tokens', label: 'a81f3c2', sha: 'a81f3c2'.padEnd(40, '0'), baseSha: SNAPSHOT_SHA, headSha: 'a81f3c2'.padEnd(40, '0'), comparisonKind: 'first-parent', url: `${DEMO_REPOSITORY.htmlUrl}/commit/a81f3c2` },
+  { id: 'commit-b72d9e1', kind: 'commit', title: 'Normalize input validation', label: 'b72d9e1', sha: 'b72d9e1'.padEnd(40, '0'), baseSha: SNAPSHOT_SHA, headSha: 'b72d9e1'.padEnd(40, '0'), comparisonKind: 'first-parent', url: `${DEMO_REPOSITORY.htmlUrl}/commit/b72d9e1` },
 ];
 
 function changedFile(node: FileNode, index: number): FileChange {
@@ -110,6 +115,7 @@ function changedFile(node: FileNode, index: number): FileChange {
 
 function buildDemo(): GraphSnapshot {
   const nodes: FileNode[] = Object.entries(inventory).flatMap(([groupId, group]) => group.names.map((name, index) => ({
+    ...authoredFileFacts('complete'),
     id: `${groupId}-${index}`,
     path: group.prefix + name,
     groupId,
@@ -167,7 +173,7 @@ export function createScaleFixture(nodeCount = 2_000, edgeCount = 8_000, seed = 
   const next = () => { randomState ^= randomState << 13; randomState ^= randomState >>> 17; randomState ^= randomState << 5; return randomState >>> 0; };
   const groupCount = Math.min(12, nodeCount);
   const groups: Group[] = Array.from({ length: groupCount }, (_, i) => ({ id: `scale-group-${i}`, label: `Module ${i + 1}`, color: DEMO_GROUPS[i % DEMO_GROUPS.length]!.color, origin: 'rules' }));
-  const nodes: FileNode[] = Array.from({ length: nodeCount }, (_, i) => ({ id: `scale-file-${i}`, path: `src/module-${i % groupCount + 1}/file-${String(i).padStart(6, '0')}.ts`, groupId: groups[i % groupCount]!.id, sourceIds: [], language: 'TypeScript', presence: 'context', status: 'unchanged' }));
+  const nodes: FileNode[] = Array.from({ length: nodeCount }, (_, i) => ({ ...authoredFileFacts('complete'), id: `scale-file-${i}`, path: `src/module-${i % groupCount + 1}/file-${String(i).padStart(6, '0')}.ts`, groupId: groups[i % groupCount]!.id, sourceIds: [], language: 'TypeScript', presence: 'context', status: 'unchanged' }));
   const edges: ImportEdge[] = [];
   const seen = new Set<string>();
   const append = (from: number, to: number) => {

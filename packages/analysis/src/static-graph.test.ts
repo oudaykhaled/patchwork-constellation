@@ -1,6 +1,7 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { clearGitHubCacheForTests, GitHubClient } from '@patchwork/github';
-import type { ChangeSource, GraphSnapshot } from '@patchwork/contracts';
+import { FileNodeSchema, GraphSnapshotSchema, type ChangeSource, type GraphSnapshot } from '@patchwork/contracts';
 import { buildStaticGraph } from './static-graph';
 import { analyzeSourceDependencies, enrichSelectedSourceDependencies } from './source-dependencies';
 
@@ -57,6 +58,9 @@ describe('bounded static inventory', () => {
     expect(f.requests.some(url => url.includes('/src/link.ts') || url.includes('/src/large.ts') || url.includes('/generated/generated.ts'))).toBe(false);
     expect(graph.edges[0]).toMatchObject({ provenance: 'context', evidence: { path: 'src/main.ts', snapshotSha: CONTEXT, resolver: 'typescript-static-exports-v3' } });
     expect(graph.coverage.status).toBe('partial');
+    // The actual producer's classifications and metadata satisfy the shared wire schema.
+    for (const node of graph.nodes) expect(FileNodeSchema.safeParse(node).success, node.path).toBe(true);
+    expect(GraphSnapshotSchema.safeParse({ schemaVersion: '1', id: 'producer-contract', repository: { ...address, defaultBranch: 'main', htmlUrl: 'https://github.com/acme/tool' }, contextSha: CONTEXT, contextRef: 'main', ...graph, groups: graph.hierarchy.groups, sources: [], createdAt: '2026-11-03T00:00:00Z', mode: 'github' }).success).toBe(true);
   });
   it('resolves declarative package exports and applies repository mapping with manifest evidence', async () => {
     const f = fixture({
@@ -93,11 +97,11 @@ describe('independent selected-head dependency evidence', () => {
     const f = fixture({ 'src/app.ts': "import './added'; import './stable'; import './other';", 'src/added.ts': 'export const a=1;', 'src/stable.ts': 'export const s=1;', 'src/other.ts': 'export const x=1;' });
     const source: ChangeSource = { id: 'pr:1', kind: 'pr', number: 1, label: '#1', title: 'Add feature', url: 'https://github.com/acme/tool/pull/1', loaded: true, baseSha: CONTEXT, headSha: HEAD, comparisonKind: 'merge-base', files: [{ fileId: 'stable-app', path: 'src/app.ts', status: 'modified', additions: 3, deletions: 0 }, { fileId: 'new-added', path: 'src/added.ts', status: 'added', additions: 1, deletions: 0 }, { fileId: 'old-deleted', path: 'src/deleted.ts', status: 'removed', additions: 0, deletions: 1 }] };
     const snapshot: GraphSnapshot = { schemaVersion: '1', id: 'snapshot:test', contextSha: CONTEXT, contextRef: 'main', repository: { ...address, defaultBranch: 'main', htmlUrl: 'https://github.com/acme/tool' }, nodes: [
-      { id: 'stable-app', path: 'src/app.ts', groupId: 'group:src/app', sourceIds: ['pr:1'], blobSha: 'old-app' },
-      { id: 'new-added', path: 'src/added.ts', groupId: 'group:src/app', sourceIds: ['pr:1'], presence: 'source-only' },
-      { id: 'stable-target', path: 'src/stable.ts', groupId: 'group:src/app', sourceIds: [], blobSha: f.entries.find(entry => entry.path === 'src/stable.ts')!.sha },
-      { id: 'conflicting-other', path: 'src/other.ts', groupId: 'group:src/app', sourceIds: [], blobSha: 'unrelated-old-other' },
-      { id: 'old-deleted', path: 'src/deleted.ts', groupId: 'group:src/app', sourceIds: ['pr:1'], presence: 'deleted' },
+      { ...authoredFileFacts('complete'), id: 'stable-app', path: 'src/app.ts', groupId: 'group:src/app', sourceIds: ['pr:1'], blobSha: 'old-app' },
+      { ...authoredFileFacts('complete'), id: 'new-added', path: 'src/added.ts', groupId: 'group:src/app', sourceIds: ['pr:1'], presence: 'source-only' },
+      { ...authoredFileFacts('complete'), id: 'stable-target', path: 'src/stable.ts', groupId: 'group:src/app', sourceIds: [], blobSha: f.entries.find(entry => entry.path === 'src/stable.ts')!.sha },
+      { ...authoredFileFacts('complete'), id: 'conflicting-other', path: 'src/other.ts', groupId: 'group:src/app', sourceIds: [], blobSha: 'unrelated-old-other' },
+      { ...authoredFileFacts('complete'), id: 'old-deleted', path: 'src/deleted.ts', groupId: 'group:src/app', sourceIds: ['pr:1'], presence: 'deleted' },
     ], edges: [], groups: [{ id: 'group:src/app', label: 'App' }], sources: [source], coverage: { status: 'complete', reasons: [] }, createdAt: '2026-11-03T00:00:00Z', mode: 'github' };
     return { f, snapshot, source };
   }

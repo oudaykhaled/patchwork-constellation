@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "1",
+  "encoding": "svg-jpeg-envelope-v1",
+  "note": "SVG image elements embed exact original JPEG bytes; no image transformation or re-encoding.",
+  "files": [
+    {
+      "originalFile": "2000-in.jpg",
+      "svgFile": "2000-in.svg",
+      "width": 1600,
+      "height": 1000,
+      "mediaType": "image/jpeg",
+      "originalBytes": 253386,
+      "originalSha256": "6f78d40a0da91286c21ed5221a7a446a87eede23d4911efa21100f2f16ede502"
+    },
+    {
+      "originalFile": "2000-out.jpg",
+      "svgFile": "2000-out.svg",
+      "width": 1600,
+      "height": 1000,
+      "mediaType": "image/jpeg",
+      "originalBytes": 64440,
+      "originalSha256": "7e006aba7b04e2bbd7963b9158fb086a301466289d7082c06e1592fbd17cf6e3"
+    },
+    {
+      "originalFile": "2000-overview.jpg",
+      "svgFile": "2000-overview.svg",
+      "width": 1600,
+      "height": 1000,
+      "mediaType": "image/jpeg",
+      "originalBytes": 121035,
+      "originalSha256": "e94660f1e0808786bba4c909d01fe6413dc758b4d79a432de121a40c97e05f42"
+    },
+    {
+      "originalFile": "212-in.jpg",
+      "svgFile": "212-in.svg",
+      "width": 1600,
+      "height": 1000,
+      "mediaType": "image/jpeg",
+      "originalBytes": 74345,
+      "originalSha256": "f5d5ae801fcf758b845d971030f034d3f0e8fca3d4f0f271baf7f8171a8b6332"
+    },
+    {
+      "originalFile": "212-out.jpg",
+      "svgFile": "212-out.svg",
+      "width": 1600,
+      "height": 1000,
+      "mediaType": "image/jpeg",
+      "originalBytes": 51222,
+      "originalSha256": "25ba6ee88e5c72fd29f75a8b4c2b4b2e56efaabee09913747f111c1cff9e50dd"
+    },
+    {
+      "originalFile": "212-overview.jpg",
+      "svgFile": "212-overview.svg",
+      "width": 1600,
+      "height": 1000,
+      "mediaType": "image/jpeg",
+      "originalBytes": 67185,
+      "originalSha256": "1d0c1e0406290d45f7b630c0877ff3f18e333db69659d5f2989483878548dfc5"
+    }
+  ]
+}

@@ -45,4 +45,3 @@ Persist RepositoryInstallation, AuthorizedRepository, Snapshot, ChangeSourceVers
 DATA-01 is foundation. DATA-02/03 enable ingestion. DATA-04 defines change truth; DATA-05 builds dependency truth. DATA-06 gives useful deterministic islands. DATA-07 exposes progressive analysis to the graph UI. DATA-08 adds freshness. DATA-09 gates beta with correctness and access-control evidence.
 
 All technical limits were checked against official GitHub documentation on 2026-11-03. These are implementation requirements and planned choices, not completed software.
-

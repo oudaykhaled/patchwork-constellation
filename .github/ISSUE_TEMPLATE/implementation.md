@@ -24,3 +24,7 @@ State the boundary and relevant contract/design.
 
 ## Verification
 Describe meaningful tests, manual checks or measured evidence.
+
+- Required checks: `pnpm check`, `pnpm check:browser`.
+- Failure/recovery evidence:
+- Acceptance criteria that require live configuration or human review:
