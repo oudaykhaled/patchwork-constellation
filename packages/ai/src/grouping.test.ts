@@ -98,6 +98,13 @@ describe('baseline and provider boundary', () => {
     const result = await configured(transport, { jevModel: 'jev-1.14.0' }).propose(snapshot(), { enabled: true });
     expect(result.status).toBe('baseline'); expect(result.message).toContain('pinned Jev version');
   });
+  it('retains the baseline when an actual response model differs from its reviewed release', async () => {
+    const transport = providerMock({ responseModel: 'unreviewed-response-model' });
+    const result = await configured(transport).propose(snapshot(), { enabled: true });
+    expect(result.status).toBe('baseline');
+    expect(result.message).toContain('reviewed release');
+    expect(result.membership.a).toBe('auth');
+  });
   it('rejects arbitrary evidence IDs and markup rather than rendering them', () => {
     const evidence = { files: [{ id: 'a', path: 'a.ts', groupId: 'auth', evidenceId: 'file:a', imports: [] }], groups: [{ id: 'auth', label: 'Auth', paths: [] }], allowedEvidenceIds: ['file:a'] };
     expect(() => validateCandidateLabels({ groups: [{ groupId: 'auth', label: 'Auth', rationale: 'Evidence', evidenceIds: ['file:invented'] }] }, evidence)).toThrow('outside this snapshot');

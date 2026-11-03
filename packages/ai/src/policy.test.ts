@@ -87,6 +87,21 @@ describe('reservations, shared cancellation and retention', () => {
     const controller = new AbortController(); const result = service(transport).propose(snapshot(), { enabled: true, signal: controller.signal });
     controller.abort(); expect((await result).status).toBe('baseline'); expect(requestSignal.aborted).toBe(true); expect(transport).toHaveBeenCalledTimes(1);
   });
+  it('fences shared late work on purge without deleting another tenant cache', async () => {
+    let release!: () => void; let arrivals = 0;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const transport = mockProviders(async () => { if (++arrivals === 1) await held; });
+    const grouping = service(transport); const controller = new AbortController();
+    const first = grouping.propose(snapshot(), { enabled: true, tenantId: 'alice', signal: controller.signal });
+    const shared = grouping.propose(snapshot(), { enabled: true, tenantId: 'alice' });
+    const firstRevoked = expect(first).rejects.toMatchObject({ code: 'ACCESS_REVOKED' });
+    const sharedRevoked = expect(shared).rejects.toMatchObject({ code: 'ACCESS_REVOKED' });
+    const bob = await grouping.propose(snapshot(), { enabled: true, tenantId: 'bob' });
+    grouping.purgeRepository('example/repo', 'alice');
+    controller.abort(); release();
+    await Promise.all([firstRevoked, sharedRevoked]);
+    expect((await grouping.propose(snapshot(), { enabled: true, tenantId: 'bob' })).id).toBe(bob.id);
+  });
   it('expires caches/proposals and purges only the requested tenant without losing manual history', async () => {
     vi.useFakeTimers();
     const transport = mockProviders(); const grouping = service(transport, { proposalTtlMs: 1000 });

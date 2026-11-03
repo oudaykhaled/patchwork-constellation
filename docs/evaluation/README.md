@@ -29,6 +29,8 @@ Collection is bounded to 20 total requests, 12,000 input characters per request,
 
 Review all raw results against frozen goldens. Tune on the two tuning cases only, then freeze the threshold and evaluate the six holdout cases. Replay the final production pipeline and manual-override/failure checks, compare generated naming and Jev-gated results to baseline, assess calibration/selective accuracy and name usefulness, and reconcile usage against provider billing. Publish a redacted report with exact models and prompt/schema/policy/provider/pipeline versions. A second reviewer must inspect goldens, hard gates, costs, limitations and quality claims before rollout.
 
+The reviewed manifest records both `minimumConfidence` and `minimumEvidenceCoverage`. The application derives membership policy from that validated artifact, and rejects actual response models that differ from its reviewed model IDs. A separately supplied membership policy cannot bypass the release gate.
+
 ## Versioned approval and rollout
 
 `evaluation-gate.ts` maintains predeclared targets: membership agreement gain of at least 0.05, accepted selective accuracy at least 0.90, review rate at most 0.50, expected calibration error at most 0.15, evidence validity/stability exactly 1, p95 live latency at most 15 seconds and cost per case at most $0.05. These are proposed release targets; the authored run does not prove live targets met. Change targets before the next holdout run with an explicit review, not to make a failed run pass.
