@@ -11,6 +11,7 @@ import { GROUPING_SCHEMA_VERSION } from './contracts';
 export const EVALUATION_VERSIONS = {
   policy: AI_POLICY_VERSION, prompt: AI_PROMPT_VERSION, schema: AI_SCHEMA_VERSION, groupingSchema: GROUPING_SCHEMA_VERSION,
   providerContract: PROVIDER_CONTRACT_VERSION, labelPrompt: LABEL_PROMPT_VERSION, membershipPrompt: MEMBERSHIP_PROMPT_VERSION, pipeline: GROUPING_PIPELINE_VERSION,
+  evaluationHarness: 'live-production-replay-v2',
 } as const;
 export const QUALITY_TARGETS = {
   minimumAgreementGain: 0.05, minimumSelectiveAccuracy: 0.9, maximumReviewRate: 0.5,
@@ -26,7 +27,7 @@ const ManifestSchema = z.object({
   models: z.object({ jev: z.string().min(1).max(160), generative: z.string().min(1).max(160) }).strict(),
   minimumConfidence: score,
   minimumEvidenceCoverage: score,
-  review: z.object({ reviewer: z.string().min(1).max(160), independentReviewer: z.string().min(1).max(160), reviewedAt: timestamp, dataTermsReviewedAt: timestamp }).strict(),
+  review: z.object({ reviewer: z.string().trim().min(1).max(160), independentReviewer: z.string().trim().min(1).max(160), reviewedAt: timestamp, dataTermsReviewedAt: timestamp }).strict(),
   live: z.object({ kind: z.literal('live'), runId: z.string().min(1).max(160), completedAt: timestamp, actualModels: z.object({ jev: z.string().min(1).max(160), generative: z.string().min(1).max(160) }).strict(), cases: z.number().int().min(6), latencyP95Ms: z.number().finite().nonnegative(), costPerCaseUsd: z.number().finite().nonnegative() }).strict(),
   metrics: z.object({ baselineAgreement: score, gatedAgreement: score, selectiveAccuracy: score, reviewRate: score, calibrationError: score, evidenceValidity: score, stability: score }).strict(),
   hardGates: z.object({ unknownIdsRejected: z.literal(true), disabledNoTransfer: z.literal(true), manualOverridesPreserved: z.literal(true), failuresKeepBaseline: z.literal(true) }).strict(),
@@ -54,7 +55,7 @@ export function evaluateReleaseGate(value: unknown, config: { jevModel?: string;
   if (manifest.corpusDigest !== corpusDigest() || Object.entries(EVALUATION_VERSIONS).some(([key, version]) => manifest.versions[key as keyof typeof EVALUATION_VERSIONS] !== version)) return blocked('The evaluation is for a different corpus or analysis version. Re-evaluate before enabling AI + Jev.');
   if (manifest.models.jev !== config.jevModel || manifest.models.generative !== config.generativeModel || manifest.live.actualModels.jev !== manifest.models.jev || manifest.live.actualModels.generative !== manifest.models.generative || manifest.minimumConfidence !== config.minimumConfidence) return blocked('The evaluated models or decision threshold do not match this configuration.');
   const reviewed = Date.parse(manifest.review.reviewedAt); const live = Date.parse(manifest.live.completedAt); const expires = Date.parse(manifest.expiresAt);
-  if (reviewed > now || live > reviewed || Date.parse(manifest.review.dataTermsReviewedAt) > now || expires <= now || expires - reviewed > 90 * 24 * 60 * 60 * 1000 || now - live > 90 * 24 * 60 * 60 * 1000 || manifest.review.reviewer === manifest.review.independentReviewer) return blocked('The evaluation review is stale, incomplete or lacks independent sign-off.');
+  if (reviewed > now || live > reviewed || Date.parse(manifest.review.dataTermsReviewedAt) > live || expires <= now || expires - reviewed > 90 * 24 * 60 * 60 * 1000 || now - live > 90 * 24 * 60 * 60 * 1000 || manifest.review.reviewer.toLowerCase() === manifest.review.independentReviewer.toLowerCase()) return blocked('The evaluation review is stale, incomplete or lacks independent sign-off.');
   const metrics = manifest.metrics;
   if (metrics.gatedAgreement - metrics.baselineAgreement < QUALITY_TARGETS.minimumAgreementGain || metrics.selectiveAccuracy < QUALITY_TARGETS.minimumSelectiveAccuracy || metrics.reviewRate > QUALITY_TARGETS.maximumReviewRate || metrics.calibrationError > QUALITY_TARGETS.maximumCalibrationError || metrics.evidenceValidity !== 1 || metrics.stability !== 1 || manifest.live.latencyP95Ms > QUALITY_TARGETS.maximumLatencyP95Ms || manifest.live.costPerCaseUsd > QUALITY_TARGETS.maximumCostPerCaseUsd) return blocked('The live evaluation did not meet the declared quality, safety, latency or cost targets.');
   if (manifest.rollout.phase === 'canary' && manifest.rollout.percentage > 10) return blocked('Canary rollout is limited to ten percent until a general-release review.');

@@ -1,9 +1,11 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { decideMembership, discoverJevModel, generateLabels, type EvidenceBundle, type RequestBudget } from '../providers';
+import { randomUUID } from 'node:crypto';
+import { decideMembership, discoverJevModel, generateLabels, type RequestBudget } from '../providers';
 import { EVALUATION_CORPUS, corpusDigest } from './corpus';
 import { EVALUATION_VERSIONS, QUALITY_TARGETS } from '../evaluation-gate';
+import { evaluationContext } from './live-report';
 
 try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('The local environment file could not be loaded.'); }
 
@@ -30,11 +32,7 @@ const records = [];
 try {
   await discoverJevModel(jevKey, jevModel, budget);
   for (const item of EVALUATION_CORPUS) {
-    const evidence: EvidenceBundle = {
-      groups: item.groups.map(group => ({ ...group, paths: item.files.filter(file => file.baseline === group.id).map(file => file.path) })),
-      files: item.files.map(file => ({ id: file.id, path: file.path, groupId: file.baseline, evidenceId: `file:${file.id}`, imports: item.imports.filter(([source]) => source === file.id).map(([, target]) => target) })),
-      allowedEvidenceIds: item.files.map(file => `file:${file.id}`),
-    };
+    const { evidence, evidenceDigest } = evaluationContext(item);
     const start = performance.now();
     const generated = await generateLabels({ apiKey: generativeKey, model: generativeModel }, evidence, budget);
     estimatedCostUsd += (generated.usage.inputTokens * prices.generativeInput + generated.usage.outputTokens * prices.generativeOutput) / 1_000_000;
@@ -42,13 +40,13 @@ try {
     if (estimatedCostUsd >= ceiling) throw new Error('Evaluation spend stop reached before Jev.');
     const decided = await decideMembership({ apiKey: jevKey, model: jevModel }, evidence, generated.labels, budget);
     estimatedCostUsd += (decided.usage.inputTokens * prices.jevInput + decided.usage.outputTokens * prices.jevOutput) / 1_000_000;
-    records.push({ caseId: item.id, split: item.split, models: { jev: decided.model, generative: generated.model }, labels: generated.labels, decisions: decided.decisions, latencyMs: performance.now() - start, usage: { generative: generated.usage, jev: decided.usage } });
+    records.push({ caseId: item.id, split: item.split, evidenceDigest, models: { jev: decided.model, generative: generated.model }, labels: generated.labels, decisions: decided.decisions, latencyMs: performance.now() - start, usage: { generative: generated.usage, jev: decided.usage } });
     if (estimatedCostUsd >= ceiling) throw new Error('Evaluation spend stop reached; inspect the partial observations before any retry.');
   }
 } finally {
   const report = {
-    schemaVersion: '1', kind: 'live-raw-observations', status: 'unreviewed', completedAt: new Date().toISOString(),
-    corpusDigest: corpusDigest(), versions: EVALUATION_VERSIONS, targets: QUALITY_TARGETS,
+    schemaVersion: '2', kind: 'live-raw-observations', status: 'unreviewed', captureId: randomUUID(), completedAt: new Date().toISOString(),
+    corpusDigest: corpusDigest(), tuningDigest: corpusDigest('tuning'), versions: EVALUATION_VERSIONS, targets: QUALITY_TARGETS,
     models: { jev: jevModel, generative: generativeModel }, requests: budget.requests, requestLimit: budget.maxRequests,
     estimatedCostUsd, spendStopUsd: ceiling, costLimitation: 'Local usage-based stop is checked between requests. The acknowledged provider-account hard cap is required to bound a single-call overrun; pricing is operator supplied. This file is not a release manifest.',
     records,
