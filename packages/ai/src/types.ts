@@ -86,9 +86,22 @@ export interface GroupingRevision {
   lockedFileIds: string[];
   lockedGroupIds: string[];
   createdAt: string;
+  restoresRevisionId?: string;
+  change?: GroupingDelta;
+  reviewItems?: GroupingReviewItem[];
 }
 
-export interface GroupingResult { snapshot: GraphSnapshot; revision: GroupingRevision }
+export interface GroupingReviewItem { fileId: string; previousPath: string; reason: 'ambiguous-lineage' | 'removed-file' | 'deleted-file'; previousGroupId: string }
+export interface GroupingDelta {
+  schemaVersion: '1';
+  snapshotId: string;
+  fromRevisionId: string;
+  toRevisionId: string;
+  membershipChanges: { fileId: string; fromGroupId: string; toGroupId: string }[];
+  groupMappings: Record<string, string | null>;
+  renamedGroups: { groupId: string; fromLabel: string; toLabel: string }[];
+}
+export interface GroupingResult { snapshot: GraphSnapshot; revision: GroupingRevision; canUndo: boolean; delta?: GroupingDelta }
 export interface RequestContext { tenantId?: string; signal?: AbortSignal; expectedRevisionId?: string }
 export interface GroupingConfig {
   enabled?: boolean;
@@ -118,5 +131,6 @@ export interface GroupingConfig {
 }
 
 export class GroupingError extends Error {
+  get status() { return this.code === 'REVISION_CONFLICT' ? 409 : ['STORAGE_ERROR', 'STORAGE_BUSY'].includes(this.code) ? 503 : this.code === 'PROPOSAL_NOT_FOUND' ? 404 : 400; }
   constructor(public code: string, message: string) { super(message); this.name = 'GroupingError'; }
 }

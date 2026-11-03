@@ -1,6 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import type { GraphSnapshot, Group } from '@patchwork/contracts';
 import { decideMembership, discoverJevModel, generateLabels, plainText, type EvidenceBundle, type RequestBudget } from './providers';
 import { GroupingError, type GroupingConfig, type GroupingOperation, type GroupingProposal, type GroupingResult, type GroupingRevision, type RequestContext } from './types';
@@ -8,9 +6,13 @@ import { AI_FIELDS_SENT, AI_POLICY_VERSION, createExternalDataPolicy, externalGr
 import { ProviderBudgetLedger } from './budget';
 import { createGroupingEvidence, evaluateGroupingProposal, GROUPING_PIPELINE_VERSION } from './pipeline';
 import { evaluateReleaseGate, evaluationAllowsTenant, loadEvaluationManifest } from './evaluation-gate';
+import { historyMetadata, readGroupingHistory, writeGroupingHistory, type GroupingHistoryMetadata } from './history';
+import { groupingDelta, migrateManualOverrides } from './revisions';
 
 export * from './types';
 export * from './contracts';
+export { ownerGroupingStoragePath } from './history';
+export { groupingDelta } from './revisions';
 import { GroupingRevisionSchema, validateGroupingProposal, validateGroupingRevision } from './contracts';
 export { validateCandidateLabels, TypeSafeDecisionProvider, OpenAIGenerativeProvider, PROVIDER_CONTRACT_VERSION, LABEL_PROMPT_VERSION, MEMBERSHIP_PROMPT_VERSION, type DecisionProvider, type GenerativeProvider, type ChoiceQuestion, type ScoreQuestion, type NoulQuestion, type ChoiceAnswer, type ScoreAnswer, type NoulAnswer, type DecisionResponse, type DiscoveredModel } from './providers';
 export { createExternalDataPolicy, externalGroupingCacheKey } from './policy';
@@ -47,7 +49,6 @@ function makeEvidence(snapshot: GraphSnapshot, revision: GroupingRevision, maxFi
 }
 
 interface ProposalEntry { tenantId: string; repository: string; proposal: GroupingProposal; expires: number }
-interface HistoryEntry { key: string; revisions: GroupingRevision[] }
 interface SharedProposal { promise: Promise<GroupingProposal>; controller: AbortController; subscribers: number; settled: boolean; tenantId: string; repository: string }
 interface CachedProposal { proposal: GroupingProposal; expires: number; tenantId: string; repository: string }
 
@@ -55,11 +56,14 @@ interface CachedProposal { proposal: GroupingProposal; expires: number; tenantId
 export class GroupingService {
   private readonly config: Required<Pick<GroupingConfig, 'maxFiles' | 'maxRequestsPerAnalysis' | 'maxRequestsPerTenant' | 'maxInputCharacters' | 'minimumConfidence' | 'timeoutMs'>> & GroupingConfig;
   private readonly histories = new Map<string, GroupingRevision[]>();
+  private readonly historyMetadata = new Map<string, GroupingHistoryMetadata>();
+  private storageGeneration = 0;
   private readonly proposals = new Map<string, ProposalEntry>();
   private readonly cached = new Map<string, CachedProposal>();
   private readonly inflight = new Map<string, SharedProposal>();
   private readonly policy: ReturnType<typeof createExternalDataPolicy>;
   private readonly ledger: ProviderBudgetLedger;
+  private readonly scopeControllers = new Map<string, AbortController>();
   private active = 0;
 
   constructor(config: GroupingConfig = {}) {
@@ -91,6 +95,7 @@ export class GroupingService {
 
   current(snapshot: GraphSnapshot, context: RequestContext = {}): GroupingRevision {
     assertSnapshot(snapshot);
+    this.restore();
     const key = this.contextKey(snapshot, context.tenantId);
     const history = this.histories.get(key);
     if (history?.length) {
@@ -100,6 +105,11 @@ export class GroupingService {
       if (changedInventory) {
         // Source-only additions can extend an immutable context. Preserve known overrides;
         // new files use observed baseline membership and make existing proposals stale.
+        const oldIds = new Set(Object.keys(revision.membership));
+        const newIds = new Set(snapshot.nodes.map(node => node.id));
+        const previousFiles = this.historyMetadata.get(key)?.files ?? {};
+        const changedIds = new Set([...oldIds].filter(id => !newIds.has(id)).concat([...newIds].filter(id => !oldIds.has(id))));
+        const onlyOverlay = [...changedIds].every(id => { const node = snapshot.nodes.find(item => item.id === id); return ['source-only', 'added', 'deleted'].includes(node?.presence ?? previousFiles[id]?.presence ?? ''); });
         const reconciled = history.map<GroupingRevision>(previous => {
           const membership = ownRecord();
           const groups = copy(previous.groups);
@@ -113,14 +123,17 @@ export class GroupingService {
             canonicalMembership[node.id] = previous.canonicalHierarchy.membership[node.id] ?? node.groupId;
             if (!canonicalGroups.some(group => group.id === canonicalMembership[node.id])) canonicalGroups.push(copy(snapshot.groups.find(group => group.id === canonicalMembership[node.id])!));
           }
-          return { ...previous, groups, membership, canonicalHierarchy: { groups: canonicalGroups, membership: canonicalMembership }, lockedFileIds: previous.lockedFileIds.filter(id => fileIds.has(id)), secondaryTags: previous.secondaryTags ? Object.fromEntries(Object.entries(previous.secondaryTags).filter(([id]) => fileIds.has(id))) : undefined };
+          return { ...previous, groups, membership, canonicalHierarchy: { groups: canonicalGroups, membership: canonicalMembership }, decisions: previous.decisions?.filter(decision => fileIds.has(decision.fileId)), lockedFileIds: previous.lockedFileIds.filter(id => fileIds.has(id)), secondaryTags: previous.secondaryTags ? Object.fromEntries(Object.entries(previous.secondaryTags).filter(([id]) => fileIds.has(id))) : undefined };
         });
         const latest = reconciled[reconciled.length - 1]!;
-        revision = { ...latest, id: `reconcile-${digest({ parent: latest.id, membership: latest.membership }).slice(0, 20)}`, createdAt: new Date().toISOString() };
+        revision = onlyOverlay ? latest : { ...latest, id: `reconcile-${digest({ parent: latest.id, membership: latest.membership }).slice(0, 20)}`, createdAt: new Date().toISOString() };
         // An overlay refresh is not an extra undo step. Earlier manual states receive
         // the same new inventory, so undo remains meaningful after a source toggle.
         reconciled[reconciled.length - 1] = revision;
         this.histories.set(key, reconciled);
+        const previousMetadata = this.historyMetadata.get(key);
+        this.historyMetadata.set(key, historyMetadata(snapshot, context.tenantId));
+        try { this.persist(); } catch (error) { this.histories.set(key, history); if (previousMetadata) this.historyMetadata.set(key, previousMetadata); else this.historyMetadata.delete(key); throw error; }
       }
       assertMembership(snapshot, revision.groups, revision.membership);
       return copy(validateGroupingRevision(revision, snapshot));
@@ -131,6 +144,21 @@ export class GroupingService {
       snapshotId: snapshot.id, parentRevisionId: null, origin: 'rules', groups: copy(snapshot.groups), membership: membershipOf(snapshot), lockedFileIds: [], lockedGroupIds: [], createdAt: new Date().toISOString(),
     };
     this.histories.set(key, [baseline]);
+    const metadata = historyMetadata(snapshot, context.tenantId);
+    this.historyMetadata.set(key, metadata);
+    // Only a current live scope can select its own prior context. A snapshot ID
+    // or path supplied by another account never identifies an override source.
+    const prior = [...this.historyMetadata].filter(([priorKey, value]) => priorKey !== key && value.tenantId === metadata.tenantId && value.repository === metadata.repository).map(([priorKey, value]) => ({ metadata: value, revision: this.histories.get(priorKey)?.at(-1) })).filter((entry): entry is { metadata: GroupingHistoryMetadata; revision: GroupingRevision } => Boolean(entry.revision?.lockedFileIds.length || entry.revision?.lockedGroupIds.length)).sort((a, b) => b.revision.createdAt.localeCompare(a.revision.createdAt))[0];
+    if (prior) {
+      const migrated = migrateManualOverrides(snapshot, baseline, prior.revision, prior.metadata);
+      const revision: GroupingRevision = { ...baseline, ...migrated, id: `migration-${digest({ from: prior.revision.id, to: snapshot.id, membership: migrated.membership }).slice(0, 20)}`, parentRevisionId: baseline.id, origin: 'manual', provenance: { ...baseline.provenance, source: 'manual' } };
+      if (migrated.lockedFileIds.length || migrated.lockedGroupIds.length || migrated.reviewItems.length) {
+        validateGroupingRevision(revision, snapshot);
+        this.histories.set(key, [baseline, revision]);
+        try { this.persist(); } catch (error) { this.histories.delete(key); this.historyMetadata.delete(key); throw error; }
+        return copy(revision);
+      }
+    }
     this.trimHistories();
     return copy(validateGroupingRevision(baseline, snapshot));
   }
@@ -138,18 +166,30 @@ export class GroupingService {
   /** Reapply accepted/manual grouping after a source overlay is refreshed. */
   view(snapshot: GraphSnapshot, context: RequestContext = {}): GroupingResult {
     const revision = this.current(snapshot, context);
-    return { snapshot: this.snapshotWith(snapshot, revision), revision };
+    return { snapshot: this.snapshotWith(snapshot, revision), revision, canUndo: (this.histories.get(this.contextKey(snapshot, context.tenantId))?.length ?? 0) > 1 };
   }
 
   async propose(snapshot: GraphSnapshot, options: RequestContext & { enabled?: boolean } = {}): Promise<GroupingProposal> {
     this.pruneExternalData();
     const revision = this.current(snapshot, options);
+    const scopeKey = digest({ tenant: options.tenantId ?? 'local', repository: repositoryKey(snapshot).toLowerCase() });
+    let scopeController = this.scopeControllers.get(scopeKey);
+    if (!scopeController) {
+      scopeController = new AbortController(); this.scopeControllers.set(scopeKey, scopeController);
+      while (this.scopeControllers.size > MAX_CONTEXTS) { const oldest = this.scopeControllers.keys().next().value!; this.scopeControllers.get(oldest)?.abort(new DOMException('Grouping context expired', 'AbortError')); this.scopeControllers.delete(oldest); }
+    }
+    const fence = scopeController;
+    const generation = this.storageGeneration;
+    const assertScope = () => {
+      if (fence.signal.aborted || this.scopeControllers.get(scopeKey) !== fence) throw new GroupingError('ACCESS_REVOKED', 'Repository grouping access was removed. Reconnect before retrying.');
+      if (this.config.storagePath && readGroupingHistory(this.config.storagePath).generation !== generation) throw new GroupingError('REVISION_CONFLICT', 'Grouping history changed while this proposal was running. Request a fresh preview.');
+    };
     const { evidence, excludedFiles } = makeEvidence(snapshot, revision, this.config.maxFiles, this.policy);
-    const baseline = (message: string): GroupingProposal => validateGroupingProposal({
+    const baseline = (message: string): GroupingProposal => { assertScope(); return validateGroupingProposal({
       schemaVersion: '1', provenance: copy(revision.provenance),
       id: `baseline-${randomUUID()}`, snapshotId: snapshot.id, parentRevisionId: revision.id, status: 'baseline', origin: revision.origin, groups: copy(revision.groups), membership: copy(revision.membership), decisions: [], message, createdAt: new Date().toISOString(),
       dataPolicy: { fieldsSent: [], excludedFiles, analyzedFiles: 0 },
-    }, snapshot, revision.groups.map(group => group.id));
+    }, snapshot, revision.groups.map(group => group.id)); };
     if (!options.enabled || !this.capabilities().available) return baseline(this.capabilities().message);
     if (!evaluationAllowsTenant(this.capabilities().evaluation, options.tenantId ?? 'local')) return baseline('AI + Jev is in a limited canary. The current grouping is retained for this session.');
     if (options.signal?.aborted) return baseline('Grouping analysis was cancelled. The current grouping is retained.');
@@ -168,13 +208,14 @@ export class GroupingService {
     const startedAt = Date.now();
     const metrics = { requests: 0 };
     const entry: SharedProposal = { promise: Promise.resolve(null as unknown as GroupingProposal), controller, subscribers: 0, settled: false, tenantId, repository };
-    const work = this.runProviders(snapshot, revision, evidence, excludedFiles, { ...options, signal: controller.signal }, metrics).then(proposal => {
+    const work = this.runProviders(snapshot, revision, evidence, excludedFiles, { ...options, signal: AbortSignal.any([controller.signal, fence.signal]) }, metrics).then(proposal => {
+      assertScope();
       if (controller.signal.aborted) return baseline('Grouping analysis was cancelled. The current grouping is retained.');
       this.cached.set(cacheKey, { proposal: copy(proposal), expires: Date.now() + (this.config.proposalTtlMs ?? 900_000), tenantId, repository });
       if (this.cached.size > 64) this.cached.delete(this.cached.keys().next().value!);
       this.registerProposal(snapshot, proposal, options);
       return proposal;
-    }).catch((error: unknown) => baseline(error instanceof GroupingError ? `${error.message} The current grouping is retained.` : 'Grouping analysis failed. The current grouping is retained.')).then(proposal => {
+    }).catch((error: unknown) => { assertScope(); return baseline(error instanceof GroupingError ? `${error.message} The current grouping is retained.` : 'Grouping analysis failed. The current grouping is retained.'); }).then(proposal => {
       this.telemetry(proposal, Date.now() - startedAt, false, metrics.requests);
       return proposal;
     }).finally(() => {
@@ -211,7 +252,7 @@ export class GroupingService {
     if (signal?.aborted) { entry.subscribers--; if (!entry.subscribers && !entry.settled) entry.controller.abort(); return cancelled(); }
     let listener: (() => void) | undefined;
     try {
-      const proposal = signal ? await Promise.race([entry.promise, new Promise<GroupingProposal>(resolve => { listener = () => resolve(cancelled()); signal.addEventListener('abort', listener, { once: true }); })]) : await entry.promise;
+      const proposal = signal ? await Promise.race([entry.promise, new Promise<GroupingProposal>((resolve, reject) => { listener = () => { try { resolve(cancelled()); } catch (error) { reject(error); } }; signal.addEventListener('abort', listener, { once: true }); })]) : await entry.promise;
       return copy(proposal);
     } finally {
       if (listener) signal?.removeEventListener('abort', listener);
@@ -223,18 +264,55 @@ export class GroupingService {
     try { this.config.onTelemetry?.({ event: 'grouping', outcome: proposal.status, durationMs, requests: cacheHit ? 0 : requests, inputTokens: cacheHit ? 0 : proposal.usage?.inputTokens ?? null, outputTokens: cacheHit ? 0 : proposal.usage?.outputTokens ?? null, cacheHit }); } catch { /* A metrics sink cannot interrupt the review flow. */ }
   }
 
+  /** Called only after the server revokes the same owner/repository authority. */
+  purgeRepository(repository: string, tenantId = 'local'): void {
+    this.restore();
+    const normalized = repository.toLowerCase();
+    const scopeKey = digest({ tenant: tenantId, repository: normalized });
+    this.scopeControllers.get(scopeKey)?.abort(new DOMException('Repository access revoked', 'AbortError'));
+    this.scopeControllers.delete(scopeKey);
+    const histories = new Map(this.histories); const metadata = new Map(this.historyMetadata);
+    const removedSnapshots = new Set<string>();
+    for (const [key, value] of this.historyMetadata) if (value.tenantId === tenantId && value.repository === normalized) { removedSnapshots.add(value.snapshotId); this.histories.delete(key); this.historyMetadata.delete(key); }
+    // Persist the generation change even if this process only had a proposal.
+    // A stale process can no longer commit against its previous CAS generation.
+    try { this.persist(); } catch (error) { this.histories.clear(); this.historyMetadata.clear(); for (const [key, value] of histories) this.histories.set(key, value); for (const [key, value] of metadata) this.historyMetadata.set(key, value); throw error; }
+    for (const [id, entry] of this.proposals) if (entry.tenantId === tenantId && entry.repository.toLowerCase() === normalized) { removedSnapshots.add(entry.proposal.snapshotId); this.proposals.delete(id); }
+    this.clearExternalData({ tenantId, repository });
+  }
+
   apply(snapshot: GraphSnapshot, proposalId: string, context: RequestContext = {}): GroupingResult {
     const entry = this.proposals.get(proposalId);
     const tenant = context.tenantId ?? 'local';
     if (!entry || entry.expires < Date.now() || entry.tenantId !== tenant || entry.repository !== repositoryKey(snapshot) || entry.proposal.snapshotId !== snapshot.id) throw new GroupingError('PROPOSAL_NOT_FOUND', 'This proposal is unavailable for this repository session.');
     const current = this.current(snapshot, context);
-    if (entry.proposal.parentRevisionId !== current.id) throw new GroupingError('REVISION_CONFLICT', 'Grouping changed since this proposal. Request a new preview.');
+    if ((context.expectedRevisionId && context.expectedRevisionId !== current.id) || entry.proposal.parentRevisionId !== current.id || digest(Object.keys(entry.proposal.membership).sort()) !== digest(Object.keys(current.membership).sort())) throw new GroupingError('REVISION_CONFLICT', 'Grouping changed since this proposal. Request a new preview.');
     const revision: GroupingRevision = {
-      ...current, id: `grouping-${randomUUID()}`, parentRevisionId: current.id, origin: 'ai-jev', provenance: { snapshotId: snapshot.id, contextSha: snapshot.contextSha, source: 'model', models: entry.proposal.models }, groups: copy(entry.proposal.groups), membership: copy(entry.proposal.membership), createdAt: new Date().toISOString(),
+      ...current, id: `grouping-${randomUUID()}`, parentRevisionId: current.id, origin: 'ai-jev', provenance: { snapshotId: snapshot.id, contextSha: snapshot.contextSha, source: 'model', models: entry.proposal.models }, groups: copy(entry.proposal.groups), membership: copy(entry.proposal.membership), decisions: copy(entry.proposal.decisions), models: copy(entry.proposal.models), createdAt: new Date().toISOString(),
     };
     const result = this.commit(snapshot, revision, context);
     this.proposals.delete(proposalId);
     return result;
+  }
+
+  /** A scoped proposal diff changes no accepted graph state. */
+  diff(snapshot: GraphSnapshot, proposalId?: string, context: RequestContext = {}) {
+    const current = this.current(snapshot, context);
+    if (!proposalId) return groupingDelta(snapshot.id, current, current);
+    const entry = this.proposals.get(proposalId);
+    if (!entry || entry.expires < Date.now() || entry.tenantId !== (context.tenantId ?? 'local') || entry.repository !== repositoryKey(snapshot) || entry.proposal.snapshotId !== snapshot.id) throw new GroupingError('PROPOSAL_NOT_FOUND', 'This proposal is unavailable for this repository session.');
+    if (entry.proposal.parentRevisionId !== current.id || digest(Object.keys(entry.proposal.membership).sort()) !== digest(Object.keys(current.membership).sort())) throw new GroupingError('REVISION_CONFLICT', 'Grouping changed since this proposal. Request a new preview.');
+    return groupingDelta(snapshot.id, current, entry.proposal);
+  }
+
+  reject(snapshot: GraphSnapshot, proposalId: string, context: RequestContext = {}): GroupingResult {
+    const current = this.current(snapshot, context);
+    if (context.expectedRevisionId && context.expectedRevisionId !== current.id) throw new GroupingError('REVISION_CONFLICT', 'Grouping changed. Review the latest revision before rejecting.');
+    this.diff(snapshot, proposalId, context);
+    this.proposals.delete(proposalId);
+    // A later preview must receive a new ID rather than resurrect this rejected proposal.
+    for (const [key, entry] of this.cached) if (entry.proposal.id === proposalId) this.cached.delete(key);
+    return this.view(snapshot, context);
   }
 
   mutate(snapshot: GraphSnapshot, operation: GroupingOperation, context: RequestContext = {}): GroupingResult {
@@ -277,7 +355,11 @@ export class GroupingService {
       for (const id of operation.fileIds) { membership[id] = destination.id; lockedFiles.add(id); }
       lockedGroups.add(destination.id);
     } else throw new GroupingError('INVALID_OPERATION', 'Unsupported grouping operation.');
-    return this.commit(snapshot, { ...current, id: `grouping-${randomUUID()}`, parentRevisionId: current.id, origin: 'manual', provenance: { snapshotId: snapshot.id, contextSha: snapshot.contextSha, source: 'manual' }, groups, membership, lockedFileIds: [...lockedFiles], lockedGroupIds: [...lockedGroups].filter(id => groups.some(group => group.id === id)), createdAt: new Date().toISOString() }, context);
+    // Semantic merge/split cannot leave a parent pointer to a removed island.
+    // Physical hierarchy remains independently preserved in canonicalHierarchy.
+    const survivingGroupIds = new Set(groups.map(group => group.id));
+    for (const group of groups) if (group.parentId && (!survivingGroupIds.has(group.parentId) || group.parentId === group.id)) delete group.parentId;
+    return this.commit(snapshot, { ...current, id: `grouping-${randomUUID()}`, parentRevisionId: current.id, origin: 'manual', provenance: { snapshotId: snapshot.id, contextSha: snapshot.contextSha, source: 'manual' }, groups, membership, decisions: current.decisions?.filter(decision => !lockedFiles.has(decision.fileId) && !lockedGroups.has(decision.groupId) && groups.some(group => group.id === decision.groupId) && membership[decision.fileId] === decision.groupId), lockedFileIds: [...lockedFiles], lockedGroupIds: [...lockedGroups].filter(id => groups.some(group => group.id === id)), createdAt: new Date().toISOString() }, context);
   }
 
   undo(snapshot: GraphSnapshot, context: RequestContext = {}): GroupingResult {
@@ -287,10 +369,12 @@ export class GroupingService {
     const history = this.histories.get(key)!;
     if (history.length < 2) throw new GroupingError('NOTHING_TO_UNDO', 'There is no earlier grouping revision in this session.');
     const previous = history[history.length - 2]!;
-    assertMembership(snapshot, previous.groups, previous.membership);
-    this.histories.set(key, history.slice(0, -1));
+    const restored: GroupingRevision = { ...copy(previous), id: `undo-${randomUUID()}`, parentRevisionId: current.id, restoresRevisionId: previous.id, createdAt: new Date().toISOString() };
+    restored.change = groupingDelta(snapshot.id, current, restored);
+    validateGroupingRevision(restored, snapshot);
+    this.histories.set(key, [...history.slice(0, -2), restored]);
     try { this.persist(); } catch (error) { this.histories.set(key, history); throw error; }
-    return { snapshot: this.snapshotWith(snapshot, previous), revision: copy(previous) };
+    return { snapshot: this.snapshotWith(snapshot, restored), revision: copy(restored), delta: restored.change, canUndo: history.length > 2 };
   }
 
   private async runProviders(snapshot: GraphSnapshot, revision: GroupingRevision, evidence: EvidenceBundle, excludedFiles: number, context: RequestContext, metrics: { requests: number }): Promise<GroupingProposal> {
@@ -338,35 +422,26 @@ export class GroupingService {
     assertMembership(snapshot, revision.groups, revision.membership);
     const key = this.contextKey(snapshot, context.tenantId);
     const previous = this.histories.get(key)!;
+    const delta = groupingDelta(snapshot.id, previous.at(-1)!, revision);
+    revision.change = delta;
     this.histories.set(key, [...previous, copy(revision)].slice(-MAX_REVISIONS));
     this.trimHistories();
     try { this.persist(); } catch (error) { this.histories.set(key, previous); throw error; }
-    return { snapshot: this.snapshotWith(snapshot, revision), revision: copy(revision) };
+    return { snapshot: this.snapshotWith(snapshot, revision), revision: copy(revision), delta, canUndo: true };
   }
-  private trimHistories() { while (this.histories.size > MAX_CONTEXTS) this.histories.delete(this.histories.keys().next().value!); }
+  private trimHistories() { while (this.histories.size > MAX_CONTEXTS) { const key = this.histories.keys().next().value!; this.histories.delete(key); this.historyMetadata.delete(key); } }
   private persist() {
     if (!this.config.storagePath) return;
-    const target = this.config.storagePath;
-    try {
-      mkdirSync(dirname(target), { recursive: true });
-      const data = JSON.stringify({ version: 1, histories: [...this.histories].map(([key, revisions]) => ({ key, revisions })) });
-      if (Buffer.byteLength(data) > 20_000_000) throw new Error('size');
-      const temporary = `${target}.${randomUUID()}.tmp`;
-      writeFileSync(temporary, data, { encoding: 'utf8', mode: 0o600 });
-      renameSync(temporary, target);
-    } catch { throw new GroupingError('STORAGE_ERROR', 'Grouping changes could not be saved. The previous revision is retained.'); }
+    this.storageGeneration = writeGroupingHistory(this.config.storagePath, this.storageGeneration, [...this.histories].map(([key, revisions]) => ({ key, revisions, metadata: this.historyMetadata.get(key) })));
   }
   private restore() {
-    if (!this.config.storagePath || !existsSync(this.config.storagePath)) return;
-    try {
-      const contents = readFileSync(this.config.storagePath, 'utf8');
-      if (Buffer.byteLength(contents) > 20_000_000) throw new Error('size');
-      const data = JSON.parse(contents) as { version: number; histories: HistoryEntry[] };
-      if (data.version !== 1 || !Array.isArray(data.histories) || data.histories.length > MAX_CONTEXTS) throw new Error('shape');
-      for (const entry of data.histories) {
-        if (typeof entry.key !== 'string' || !Array.isArray(entry.revisions) || !entry.revisions.length || entry.revisions.length > MAX_REVISIONS || entry.revisions.some(revision => typeof revision.id !== 'string' || !Array.isArray(revision.groups) || !revision.membership || !Array.isArray(revision.lockedFileIds) || !Array.isArray(revision.lockedGroupIds))) throw new Error('shape');
-        this.histories.set(entry.key, entry.revisions.map(revision => { const result = GroupingRevisionSchema.safeParse(revision); if (!result.success) throw new Error('shape'); return result.data as GroupingRevision; }));
-      }
-    } catch { throw new GroupingError('STORAGE_ERROR', 'Saved grouping history is invalid. Restore a valid local data file before starting.'); }
+    if (!this.config.storagePath) return;
+    const data = readGroupingHistory(this.config.storagePath);
+    if (data.generation === this.storageGeneration) return;
+    const entries = data.histories.map(entry => ({ ...entry, revisions: entry.revisions.map(revision => { const result = GroupingRevisionSchema.safeParse(revision); if (!result.success) throw new GroupingError('STORAGE_ERROR', 'Saved grouping revision is invalid. Restore a valid backup before editing.'); return result.data as GroupingRevision; }) }));
+    this.histories.clear(); this.historyMetadata.clear();
+    this.proposals.clear(); this.cached.clear();
+    for (const entry of entries) { this.histories.set(entry.key, entry.revisions); if (entry.metadata) this.historyMetadata.set(entry.key, entry.metadata); }
+    this.storageGeneration = data.generation;
   }
 }

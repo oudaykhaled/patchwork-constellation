@@ -26,6 +26,14 @@ export const MembershipDecisionSchema = z.object({
   rationale: boundedText(1000),
 }).passthrough();
 
+export const GroupingDeltaSchema = z.object({
+  schemaVersion: z.literal('1'), snapshotId: identity, fromRevisionId: identity, toRevisionId: identity,
+  membershipChanges: z.array(z.object({ fileId: identity, fromGroupId: z.string().max(500), toGroupId: identity })),
+  groupMappings: z.record(identity, identity.nullable()),
+  renamedGroups: z.array(z.object({ groupId: identity, fromLabel: boundedText(500), toLabel: boundedText(500) })),
+});
+export const GroupingReviewItemSchema = z.object({ fileId: identity, previousPath: z.string().min(1).max(4096), previousGroupId: identity, reason: z.enum(['ambiguous-lineage', 'removed-file', 'deleted-file']) });
+
 export const GroupingRevisionSchema = z.object({
   schemaVersion: z.literal(GROUPING_SCHEMA_VERSION),
   status: z.literal('accepted'),
@@ -43,6 +51,9 @@ export const GroupingRevisionSchema = z.object({
   lockedFileIds: z.array(identity),
   lockedGroupIds: z.array(identity),
   createdAt: z.string().datetime(),
+  restoresRevisionId: identity.optional(),
+  change: GroupingDeltaSchema.optional(),
+  reviewItems: z.array(GroupingReviewItemSchema).optional(),
 }).passthrough();
 
 export const GroupingProposalSchema = z.object({

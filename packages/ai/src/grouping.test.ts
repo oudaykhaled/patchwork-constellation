@@ -149,6 +149,52 @@ describe('baseline and provider boundary', () => {
 });
 
 describe('revision and override invariants', () => {
+  it('fences a late provider result after repository purge instead of restoring private proposals', async () => {
+    const transport = providerMock(); let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const delayed = vi.fn(async (input: string | URL | Request, init?: RequestInit) => { if (String(input).endsWith('/v1/systemone')) await gate; return transport(input, init); });
+    const service = configured(delayed); const value = snapshot();
+    const pending = service.propose(value, { enabled: true, tenantId: 'alice' });
+    await vi.waitFor(() => expect(delayed.mock.calls.some(call => String(call[0]).endsWith('/v1/systemone'))).toBe(true));
+    service.purgeRepository(value.repository.fullName, 'alice'); release();
+    await expect(pending).rejects.toMatchObject({ code: 'ACCESS_REVOKED' });
+    expect(service.view(value, { tenantId: 'alice' }).canUndo).toBe(false);
+  });
+  it('returns a scoped proposal diff and rejects without changing accepted state or resurrecting cached IDs', async () => {
+    const service = configured(providerMock({ moveToBilling: true })); const value = snapshot();
+    value.edges = [{ id: 'billing-support', source: 'a', target: 'c', kind: 'import', evidence: { path: 'src/auth/session.ts', line: 1 } }];
+    const before = service.current(value, { tenantId: 'alice' });
+    const proposal = await service.propose(value, { enabled: true, tenantId: 'alice' });
+    const delta = service.diff(value, proposal.id, { tenantId: 'alice' });
+    expect(delta.membershipChanges.length).toBeGreaterThan(0); expect(delta.fromRevisionId).toBe(before.id);
+    expect(() => service.diff(value, proposal.id, { tenantId: 'bob' })).toThrow('unavailable');
+    const rejected = service.reject(value, proposal.id, { tenantId: 'alice', expectedRevisionId: before.id });
+    expect(rejected.revision.id).toBe(before.id); expect(rejected.canUndo).toBe(false);
+    expect(() => service.apply(value, proposal.id, { tenantId: 'alice' })).toThrow('unavailable');
+    const next = await service.propose(value, { enabled: true, tenantId: 'alice' });
+    expect(next.id).not.toBe(proposal.id); expect(value.nodes[0]!.groupId).toBe('auth');
+  });
+  it('preserves a revision on pure source-only inventory changes but invalidates its old proposal', async () => {
+    const service = configured(providerMock()); const value = snapshot();
+    const proposal = await service.propose(value, { enabled: true });
+    const before = service.current(value);
+    const overlay = snapshot(); overlay.nodes.push({ id: 'ghost', path: 'src/auth/ghost.ts', groupId: 'auth', sourceIds: [], presence: 'source-only' });
+    const extended = service.current(overlay); expect(extended.id).toBe(before.id); expect(extended.membership.ghost).toBe('auth');
+    expect(() => service.apply(overlay, proposal.id)).toThrow('changed since this proposal');
+    expect(service.current(value).id).toBe(before.id);
+  });
+  it('persists accepted decision explanations and gives undo a new atomic revision with a finite undo stack', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'constellation-grouping-')); directories.push(directory);
+    const storagePath = join(directory, 'history.json');
+    const service = configured(providerMock(), { storagePath }); const value = snapshot();
+    const proposal = await service.propose(value, { enabled: true });
+    const accepted = service.apply(value, proposal.id);
+    const restored = new GroupingService({ storagePath }).view(value);
+    expect(restored.revision.decisions).toEqual(proposal.decisions); expect(restored.revision.models).toEqual(proposal.models); expect(restored.canUndo).toBe(true);
+    const undo = service.undo(value, { expectedRevisionId: accepted.revision.id });
+    expect(undo.revision.parentRevisionId).toBe(accepted.revision.id); expect(undo.revision.restoresRevisionId).toBe(proposal.parentRevisionId); expect(undo.canUndo).toBe(false);
+    expect(undo.delta?.toRevisionId).toBe(undo.revision.id); expect(() => service.undo(value)).toThrow('no earlier');
+  });
   it('previews before apply, applies only for the same tenant and preserves facts', async () => {
     const service = configured(providerMock({ moveToBilling: true }), { membershipPolicy: { evaluatedJevModel: 'test-jev', evaluationId: 'synthetic-unit-policy', minimumEvidenceCoverage: 1 } }); const original = snapshot();
     // A supported move needs observed destination evidence, not only a high model number.
@@ -177,7 +223,7 @@ describe('revision and override invariants', () => {
     const merged = service.mutate(split.snapshot, { type: 'merge', groupIds: ['auth', newGroup], label: 'Identity' });
     expect(merged.snapshot.nodes[0]!.groupId).toBe('auth');
     const undone = service.undo(merged.snapshot);
-    expect(undone.snapshot).toEqual(split.snapshot); expect(undone.revision.id).toBe(split.revision.id);
+    expect(undone.snapshot).toEqual(split.snapshot); expect(undone.revision.restoresRevisionId).toBe(split.revision.id); expect(undone.revision.parentRevisionId).toBe(merged.revision.id); expect(undone.revision.id).not.toBe(split.revision.id);
     expect(original.groups[0]!.label).toBe('Auth'); expect(original.nodes[2]!.groupId).toBe('billing');
   });
   it('rejects foreign, duplicate or invalid manual inputs', () => {
