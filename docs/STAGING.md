@@ -11,7 +11,7 @@ gh workflow run release.yml --repo oudaykhaled/patchwork-constellation \
   -f rollback_commit=<full-compatible-reviewed-prior-sha>
 ```
 
-The workflow installs the frozen lockfile, builds both exact committed sources and creates verified versioned archives with manifests and checksums. It starts a new SCRAM PostgreSQL cluster bound only to `127.0.0.1:55438`, using the runner's installed native server and matching backup/restore tools. No pre-existing cluster is edited. Real PostgreSQL storage, durable webhook and hard-killed-coordinator recovery tests run before the deployed BFF isolation/resource report from issue #28.
+The workflow installs the frozen lockfile, builds both exact committed sources and creates verified versioned archives with manifests and checksums. It starts a new SCRAM PostgreSQL cluster bound only to `127.0.0.1:55438`, using the runner's installed native server and matching backup/restore tools. Unix sockets are explicitly disabled so a distribution's root-owned socket directory cannot prevent unprivileged startup. No pre-existing cluster is edited. Real PostgreSQL storage, durable webhook and hard-killed-coordinator recovery tests run before the deployed BFF isolation/resource report from issue #28. Extracted installs explicitly retain development dependencies because the declared server runtime includes the pinned `tsx` package.
 
 The release rehearsal then:
 

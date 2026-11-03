@@ -23,7 +23,9 @@ async function main() {
   await mkdir(root, { recursive: false, mode: 0o700 }); const password = randomBytes(32).toString('base64url'), passwordFile = join(root, 'password');
   await writeFile(passwordFile, password, { flag: 'wx', mode: 0o600 });
   execFileSync(join(bin, 'initdb'), ['-D', data, '--username=constellation_stage_admin', '--auth=scram-sha-256', '--pwfile', passwordFile], { stdio: 'ignore' });
-  await appendFile(join(data, 'postgresql.conf'), "\nlisten_addresses = '127.0.0.1'\nport = 55438\nmax_connections = 30\nshared_buffers = '64MB'\n");
+  // Distro builds may default to a root/postgres-owned Unix socket directory.
+  // This cluster is owned by the unprivileged runner and uses TCP loopback only.
+  await appendFile(join(data, 'postgresql.conf'), "\nlisten_addresses = '127.0.0.1'\nunix_socket_directories = ''\nport = 55438\nmax_connections = 30\nshared_buffers = '64MB'\n");
   await writeFile(metadataPath, JSON.stringify({ bin, root, data, ephemeral: true }) + '\n', { flag: 'wx', mode: 0o600 });
   execFileSync(join(bin, 'pg_ctl'), ['-D', data, '-w', '-t', '30', '-l', join(root, 'server.log'), 'start'], { stdio: 'ignore' });
   const env = { ...process.env, PGHOST: '127.0.0.1', PGPORT: '55438', PGUSER: 'constellation_stage_admin', PGPASSWORD: password, PGCONNECT_TIMEOUT: '5' };
