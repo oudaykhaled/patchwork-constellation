@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "1",
+  "status": "passed",
+  "measuredAt": "2026-11-03T17:44:51Z",
+  "scope": "Local configured webhook HTTP adapter and durable inbox only",
+  "conditions": {
+    "database": "PostgreSQL 17.11 portable Windows x64, isolated synthetic database",
+    "listenAddress": "127.0.0.1",
+    "port": 55438,
+    "authentication": "SCRAM-SHA-256",
+    "webhookTransport": "Actual local Node HTTP server with signed synthetic payloads",
+    "authorization": "Controlled live-access fixture; actual authorized binding registry and invalidation methods",
+    "analysis": "Actual durable coordinator with a controlled analysis runner and current-ref resolver",
+    "rehearsalHelper": "Protected local helper; credential loaded only into child environment"
+  },
+  "results": { "testsPassed": 4, "testsSkipped": 0, "testFilesPassed": 2, "durationSeconds": 0.795 },
+  "checks": [
+    "Unknown signed installation has no owner routing authority",
+    "Same-context-SHA PR update receives fresh immutable analysis identity and leaves old snapshot readable",
+    "Replay is deduplicated and force-push/out-of-order PR base changes resolve current server refs",
+    "Explicit reconciliation retains the requested display branch",
+    "Verified removal invokes actual epoch/cancellation purge fence; late private completion cannot resurrect snapshots/jobs",
+    "Durable PostgreSQL inbox survives reopening with delivery deduplication and owner-scoped status",
+    "Owned database server stopped after tests; credentials were not printed"
+  ],
+  "resolvedFinding": "First live run found a double-close PostgreSQL pool defect. Inbox close is now idempotent; all four tests passed on rerun.",
+  "limitations": [
+    "No external GitHub App account or actual GitHub webhook delivery",
+    "No hosted multi-process webhook ingress or persisted installation registry rehearsal",
+    "Refresh uses bounded full analysis; incremental efficiency is unproven",
+    "This evidence does not authorize or enable a beta or intelligence rollout"
+  ]
+}

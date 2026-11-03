@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "1",
+  "recordedAt": "2026-11-03T18:03:10.14Z",
+  "scope": "local-source-artifact-rehearsal",
+  "results": [
+    {
+      "stage": "candidate",
+      "artifact": "patchwork-constellation-0.1.0-892d7eca8d3b",
+      "commit": "892d7eca8d3bcaad8b9370679cf9b8a3e0b0866e",
+      "checks": [
+        "manifest-integrity",
+        "frozen-offline-install",
+        "production-health",
+        "integrated-worker-storage-queue-readiness",
+        "distributed-exact-third-party-and-OFL-notices",
+        "disabled-provider-observed-zero-transfer",
+        "production-html",
+        "212-file-demo",
+        "provider-disabled-baseline"
+      ],
+      "network": "loopback-only application probes; package install offline",
+      "database": "memory",
+      "externalModels": false
+    },
+    {
+      "stage": "rollback",
+      "artifact": "patchwork-constellation-0.1.0-65dc1bd17695",
+      "commit": "65dc1bd17695da3332f210a841386cf2d2b14b07",
+      "checks": [
+        "manifest-integrity",
+        "frozen-offline-install",
+        "production-health",
+        "distributed-exact-third-party-and-OFL-notices",
+        "production-html",
+        "212-file-demo",
+        "provider-disabled-baseline"
+      ],
+      "network": "loopback-only application probes; package install offline",
+      "database": "memory",
+      "externalModels": false
+    }
+  ],
+  "stagingDatabase": "not-verified",
+  "hostedDeployment": "not-performed",
+  "candidateArchive": {
+    "sha256": "2c293f86307a39b2863b3531aa3c628920692056b89acf8a47b207545143524e",
+    "bytes": 2038784,
+    "entries": 367,
+    "repeatedPackagingIdentical": true,
+    "thirdPartyNoticeSha256": "e1d73225ccde64c1d1c50f13d99d0315161af2a83500122207d642d954c090c0",
+    "thirdPartyPackages": 7
+  },
+  "databaseEvidence": "31-database-rehearsal.json"
+}

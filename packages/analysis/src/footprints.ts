@@ -5,6 +5,7 @@ import type { AnalysisOptions } from './index';
 import { deriveGroups, nodeForPath } from './groups';
 import { languageFor } from './imports';
 import { boundedGitDiff } from './git-fallback';
+import { enrichSelectedSourceDependencies } from './source-dependencies';
 
 interface ApiCommit { sha: string; html_url?: string; commit: { message: string; committer?: { date?: string } }; parents: { sha: string }[]; files?: ApiFile[]; }
 interface ApiPull { number: number; title: string; html_url: string; state: string; updated_at?: string; changed_files?: number; base: { sha: string; ref: string }; head: { sha: string; ref: string }; }
@@ -35,7 +36,7 @@ function toChanges(files: ApiFile[], snapshot: GraphSnapshot, sourceId: string):
       const base = nodeForPath(snapshot.repository.fullName, file.status === 'renamed' && file.previous_filename ? file.previous_filename : file.filename);
       const candidateId = ambiguousAddition || file.status === 'added' ? `${base.id}@${hash(`${sourceId}:${file.sha ?? 'unknown-blob'}`).slice(0, 12)}` : base.id;
       node = snapshot.nodes.find(item => item.id === candidateId) ?? extra.find(item => item.id === candidateId);
-      if (!node) { node = { ...base, path: file.filename, groupId: nodeForPath(snapshot.repository.fullName, file.filename).groupId, id: candidateId, presence: file.status === 'removed' ? 'deleted' : 'source-only', status: statusFor(file.status), language: languageFor(file.filename), sourceIds: [sourceId], importCoverage: 'unsupported', blobSha: file.sha, ...(ambiguousAddition ? { ambiguousLineage: true } : {}) }; extra.push(node); }
+      if (!node) { node = { ...base, path: file.filename, groupId: nodeForPath(snapshot.repository.fullName, file.filename).groupId, id: candidateId, presence: file.status === 'removed' ? 'deleted' : 'source-only', status: 'unparsed', language: languageFor(file.filename), sourceIds: [sourceId], importCoverage: 'excluded', importReasons: ['This file has no inventoried context blob. Its source-specific status and dependency evidence remain in the source comparison layer.'], blobSha: file.sha, ...(ambiguousAddition ? { ambiguousLineage: true } : {}) }; extra.push(node); }
       remember(file.filename, node);
     }
     if (file.status === 'renamed' && file.previous_filename) {
@@ -116,5 +117,6 @@ export async function loadSourceChanges(snapshot: GraphSnapshot, kind: 'pr' | 'c
   result.groups.push(...deriveGroups(result.nodes.map(node => node.path)).filter(group => !existingGroups.has(group.id)));
   result.coverage = { ...result.coverage, status: reasons.length ? 'partial' : 'complete', reasons: unique(reasons) }; result.defaultSelection = selection;
   options.onProgress?.({ stage: 'ready', progress: 100, message: 'Selected change footprints are ready' });
+  await enrichSelectedSourceDependencies(result, kind, selection, options);
   return validateGraphSnapshot(result);
 }

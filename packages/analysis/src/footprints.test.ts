@@ -1,3 +1,4 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeSource, GraphSnapshot } from '@patchwork/contracts';
 import { clearGitHubCacheForTests } from '@patchwork/github';
@@ -8,7 +9,7 @@ const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40), D = 'd'.repeat
 const pr = (number: number, base = A, head = B): ChangeSource => ({ id: `pr:${number}`, kind: 'pr', number, title: `PR ${number}`, label: `#${number}`, url: `https://github.com/acme/tool/pull/${number}`, files: [], baseSha: base, headSha: head, comparisonKind: 'merge-base', loaded: false });
 const commit = (sha: string, parent = A): ChangeSource => ({ id: `commit:${sha}`, kind: 'commit', sha, headSha: sha, baseSha: parent, comparisonKind: parent === EMPTY_GIT_TREE ? 'empty-tree' : 'first-parent', title: 'Commit', label: sha.slice(0, 7), url: `https://github.com/acme/tool/commit/${sha}`, files: [], loaded: false });
 function snapshot(sources: ChangeSource[]): GraphSnapshot {
-  return { schemaVersion: '1', id: 'snapshot:fixture', contextSha: A, contextRef: 'main', repository: { owner: 'acme', name: 'tool', fullName: 'acme/tool', defaultBranch: 'main', htmlUrl: 'https://github.com/acme/tool' }, nodes: [{ id: 'file:existing', path: 'src/existing.ts', groupId: 'folder:src', presence: 'context', sourceIds: [] }], edges: [], groups: [{ id: 'folder:src', label: 'src' }], sources, coverage: { status: 'complete', reasons: [] }, createdAt: '2026-01-01T00:00:00.000Z', mode: 'github' };
+  return { schemaVersion: '1', id: 'snapshot:fixture', contextSha: A, contextRef: 'main', repository: { owner: 'acme', name: 'tool', fullName: 'acme/tool', defaultBranch: 'main', htmlUrl: 'https://github.com/acme/tool' }, nodes: [{ ...authoredFileFacts('complete'), id: 'file:existing', path: 'src/existing.ts', groupId: 'folder:src', presence: 'context', sourceIds: [] }], edges: [], groups: [{ id: 'folder:src', label: 'src' }], sources, coverage: { status: 'complete', reasons: [] }, createdAt: '2026-01-01T00:00:00.000Z', mode: 'github' };
 }
 const fetcher = (respond: (url: URL) => unknown): typeof fetch => (async input => {
   const value = respond(new URL(String(input)));
@@ -45,7 +46,7 @@ describe('independent source footprint semantics', () => {
   });
 
   it('represents a root delta against the empty tree', async () => {
-    const result = await loadSourceChanges(snapshot([commit(B, EMPTY_GIT_TREE)]), 'commit', [`commit:${B}`], { fetch: fetcher(() => ({ sha: B, commit: { message: 'root' }, parents: [], files: [{ ...modified, status: 'added' }] })) });
+    const result = await loadSourceChanges(snapshot([commit(B, EMPTY_GIT_TREE)]), 'commit', [`commit:${B}`], { fetch: fetcher(() => ({ sha: B, commit: { message: 'root' }, parents: [], files: [{ ...modified, status: 'added', deletions: 0 }] })) });
     expect(result.sources[0]).toMatchObject({ comparisonKind: 'empty-tree', baseSha: EMPTY_GIT_TREE, headSha: B });
   });
 
@@ -99,6 +100,10 @@ describe('independent source footprint semantics', () => {
     }) });
     expect(new Set(result.sources.map(source => source.files[0]?.fileId)).size).toBe(3);
     expect(result.coverage.reasons.join(' ')).toContain('shared lineage');
+    for (const source of result.sources) {
+      expect(source.files[0]!.status).toBe('added');
+      expect(result.nodes.find(node => node.id === source.files[0]!.fileId)).toMatchObject({ fileKind: 'unknown', presence: 'source-only', status: 'unparsed', importCoverage: 'excluded' });
+    }
   });
 
   it('source-only addition IDs do not depend on which source was loaded first', async () => {
