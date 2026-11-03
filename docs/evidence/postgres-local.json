@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "1",
+  "status": "passed",
+  "scope": "local isolated PostgreSQL subset only",
+  "measuredAt": "2026-11-03T17:35:50.269Z",
+  "runtime": "v24.22.1",
+  "conditions": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "database": "PostgreSQL17.11 portable Windows x64; loopback55438; synthetic isolated database",
+    "concurrency": "other issue agents active; not capacity benchmark"
+  },
+  "artifact": {
+    "version": "17.11",
+    "packagingRevision": "17.11-3",
+    "bytes": 341325378,
+    "archiveUrl": "https://get.enterprisedb.com/postgresql/postgresql-17.11-3-windows-x64-binaries.zip",
+    "archiveSha256": "4b8db0930c38f6ef845db919551dedda3b6b845aeb0927b3d79a6e8e9e4537cf",
+    "postgresExeSha256": "8ae8bb442e8a4c4fb2c8e9ad38c19aca610ee3cba33afd69249de769f905329b",
+    "officialWindowsPage": "https://www.postgresql.org/download/windows/",
+    "officialBinariesPage": "https://www.enterprisedb.com/download-postgresql-binaries",
+    "checksumSource": "https://github.com/EnterpriseDB/edb-installers/issues/682",
+    "licenseSource": "https://www.postgresql.org/about/licence/",
+    "verification": "Downloaded from official HTTPS origin; exact archive digest matches vendor-maintained repository checksum. Not a signature attestation."
+  },
+  "isolation": {
+    "listenAddress": "127.0.0.1",
+    "port": 55438,
+    "authentication": "scram-sha-256",
+    "passwordBytes": 32,
+    "secretLocation": "protected ignored local file and child environment only; never included in this report",
+    "serviceInstalled": false,
+    "pathModified": false,
+    "administratorElevation": false,
+    "existingDatabaseTouched": false,
+    "archiveTraversalChecked": true,
+    "archiveSymlinksRefused": true
+  },
+  "checks": [
+    {
+      "id": "storage-postgres-cross-connection",
+      "status": "passed",
+      "evidence": "packages/storage/src/storage.test.ts:15tests; live DB path executed, no skip; atomic enqueue, scoped reads, two leases, monotonic progress, cancellation/stale completion"
+    },
+    {
+      "id": "webhook-postgres-restart",
+      "status": "passed",
+      "evidence": "packages/storage/src/webhook-postgres.test.ts:1test; durable enqueue/reopen/dedup/scoped state"
+    },
+    {
+      "id": "coordinator-hard-kill-recovery",
+      "status": "passed",
+      "evidence": "tests/backend-release/postgres.test.ts:1test; actual spawned Node process killed; real30second lease expiry; pinned context retained; second attempt ready; stale lease rejected; cross-owner snapshot denied"
+    },
+    {
+      "id": "typecheck",
+      "status": "passed",
+      "evidence": "pnpm typecheck"
+    },
+    {
+      "id": "teardown",
+      "status": "passed",
+      "evidence": "pg_ctl fast stop of verified owned cluster; zero port55438listeners and zero PostgreSQL Windows services read back"
+    }
+  ],
+  "results": {
+    "testsPassed": 17,
+    "testsSkipped": 0,
+    "testFilesPassed": 3,
+    "durationSeconds": 31.01
+  },
+  "limitations": [
+    "No live GitHub App account or external webhook delivery.",
+    "No staging host, production database, backup/restore or database-process crash rehearsal.",
+    "Synthetic analysis runner exercises real durable coordination, not real external network parsing.",
+    "This report is a local evidence subset and does not enable beta or AI rollout."
+  ]
+}

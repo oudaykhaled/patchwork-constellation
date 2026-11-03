@@ -1,0 +1,15 @@
+.graph-legend .legend-symbol{display:block;width:10px;height:10px;flex-shrink:0}
+.graph-legend .legend-symbol-overlap{width:12px;height:12px}
+.graph-legend:has(.graph-legend-details[open]){z-index:18}
+.graph-legend-details{flex-shrink:0;position:static}
+.graph-legend-details>summary{display:flex;align-items:center;justify-content:center;list-style:none;width:24px;height:24px;border:1px solid var(--line);border-radius:50%;color:var(--text);cursor:pointer;font-size:12px;font-weight:600}
+.graph-legend-details>summary::-webkit-details-marker{display:none}
+.graph-legend-details>summary:hover,.graph-legend-details[open]>summary{background:var(--raised);border-color:var(--accent)}
+.graph-legend-explanation{position:absolute;left:0;bottom:calc(100% + 10px);width:min(460px,calc(100vw - 56px));max-height:min(560px,calc(100dvh - 150px));overflow-y:auto;overscroll-behavior:contain;padding:18px;border:1px solid var(--line);border-radius:10px;background:var(--panel);box-shadow:0 12px 40px #0008;color:var(--text);white-space:normal}
+.graph-legend-explanation h2{font-size:16px;line-height:1.4;font-weight:550;margin:0 0 14px}
+.graph-legend-explanation dl{margin:0}
+.graph-legend-explanation dl>div+div{margin-top:12px}
+.graph-legend-explanation dt{font-size:12px;line-height:1.5;font-weight:600}
+.graph-legend-explanation dd{margin:3px 0 0;font-size:12px;line-height:1.65;color:var(--muted)}
+.graph-legend-explanation p{margin:16px 0 0;font-size:11px;color:var(--muted)}
+@media(max-width:760px){.graph-legend-explanation{width:min(460px,calc(100vw - 32px));max-height:calc(100dvh - 140px);padding:15px}.graph-legend-details>summary{width:24px;height:24px}}
