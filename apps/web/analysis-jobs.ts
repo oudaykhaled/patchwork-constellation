@@ -186,8 +186,8 @@ export class AnalysisJobs {
       // to a bounded metadata-only baseline before crossing the worker boundary.
       const previous = await this.store.getLatestSnapshot(scope);
       if (!isCurrent()) return;
-      let incrementalBaseline;
-      if (previous?.repository.fullName.toLowerCase() === scope.repository.toLowerCase()) {
+      let incrementalBaseline: ReturnType<typeof createIncrementalAnalysisBaseline>;
+      if (typeof previous?.repository?.fullName === 'string' && previous.repository.fullName.toLowerCase() === scope.repository.toLowerCase()) {
         try { incrementalBaseline = createIncrementalAnalysisBaseline(previous); } catch { /* Invalid old metadata safely falls back to full bounded analysis. */ }
       }
       const snapshot = await this.analyze(input, { ...credentials, incrementalBaseline, signal: controller.signal, onTelemetry: event => { try { this.observations?.onGitHub?.(scope, event); } catch { /* optional source-free sink */ } }, onProgress: progress => {
