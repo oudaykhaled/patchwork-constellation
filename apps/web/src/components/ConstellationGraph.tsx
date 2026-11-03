@@ -3,6 +3,7 @@ import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent as ReactPoi
 import { islandBounds, neighborsOf, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
 import type { Bounds, Camera, GraphData, GraphLayout, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
 import { boundsIntersect, connectionInViewport, exceedsGraphEnvelope, scopeSummary, viewportBounds } from '../../../../packages/graph-core/src/render-policy';
+import { sceneTile, sceneTranslation, type SceneTile } from '../../../../packages/graph-core/src/scene-cache';
 import { useSettledLayout } from './useSettledLayout';
 import { fitVisibleCamera, isValidCamera, MAX_RELATIVE_ZOOM, MIN_RELATIVE_ZOOM, minimapPoint, navigationInsets, pinchCamera } from './camera-navigation';
 import './constellation-graph.css';
@@ -53,6 +54,8 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const sizeRef = useRef(EMPTY_SIZE);
   const animationRef = useRef<number | null>(null);
   const frameRef = useRef<number | null>(null);
+  const sceneCacheRef = useRef<{ tile: SceneTile; canvas: HTMLCanvasElement } | null>(null);
+  const sceneMetrics = useRef({ builds: 0, hits: 0 });
   const pointers = useRef(new Map<number, Point>());
   const gesture = useRef<{ start: Point; last: Point; moved: boolean; pinchDistance: number | null; pinchMidpoint: Point | null }>({ start: { x: 0, y: 0 }, last: { x: 0, y: 0 }, moved: false, pinchDistance: null, pinchMidpoint: null });
   const cameraChangeRef = useRef(onCameraChange);
@@ -131,21 +134,49 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const draw = useCallback(() => {
     frameRef.current = null;
     const canvas = canvasRef.current;
-    const context = canvas?.getContext('2d');
-    if (!canvas || !context) return;
-    const { width, height } = sizeRef.current;
+    const screenContext = canvas?.getContext('2d');
+    if (!canvas || !screenContext) return;
+    let { width, height } = sizeRef.current;
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
     const c = cameraRef.current;
     const data = latest.current;
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.clearRect(0, 0, width, height);
-    context.fillStyle = '#091216'; context.fillRect(0, 0, width, height);
+    screenContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+    screenContext.clearRect(0, 0, width, height);
+    screenContext.fillStyle = '#091216'; screenContext.fillRect(0, 0, width, height);
     // Screen-space grid deliberately remains subtle throughout zooming.
     const grid = clamp(32 * c.zoom, 19, 42);
     const offsetX = ((width / 2 - c.x * c.zoom) % grid + grid) % grid;
     const offsetY = ((height / 2 - c.y * c.zoom) % grid + grid) % grid;
-    context.fillStyle = '#16272a';
-    for (let x = offsetX; x < width; x += grid) for (let y = offsetY; y < height; y += grid) context.fillRect(x, y, 1.2, 1.2);
+    screenContext.fillStyle = '#16272a';
+    for (let x = offsetX; x < width; x += grid) for (let y = offsetY; y < height; y += grid) screenContext.fillRect(x, y, 1.2, 1.2);
+    // Rasterizing thousands of identical curves on every translation costs more
+    // than camera updates, especially on software-rendered CI browsers. Keep one
+    // padded bitmap of the complete current scene; pan copies those exact pixels.
+    // Any data/highlight/scope/zoom/DPR/resize change rebuilds it. No facts or
+    // edges are removed for this optimization, and allocation has a fixed cap.
+    const sceneKey = [data.layout, data.snapshot.edges, data.membership, data.neighbors, data.selectedFileId, data.hoveredId, data.search, data.showImports, data.scopeGroupId];
+    const previousScene = sceneCacheRef.current;
+    const translation = sceneTranslation(previousScene?.tile ?? null, c, width, height, ratio, sceneKey);
+    if (previousScene && translation) {
+      screenContext.drawImage(previousScene.canvas, translation.x, translation.y, previousScene.canvas.width / ratio, previousScene.canvas.height / ratio);
+      canvas.dataset.sceneCacheHits = String(++sceneMetrics.current.hits);
+      return;
+    }
+    const tile = sceneTile(c, width, height, ratio, sceneKey);
+    const bitmap = tile ? previousScene?.canvas ?? document.createElement('canvas') : null;
+    let context = screenContext;
+    if (tile && bitmap) {
+      const bitmapWidth = Math.ceil((width + tile.padding * 2) * ratio), bitmapHeight = Math.ceil((height + tile.padding * 2) * ratio);
+      if (bitmap.width !== bitmapWidth) bitmap.width = bitmapWidth;
+      if (bitmap.height !== bitmapHeight) bitmap.height = bitmapHeight;
+      const bitmapContext = bitmap.getContext('2d');
+      if (bitmapContext) {
+        context = bitmapContext; width += tile.padding * 2; height += tile.padding * 2;
+        context.setTransform(ratio, 0, 0, ratio, 0, 0); context.clearRect(0, 0, width, height);
+      }
+    }
+    const caching = context !== screenContext && tile && bitmap;
+    if (!caching && previousScene) { previousScene.canvas.width = 0; previousScene.canvas.height = 0; sceneCacheRef.current = null; }
     context.translate(width / 2, height / 2); context.scale(c.zoom, c.zoom); context.translate(-c.x, -c.y);
     const viewport = viewportBounds(c, width, height, 30);
     const inScope = (node: PositionedFile) => !data.scopeGroupId || node.groupId === data.scopeGroupId;
@@ -231,6 +262,18 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       boxes.push(box); context.fillStyle = '#0a1217ef'; context.fillRect(box.x, box.y, box.width, box.height);
       context.fillStyle = priority < 3 ? '#dcebe4' : '#a2b1aa'; context.fillText(label, box.x + 7 / c.zoom, box.y + 15 / c.zoom);
     });
+    if (caching) {
+      sceneCacheRef.current = { tile, canvas: bitmap };
+      screenContext.drawImage(bitmap, -tile.padding, -tile.padding, bitmap.width / ratio, bitmap.height / ratio);
+      canvas.dataset.sceneCacheBytes = String(bitmap.width * bitmap.height * 4);
+    } else {
+      // The main context was transformed for direct rendering. Reset it so the
+      // next frame always starts in screen coordinates, including fallback.
+      screenContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+      canvas.dataset.sceneCacheBytes = '0';
+    }
+    canvas.dataset.sceneCacheBuilds = String(++sceneMetrics.current.builds);
+    canvas.dataset.sceneCacheHits = String(sceneMetrics.current.hits);
   }, []);
 
   const requestDraw = useCallback(() => { if (frameRef.current === null) frameRef.current = requestAnimationFrame(draw); }, [draw]);
@@ -295,10 +338,16 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   }, [requestDraw, setCamera, fitBounds, canvasAttempt]);
   useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return;
-    const lost = (event: Event) => { event.preventDefault(); setCanvasFailed(true); };
-    const restored = () => { setCanvasFailed(false); setCanvasAttempt(value => value + 1); requestDraw(); };
+    const discard = () => { const cache = sceneCacheRef.current; if (cache) { cache.canvas.width = 0; cache.canvas.height = 0; sceneCacheRef.current = null; } };
+    const lost = (event: Event) => { event.preventDefault(); discard(); setCanvasFailed(true); };
+    const restored = () => { discard(); setCanvasFailed(false); setCanvasAttempt(value => value + 1); requestDraw(); };
     canvas.addEventListener('contextlost', lost); canvas.addEventListener('contextrestored', restored);
     return () => { canvas.removeEventListener('contextlost', lost); canvas.removeEventListener('contextrestored', restored); };
+  }, [requestDraw]);
+  useEffect(() => {
+    const loaded = () => { const cache = sceneCacheRef.current; if (cache) { cache.canvas.width = 0; cache.canvas.height = 0; sceneCacheRef.current = null; } requestDraw(); };
+    document.fonts?.addEventListener('loadingdone', loaded);
+    return () => document.fonts?.removeEventListener('loadingdone', loaded);
   }, [requestDraw]);
   // A source response can replace arrays while retaining the same context snapshot.
   // Only a new snapshot/grouping key resets framing; source toggles never do.
@@ -335,6 +384,8 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   }, [selectedFileId, selectedPosition?.x, selectedPosition?.y, moveCamera, fitBounds]);
   useEffect(() => () => {
     stopAnimation();
+    const cache = sceneCacheRef.current;
+    if (cache) { cache.canvas.width = 0; cache.canvas.height = 0; sceneCacheRef.current = null; }
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
     // React StrictMode deliberately mounts effects twice. A cancelled frame is
     // no longer scheduled and must not prevent the remounted effect drawing.
