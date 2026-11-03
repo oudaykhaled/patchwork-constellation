@@ -108,4 +108,21 @@ describe('local HTTP trust boundaries', () => {
     const restored = await (await fetch(base + '/api/demo')).json();
     expect(restored.groups.find((group: { id: string }) => group.id === original.id).label).toBe(original.label);
   });
+
+  test('progressive metadata, chunks and file details enforce snapshot scope independently', async () => {
+    const snapshot = await (await fetch(base + '/api/demo')).json();
+    const metadata = await (await fetch(`${base}/api/graphs/${encodeURIComponent(snapshot.id)}`)).json();
+    expect(metadata.counts.files).toBe(212); expect(metadata.groups).toHaveLength(6); expect(metadata).not.toHaveProperty('nodes');
+    const first = await (await fetch(`${base}${metadata.links.nodes}&limit=100`)).json();
+    expect(first.items).toHaveLength(100); expect(first.nextCursor).toBeTruthy();
+    const rest = await (await fetch(`${base}${metadata.links.nodes}&limit=100&cursor=${first.nextCursor}`)).json();
+    expect(rest.items).toHaveLength(100); expect(rest.version).toBe(metadata.version);
+    const file = await (await fetch(`${base}/api/files/${encodeURIComponent(snapshot.id)}/${encodeURIComponent(snapshot.nodes[0].id)}`)).json();
+    expect(file.file.id).toBe(snapshot.nodes[0].id);
+    for (const route of [`/api/graphs/${encodeURIComponent(snapshot.id)}`, `/api/files/${encodeURIComponent(snapshot.id)}/${encodeURIComponent(snapshot.nodes[0].id)}`]) {
+      expect((await fetch(base + route + '?repository=wrong/repository')).status).toBe(404);
+    }
+    expect((await fetch(`${base}/api/graphs/${encodeURIComponent(snapshot.id)}/chunks?version=obsolete`)).status).toBe(409);
+    expect((await fetch(`${base}/api/graphs/${encodeURIComponent(snapshot.id)}/chunks?limit=10000`)).status).toBe(400);
+  });
 });

@@ -2,7 +2,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile, stat } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { validateGraphSnapshot, type GraphSnapshot } from '@patchwork/contracts';
 import { demoSnapshot } from '@patchwork/fixtures';
@@ -10,8 +9,10 @@ import { listRepositorySources } from '@patchwork/analysis';
 import { runAnalysisInWorker, runSourceAnalysisInWorker } from '../worker/src/index';
 import { GroupingService } from '@patchwork/ai';
 import { parseRepository } from '@patchwork/github';
-import { createStore, newJob, type SnapshotStore, type StoreScope } from '@patchwork/storage';
+import { createStore, type SnapshotStore, type StoreScope } from '@patchwork/storage';
 import { BusyError, WorkerAdmission } from './worker-admission';
+import { AnalysisJobs, pinAnalysisInput, type PinnedAnalysisInput } from './analysis-jobs';
+import { graphMetadata, graphChunk, fileDetail } from './graph-api';
 
 try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -19,10 +20,7 @@ const dist = resolve(root, 'dist');
 const production = process.argv.includes('--production');
 const MAX_SNAPSHOTS = 48;
 const snapshots = new Map<string, GraphSnapshot>();
-const jobs = new Map<string, Job>();
-const aborts = new Map<string, AbortController>();
 const grouping = new GroupingService({ enabled: process.env.AI_ENABLED === 'true', jevApiKey: process.env.TYPESAFE_API_KEY, jevModel: process.env.JEV_MODEL, generativeApiKey: process.env.OPENAI_API_KEY, generativeModel: process.env.OPENAI_MODEL, storagePath: process.env.GROUPING_STORAGE_PATH });
-type Job = { id: string; status: 'queued' | 'running' | 'ready' | 'failed' | 'cancelled'; progress: number; message: string; snapshot?: GraphSnapshot; error?: string; code?: string; createdAt: string };
 function remember(snapshot: GraphSnapshot) {
   validateGraphSnapshot(snapshot);
   snapshots.set(snapshot.id, snapshot);
@@ -47,7 +45,7 @@ const analyzeRequest = z.object({ repository: z.string().trim().min(3).max(250),
 const idRequest = z.object({ snapshotId: z.string().max(500) });
 const rateWindows = new Map<string, { start: number; requests: number }>();
 
-export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker } = {}) {
+export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0]) => Promise<PinnedAnalysisInput> } = {}) {
   const useProduction = options.production ?? production;
   const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100 });
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
@@ -55,8 +53,6 @@ export async function createApplicationServer(options: { production?: boolean; s
   const admission = new WorkerAdmission(2);
   const sourceRequests = new Map<string, { controller: AbortController }>();
   const runningTasks = new Set<Promise<unknown>>();
-  const jobScopes = new Map<string, StoreScope>();
-  const inFlightAnalyses = new Map<string, string>();
   const snapshotWrites = new Map<string, Promise<unknown>>();
   const snapshotPending = new Map<string, number>();
   const scopeFor = (repository: string): StoreScope => ({ ownerId: 'local-public', repository: parseRepository(repository).fullName.toLowerCase() });
@@ -87,6 +83,9 @@ export async function createApplicationServer(options: { production?: boolean; s
       if (remaining) snapshotPending.set(id, remaining); else snapshotPending.delete(id);
     }
   }
+  const analysisJobs = new AnalysisJobs(store, admission, analyze, snapshot => saveSnapshot(grouping.view(snapshot).snapshot));
+  const resolveAnalysisInput = options.resolveAnalysisInput ?? (options.runAnalysis ? async (input: Parameters<typeof runAnalysisInWorker>[0]) => input : pinAnalysisInput);
+  analysisJobs.startRecovery();
   await saveSnapshot(structuredClone(demoSnapshot));
   const vite = useProduction ? null : await (await import('vite')).createServer({ configFile: resolve(root, 'apps/web/vite.config.ts'), server: { middlewareMode: true }, appType: 'spa' });
   const server = createServer(async (req, res) => {
@@ -102,81 +101,38 @@ export async function createApplicationServer(options: { production?: boolean; s
         if (!window || now - window.start > 60_000) { window = { start: now, requests: 0 }; rateWindows.set(key, window); }
         if (++window.requests > 240) { res.setHeader('Retry-After', '60'); return json(res, 429, { error: 'Too many requests. Try again shortly.', code: 'RATE_LIMITED', retryAfter: 60 }); }
         if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.1.0', mode: 'local-public' });
-        if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: 'local-public', github: { publicRepositories: true, privateRepositories: false, configuredToken: Boolean(process.env.GITHUB_TOKEN) }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: false } });
+        if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: 'local-public', github: { publicRepositories: true, privateRepositories: false, configuredToken: Boolean(process.env.GITHUB_TOKEN) }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: store.kind === 'postgres' } });
         if (req.method === 'GET' && url.pathname === '/api/demo') return json(res, 200, await saveSnapshot(grouping.view(structuredClone(demoSnapshot)).snapshot));
         if (req.method === 'GET' && url.pathname.startsWith('/api/snapshots/')) return json(res, 200, await lookupSnapshot(decodeURIComponent(url.pathname.slice(15)), url.searchParams.get('repository')));
+        const graphMatch = url.pathname.match(/^\/api\/graphs\/([^/]+)(\/chunks)?$/);
+        if (req.method === 'GET' && graphMatch) {
+          const snapshot = await lookupSnapshot(decodeURIComponent(graphMatch[1]!), url.searchParams.get('repository'));
+          return json(res, 200, graphMatch[2] ? graphChunk(snapshot, url.searchParams) : graphMetadata(snapshot));
+        }
+        const fileMatch = url.pathname.match(/^\/api\/files\/([^/]+)\/([^/]+)$/);
+        if (req.method === 'GET' && fileMatch) {
+          const snapshot = await lookupSnapshot(decodeURIComponent(fileMatch[1]!), url.searchParams.get('repository'));
+          return json(res, 200, fileDetail(snapshot, decodeURIComponent(fileMatch[2]!)));
+        }
         if (req.method === 'POST' && url.pathname === '/api/analyze') {
           const input = analyzeRequest.parse(await body(req));
           input.repository = parseRepository(input.repository).fullName;
-          const analysisKey = JSON.stringify(input);
-          const existingId = inFlightAnalyses.get(analysisKey);
-          if (existingId) return json(res, 202, { jobId: existingId, reused: true });
-          const release = admission.reserve();
-          const id = randomUUID(); const controller = new AbortController(); const job: Job = { id, status: 'queued', progress: 0, message: 'Preparing analysis…', createdAt: new Date().toISOString() };
-          const scope = scopeFor(input.repository); const persisted = newJob(input, { id, maxAttempts: 1 });
-          persisted.leaseOwner = `local-bff:${process.pid}`; persisted.leaseExpiresAt = new Date(Date.now() + 240_000).toISOString();
-          // Reserve identity and capacity before the first asynchronous database write.
-          inFlightAnalyses.set(analysisKey, id);
-          jobScopes.set(id, scope); jobs.set(id, job); aborts.set(id, controller);
-          try { await store.putJob(scope, persisted); } catch (error) {
-            inFlightAnalyses.delete(analysisKey); aborts.delete(id); release(); job.status = 'failed'; job.error = 'Analysis could not be persisted. Check the configured database and retry.'; job.code = 'STORAGE_FAILED'; throw error;
-          }
-          if (controller.signal.aborted) {
-            job.status = 'cancelled'; job.message = 'Analysis cancelled';
-            try { await store.cancelJob(scope, id); } finally { inFlightAnalyses.delete(analysisKey); aborts.delete(id); release(); }
-            return json(res, 202, { jobId: id });
-          }
-          job.status = 'running'; job.message = 'Resolving repository…';
-          let writes: Promise<void> = Promise.resolve();
-          const persist = () => {
-            persisted.progress = job.progress; persisted.updatedAt = new Date().toISOString();
-            persisted.error = job.error; persisted.input = { ...input, progressMessage: job.message };
-            const value = structuredClone(persisted);
-            writes = writes.catch(() => {}).then(() => store.putJob(scope, value));
-            return writes;
-          };
-          while (jobs.size > 100) { const oldest = [...jobs].find(([,v]) => !['running','queued'].includes(v.status)); if (!oldest) break; jobs.delete(oldest[0]); }
-          const timeout = setTimeout(() => controller.abort(), 180_000);
-          // Work is bounded and asynchronous in this process. Persisted interrupted jobs
-          // remain inspectable, but automatic restart/resume is intentionally not claimed.
-          const task = Promise.resolve().then(() => analyze(input, { signal: controller.signal, onProgress: p => {
-            job.progress = p.progress; job.message = p.message; persisted.status = p.stage === 'indexing' ? 'indexing' : 'fetching';
-            void persist().catch(() => { controller.abort(); job.code = 'STORAGE_FAILED'; });
-          } })).then(async snapshot => {
-            if (controller.signal.aborted) throw new DOMException('Analysis cancelled', 'AbortError');
-            await writes;
-            job.snapshot = await saveSnapshot(grouping.view(snapshot).snapshot); job.progress = 100; job.message = 'Graph ready';
-            persisted.status = snapshot.coverage.status === 'complete' ? 'ready' : 'partial'; persisted.snapshotId = snapshot.id;
-            delete persisted.leaseOwner; delete persisted.leaseExpiresAt;
-            await persist(); job.status = 'ready';
-          }).catch(async (error: unknown) => {
-            job.status = controller.signal.aborted ? 'cancelled' : 'failed'; job.error = controller.signal.aborted ? 'Analysis cancelled or exceeded its time limit.' : safeError(error);
-            job.code ??= typeof error === 'object' && error && 'code' in error ? String(error.code) : 'ANALYSIS_FAILED'; persisted.status = job.status;
-            delete persisted.leaseOwner; delete persisted.leaseExpiresAt;
-            try { await persist(); } catch { job.code = 'STORAGE_FAILED'; job.error = 'Analysis state could not be persisted. Check the configured database and retry.'; }
-          }).finally(() => { clearTimeout(timeout); aborts.delete(id); inFlightAnalyses.delete(analysisKey); runningTasks.delete(task); release(); });
-          runningTasks.add(task);
-          return json(res, 202, { jobId: id });
+          const pinned = await resolveAnalysisInput(input);
+          return json(res, 202, await analysisJobs.submit(scopeFor(input.repository), pinned));
         }
         const jobMatch = url.pathname.match(/^\/api\/jobs\/([a-zA-Z0-9-]+)(\/cancel)?$/);
         if (jobMatch) {
-          let job = jobs.get(jobMatch[1]!);
-          let scope = jobScopes.get(jobMatch[1]!);
           const repository = url.searchParams.get('repository');
-          if (repository) { const requestedScope = scopeFor(repository); if (scope && scope.repository !== requestedScope.repository) return json(res, 404, { error: 'Analysis job not found.' }); scope = requestedScope; }
-          if (!job && scope) {
-            const saved = await store.getJob(scope, jobMatch[1]!);
-            if (saved) {
-              const terminal = ['ready', 'partial', 'failed', 'cancelled'].includes(saved.status);
-              if (!terminal) { saved.status = 'failed'; saved.error = 'The server restarted during this analysis. Start it again to retry.'; saved.updatedAt = new Date().toISOString(); await store.putJob(scope, saved); }
-              const snapshot = saved.snapshotId ? await store.getSnapshot(scope, saved.snapshotId) : undefined;
-              job = { id: saved.id, status: saved.status === 'ready' || saved.status === 'partial' ? 'ready' : saved.status === 'cancelled' ? 'cancelled' : 'failed', progress: saved.progress, message: saved.error ?? String(saved.input.progressMessage ?? 'Stored analysis'), createdAt: saved.createdAt, error: saved.error, snapshot: snapshot ? remember(validateGraphSnapshot(snapshot)) : undefined };
-              jobs.set(job.id, job); jobScopes.set(job.id, scope);
-            }
+          const scope = repository ? scopeFor(repository) : undefined;
+          if (req.method === 'POST' && jobMatch[2]) {
+            const job = await analysisJobs.cancel(jobMatch[1]!, scope);
+            return json(res, job ? 200 : 404, job ?? { error: 'Analysis job not found.' });
           }
-          if (!job) return json(res, 404, { error: 'Analysis job not found. Supply its repository to restore a persisted job.' });
-          if (req.method === 'POST' && jobMatch[2]) { if (job.status === 'running' || job.status === 'queued') { aborts.get(job.id)?.abort(); job.status = 'cancelled'; job.message = 'Analysis cancelled'; if (scope) await store.cancelJob(scope, job.id); } return json(res, 200, job); }
-          if (req.method === 'GET' && !jobMatch[2]) return json(res, 200, job);
+          if (req.method === 'GET' && !jobMatch[2]) {
+            const job = await analysisJobs.get(jobMatch[1]!, scope, url.searchParams.get('includeSnapshot') !== 'false');
+            if (job && url.searchParams.has('version') && url.searchParams.get('version') !== job.version) return json(res, 409, { error: 'Analysis version changed. Submit a new analysis.', code: 'STALE_VERSION' });
+            return json(res, job ? 200 : 404, job ?? { error: 'Analysis job not found. Supply its repository to reconnect.' });
+          }
         }
         if (req.method === 'GET' && url.pathname === '/api/sources') {
           const input = sourceRequest.pick({ snapshotId: true, kind: true }).extend({ page: z.coerce.number().int().min(1).max(100).default(1) }).parse({ snapshotId: url.searchParams.get('snapshotId'), kind: url.searchParams.get('kind'), page: url.searchParams.get('page') ?? 1 });
@@ -198,6 +154,10 @@ export async function createApplicationServer(options: { production?: boolean; s
           if (snapshot.mode === 'demo') return json(res, 200, await serialSnapshot(input.snapshotId, () => saveSnapshot(grouping.view(getSnapshot(input.snapshotId)).snapshot)));
           // A newer selection cancels its predecessor rather than joining a work queue.
           sourceRequests.get(input.snapshotId)?.controller.abort();
+          if (ids.every(id => snapshot.sources.find(source => source.id === id)?.loaded === true)) {
+            sourceRequests.delete(input.snapshotId);
+            return json(res, 200, await serialSnapshot(input.snapshotId, () => saveSnapshot(grouping.view({ ...getSnapshot(input.snapshotId), defaultSelection: ids }).snapshot)));
+          }
           const release = admission.reserve();
           const request = { controller: new AbortController() }; sourceRequests.set(input.snapshotId, request);
           const signal = AbortSignal.any([request.controller.signal, AbortSignal.timeout(90_000)]);
@@ -250,7 +210,7 @@ export async function createApplicationServer(options: { production?: boolean; s
       if (!res.headersSent) json(res, status >= 400 && status < 600 ? status : 500, { error: safeError(error), code }); else res.end();
     }
   });
-  server.on('close', () => { for (const controller of aborts.values()) controller.abort(); for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void Promise.allSettled([...runningTasks]).then(() => store.close()); });
+  server.on('close', () => { for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void Promise.allSettled([...runningTasks, analysisJobs.close()]).then(() => store.close()); });
   return server;
 }
 function safeError(error: unknown) { const message = error instanceof Error ? error.message : 'Request failed.'; return message.replace(/(?:gh[pousr]_[a-zA-Z0-9]+|sk-[a-zA-Z0-9_-]+)/g, '[redacted]').slice(0, 500); }
