@@ -21,6 +21,8 @@ Stop either server with **Ctrl+C** in its terminal. To reset the default in-memo
 
 `GET /api/health` checks the BFF; `GET /api/health/worker` starts the real analysis worker entry point without GitHub or provider calls. The worker probe is shared and cached for ten seconds. Invalid environment settings and unavailable configured startup services produce a readable configuration page and HTTP 503, with no credential values in diagnostics. Correct the configuration and restart the server.
 
+`GET /api/readiness` additionally checks the real worker, storage, queue and production assets. Optional owner-scoped aggregate metrics and the verified local artifact/database rollback procedures are documented in [release operations](docs/RELEASE.md).
+
 To serve the production frontend locally:
 
 ```sh
@@ -56,6 +58,7 @@ Copy `.env.example` to `.env` only when configuring optional services. Values st
 | `GITHUB_WEBHOOK_SECRET` | Enables signed, durably queued webhook processing when App authorization and PostgreSQL are configured. See [webhooks](docs/WEBHOOKS.md). |
 | `PORT` | Local HTTP port; defaults to 4310. |
 | `API_REQUESTS_PER_MINUTE` | Bounded local API request quota, 1–2400; defaults to 240. Browser test servers explicitly use 2400 for independent journeys. |
+| `OPS_METRICS_ENABLED` | Defaults to false. Enables source-free operational aggregates; App mode requires a valid session and returns that owner's observations only. |
 
 The graph retains deterministic grouping until both providers and the reviewed evaluation gate are configured. External AI uses bounded metadata, validated IDs, reserved budgets, scoped caches and failure fallback. The current authored evaluation does not establish a navigation improvement; live intelligence remains gated. [Review the exact data policy](docs/AI_DATA_POLICY.md) before enabling external calls. Manual corrections persist separately and support revision conflicts, lineage review and undo.
 
@@ -88,3 +91,5 @@ The TypeScript workspace contains the React frontend/BFF in `apps/web`, job orch
 ## License
 
 Licensed under [Apache License 2.0](LICENSE), selected by the repository owner on 2026-11-03. Third-party dependencies retain their own licenses.
+
+The frontend and distributed fonts retain the exact installed [third-party license notices](apps/web/public/THIRD_PARTY_NOTICES.txt), with [package/version/source digests](apps/web/public/THIRD_PARTY_NOTICES.json). Builds verify these notices and copy them into `dist`; Geist and Geist Mono remain under OFL-1.1.

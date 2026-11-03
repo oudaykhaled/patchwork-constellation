@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1",
+  "recordedAt": "2026-11-03T17:24:24.84Z",
+  "scope": "local-source-artifact-rehearsal",
+  "results": [
+    {
+      "stage": "candidate",
+      "artifact": "patchwork-constellation-0.1.0-c5acffad834c",
+      "commit": "c5acffad834c66446545c703826a71692237c0dc",
+      "checks": [
+        "manifest-integrity",
+        "frozen-offline-install",
+        "production-health",
+        "production-html",
+        "212-file-demo",
+        "provider-disabled-baseline"
+      ],
+      "network": "loopback-only application probes; package install offline",
+      "database": "memory",
+      "externalModels": false
+    },
+    {
+      "stage": "rollback",
+      "artifact": "patchwork-constellation-0.1.0-8d0d13f94654",
+      "commit": "8d0d13f94654a8d7951322f0793edbe705cef310",
+      "checks": [
+        "manifest-integrity",
+        "frozen-offline-install",
+        "production-health",
+        "production-html",
+        "212-file-demo",
+        "provider-disabled-baseline"
+      ],
+      "network": "loopback-only application probes; package install offline",
+      "database": "memory",
+      "externalModels": false
+    }
+  ],
+  "stagingDatabase": "not-verified",
+  "hostedDeployment": "not-performed"
+}

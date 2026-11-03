@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { GitHubClient, parseRepository, type GitHubOptions } from '@patchwork/github';
+import { GitHubClient, parseRepository, type GitHubOptions, type GitHubTelemetry } from '@patchwork/github';
 import { newJob, type SnapshotStore, type StoreScope, type StoredJob } from '@patchwork/storage';
 import { ANALYZER_VERSION, GROUPING_RULES_VERSION, type AnalyzeInput } from '@patchwork/analysis';
 import { AnalysisJobSchema, type AnalysisJob, type GraphSnapshot, type ImportEdge } from '@patchwork/contracts';
@@ -48,7 +48,7 @@ export class AnalysisJobs {
   private tasks = new Set<Promise<void>>();
   private closing = false;
   private recovering = false;
-  private failuresSinceStart = 0;
+  private failuresByOwner = new Map<string, number>();
   private repositoryEpochs = new Map<string, number>();
   private invalidatingRepositories = new Set<string>();
   private readonly workerId = `bff:${randomUUID()}`;
@@ -56,7 +56,8 @@ export class AnalysisJobs {
   private recoveryOwners = new Set<string>();
   constructor(private store: SnapshotStore, private admission: WorkerAdmission, private analyze: typeof runAnalysisInWorker,
     private save: (snapshot: GraphSnapshot, scope: StoreScope, isCurrent: () => boolean) => Promise<GraphSnapshot>,
-    private credentials?: (scope: StoreScope) => Promise<Partial<NonNullable<Parameters<typeof runAnalysisInWorker>[1]>>>) {}
+    private credentials?: (scope: StoreScope) => Promise<Partial<NonNullable<Parameters<typeof runAnalysisInWorker>[1]>>>,
+    private observations?: { onGitHub?: (scope: StoreScope, event: GitHubTelemetry) => void; onAnalysis?: (scope: StoreScope, event: { durationMs: number; failed: boolean }) => void }) {}
 
   startRecovery(ownerId = 'local-public') {
     this.recoveryOwners.add(ownerId);
@@ -145,7 +146,7 @@ export class AnalysisJobs {
     return { storage: this.store.kind, pendingJobs: pending.length, queuedJobs: queued.length,
       leasedJobs: pending.filter(entry => entry.job.leaseExpiresAt && Date.parse(entry.job.leaseExpiresAt) > now).length,
       oldestQueuedAgeMs: queued.length ? Math.max(...queued.map(entry => Math.max(0, now - Date.parse(entry.job.createdAt)))) : 0,
-      activeWorkersInProcess: this.controllers.size, pendingEnqueueWrites: this.pending.size, failuresSinceProcessStart: this.failuresSinceStart,
+      activeWorkersInProcess: [...this.controllers.keys()].filter(id => this.scopes.get(id)?.ownerId === ownerId).length, pendingEnqueueWrites: [...this.pending.keys()].filter(id => this.scopes.get(id)?.ownerId === ownerId).length, failuresSinceProcessStart: this.failuresByOwner.get(ownerId) ?? 0,
       discoveryLimit: 100, stopping: this.closing };
   }
   private async recover(ownerId: string) {
@@ -170,6 +171,7 @@ export class AnalysisJobs {
     const epoch = this.repositoryEpochs.get(this.repositoryKey(scope)) ?? 0;
     const isCurrent = () => !controller.signal.aborted && (this.repositoryEpochs.get(this.repositoryKey(scope)) ?? 0) === epoch;
     const job = await this.store.claimJob(scope, this.workerId, 30_000, id); if (!job) return;
+    const startedAt = Date.now(); let failed = false;
     this.cache(scope, job);
     const timeout = setTimeout(() => controller.abort(), 180_000);
     const heartbeat = setInterval(() => { void this.store.renewLease(scope, id, this.workerId, 30_000).then(ok => { if (!ok) controller.abort(); }, () => controller.abort()); }, 10_000); heartbeat.unref();
@@ -177,7 +179,7 @@ export class AnalysisJobs {
     try {
       const input: PinnedAnalysisInput = { repository: String(job.input.repository), contextRef: String(job.input.contextRef), mode: job.input.mode === 'commit' ? 'commit' : 'pr' };
       const credentials = await this.credentials?.(scope);
-      const snapshot = await this.analyze(input, { ...credentials, signal: controller.signal, onProgress: progress => {
+      const snapshot = await this.analyze(input, { ...credentials, signal: controller.signal, onTelemetry: event => { try { this.observations?.onGitHub?.(scope, event); } catch { /* optional source-free sink */ } }, onProgress: progress => {
         const stage = progress.stage === 'indexing' ? 'indexing' : progress.stage === 'ready' ? 'grouping' : 'fetching';
         job.progress = Math.max(job.progress, Math.min(99, progress.progress)); job.status = stage; job.input.progressMessage = progress.message; job.updatedAt = new Date().toISOString(); this.cache(scope, job);
         // Serialize at most the producer's bounded phase events, never overwrite lease state.
@@ -194,14 +196,15 @@ export class AnalysisJobs {
         const view = this.cache(scope, { ...job, status, snapshotId: saved.id, progress: 100, updatedAt: new Date().toISOString() }); view.snapshot = saved; view.message = 'Graph ready';
       }
     } catch (error) {
+      failed = true;
       await writes;
       const current = await this.store.getJob(scope, id); if (!current || current.status === 'cancelled') return;
       const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 500;
       const hasExplicitStatus = typeof error === 'object' && error && 'status' in error;
       const retryable = this.closing || (!controller.signal.aborted && Boolean(hasExplicitStatus) && (status >= 500 || status === 429));
       if (retryable && job.attempts < job.maxAttempts) await this.store.retryJob(scope, id, this.workerId, this.closing ? 'Server restarted; analysis will resume from its pinned context.' : errorMessage(error), this.closing ? 0 : Math.min(30_000, 1_000 * 2 ** job.attempts));
-      else if (await this.store.completeJob(scope, id, this.workerId, { status: 'failed', error: controller.signal.aborted ? 'Analysis exceeded its resource budget. Retry a smaller repository.' : errorMessage(error), errorCode: controller.signal.aborted ? 'ANALYSIS_TIMEOUT' : failureCode(error, status), retryable })) this.failuresSinceStart++;
-    } finally { clearTimeout(timeout); clearInterval(heartbeat); }
+      else if (await this.store.completeJob(scope, id, this.workerId, { status: 'failed', error: controller.signal.aborted ? 'Analysis exceeded its resource budget. Retry a smaller repository.' : errorMessage(error), errorCode: controller.signal.aborted ? 'ANALYSIS_TIMEOUT' : failureCode(error, status), retryable })) { this.failuresByOwner.set(scope.ownerId, (this.failuresByOwner.get(scope.ownerId) ?? 0) + 1); while (this.failuresByOwner.size > 128) this.failuresByOwner.delete(this.failuresByOwner.keys().next().value!); }
+    } finally { clearTimeout(timeout); clearInterval(heartbeat); try { this.observations?.onAnalysis?.(scope, { durationMs: Math.max(0, Date.now() - startedAt), failed }); } catch { /* optional aggregate sink */ } }
   }
   async close() { this.closing = true; clearInterval(this.timer); for (const controller of this.controllers.values()) controller.abort(); await Promise.allSettled([...this.tasks]); }
 }

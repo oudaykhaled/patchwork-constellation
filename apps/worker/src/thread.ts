@@ -1,10 +1,12 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { analyzeRepository, loadSourceChanges, type AnalysisOptions } from '@patchwork/analysis';
 import type { GraphSnapshot } from '@patchwork/contracts';
+import { workerTelemetry } from './telemetry';
 if (!parentPort) throw new Error('Analysis thread requires a worker parent.');
 const port = parentPort;
 const data = workerData as { task: { kind: 'health' } | { kind: 'repository'; input: Parameters<typeof analyzeRepository>[0] } | { kind: 'sources'; snapshot: GraphSnapshot; sourceKind: 'pr' | 'commit'; ids: string[] }; options: AnalysisOptions };
-const options: AnalysisOptions = { ...data.options, onProgress: progress => port.postMessage({ type: 'progress', progress }) };
+let telemetryCount = 0;
+const options: AnalysisOptions = { ...data.options, onProgress: progress => port.postMessage({ type: 'progress', progress }), onTelemetry: event => { const message = workerTelemetry(event); if (message && ++telemetryCount <= 2_000) port.postMessage(message); } };
 try {
   if (data.task.kind === 'health') {
     port.postMessage({ type: 'health', schemaVersion: '1' });

@@ -1,15 +1,17 @@
 import { Worker } from 'node:worker_threads';
 import { validateGraphSnapshot, type GraphSnapshot } from '@patchwork/contracts';
 import type { AnalysisOptions, AnalysisProgress, AnalyzeInput } from '@patchwork/analysis';
+import { receiveWorkerTelemetry } from './telemetry';
 
-type WorkerOptions = Omit<AnalysisOptions, 'fetch'>;
+type WorkerOptions = Omit<AnalysisOptions, 'fetch' | 'gitFallback'>;
 type Task = { kind: 'repository'; input: AnalyzeInput } | { kind: 'sources'; snapshot: GraphSnapshot; sourceKind: 'pr' | 'commit'; ids: string[] };
 function runTask(task: Task, options: WorkerOptions = {}): Promise<GraphSnapshot> {
   options.signal?.throwIfAborted();
-  const { signal, onProgress, ...serializable } = options;
+  const { signal, onProgress, onTelemetry, ...serializable } = options;
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./thread.ts', import.meta.url), { workerData: { task, options: serializable }, execArgv: ['--import', 'tsx'], resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 4 } });
     let finished = false;
+    let telemetryCount = 0;
     const cleanup = async () => { clearTimeout(timeout); signal?.removeEventListener('abort', cancel); await worker.terminate(); };
     // Completion releases an admission slot only after the worker has actually stopped.
     const fail = (error: Error) => { if (finished) return; finished = true; void cleanup().then(() => reject(error), () => reject(error)); };
@@ -18,7 +20,8 @@ function runTask(task: Task, options: WorkerOptions = {}): Promise<GraphSnapshot
     signal?.addEventListener('abort', cancel, { once: true });
     worker.on('message', (message: { type: string; progress?: AnalysisProgress; snapshot?: GraphSnapshot; error?: { message: string; code?: string; status?: number; retryAfter?: number } }) => {
       if (finished) return;
-      if (message.type === 'progress' && message.progress) onProgress?.(message.progress);
+      if (message.type === 'telemetry') { if (++telemetryCount <= 2_000) receiveWorkerTelemetry(message, onTelemetry); }
+      else if (message.type === 'progress' && message.progress) onProgress?.(message.progress);
       else if (message.type === 'result' && message.snapshot) {
         try {
           const snapshot = validateGraphSnapshot(message.snapshot);

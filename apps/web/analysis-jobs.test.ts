@@ -27,6 +27,7 @@ describe('durable analysis coordination', () => {
     const first = jobs.submit(scope, input), second = jobs.submit(scope, input);
     const [a, b] = await Promise.all([first, second]); expect(a.jobId).toBe(b.jobId); expect(b.reused).toBe(true);
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    expect(await jobs.operationalStatus('another-user')).toMatchObject({ activeWorkersInProcess: 0, pendingEnqueueWrites: 0, failuresSinceProcessStart: 0, queuedJobs: 0, leasedJobs: 0 });
     expect((await jobs.get(a.jobId))?.stage).toBe('fetching');
     resolve(structuredClone(demoSnapshot));
     await vi.waitFor(async () => expect((await jobs.get(a.jobId))?.status).toBe('ready'));

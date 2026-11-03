@@ -170,6 +170,7 @@ export class GroupingService {
   }
 
   async propose(snapshot: GraphSnapshot, options: RequestContext & { enabled?: boolean } = {}): Promise<GroupingProposal> {
+    const requestedAt = Date.now();
     this.pruneExternalData();
     const revision = this.current(snapshot, options);
     const scopeKey = digest({ tenant: options.tenantId ?? 'local', repository: repositoryKey(snapshot).toLowerCase() });
@@ -190,35 +191,38 @@ export class GroupingService {
       id: `baseline-${randomUUID()}`, snapshotId: snapshot.id, parentRevisionId: revision.id, status: 'baseline', origin: revision.origin, groups: copy(revision.groups), membership: copy(revision.membership), decisions: [], message, createdAt: new Date().toISOString(),
       dataPolicy: { fieldsSent: [], excludedFiles, analyzedFiles: 0 },
     }, snapshot, revision.groups.map(group => group.id)); };
-    if (!options.enabled || !this.capabilities().available) return baseline(this.capabilities().message);
-    if (!evaluationAllowsTenant(this.capabilities().evaluation, options.tenantId ?? 'local')) return baseline('AI + Jev is in a limited canary. The current grouping is retained for this session.');
-    if (options.signal?.aborted) return baseline('Grouping analysis was cancelled. The current grouping is retained.');
-    if (!evidence.files.length) return baseline('No eligible unlocked files are available for external grouping.');
-    if (JSON.stringify(evidence).length > this.config.maxInputCharacters) return baseline('The metadata budget was exceeded. Narrow the repository scope before requesting AI grouping.');
+    const immediate = (message: string, outcome: string) => { const proposal = baseline(message); this.telemetry(proposal, Math.max(0, Date.now() - requestedAt), false, 0, outcome); return proposal; };
+    if (!options.enabled || !this.capabilities().available) return immediate(this.capabilities().message, !options.enabled || !this.config.enabled ? 'disabled' : 'unavailable');
+    if (!evaluationAllowsTenant(this.capabilities().evaluation, options.tenantId ?? 'local')) return immediate('AI + Jev is in a limited canary. The current grouping is retained for this session.', 'canary-excluded');
+    if (options.signal?.aborted) return immediate('Grouping analysis was cancelled. The current grouping is retained.', 'cancelled');
+    if (!evidence.files.length) return immediate('No eligible unlocked files are available for external grouping.', 'excluded');
+    if (JSON.stringify(evidence).length > this.config.maxInputCharacters) return immediate('The metadata budget was exceeded. Narrow the repository scope before requesting AI grouping.', 'budget-exhausted');
     const tenantId = options.tenantId ?? 'local';
     const repository = repositoryKey(snapshot);
     const cacheKey = externalGroupingCacheKey({ tenantId, snapshot, revisionId: revision.id, evidence, jevModel: this.config.jevModel, generativeModel: this.config.generativeModel, policyDigest: this.policy.digest, minimumConfidence: this.config.minimumConfidence, pipelineVersion: GROUPING_PIPELINE_VERSION, membershipPolicy: this.capabilities().evaluation });
     const cached = this.cached.get(cacheKey);
-    if (cached) { this.registerProposal(snapshot, cached.proposal, options); this.telemetry(cached.proposal, 0, true); return copy(cached.proposal); }
+    if (cached) { this.registerProposal(snapshot, cached.proposal, options); this.telemetry(cached.proposal, 0, true, 0, 'cache-hit'); return copy(cached.proposal); }
     const running = this.inflight.get(cacheKey);
     if (running) return this.subscribe(running, options.signal, baseline);
-    if (this.active >= 2) return baseline('Grouping capacity is busy. The current grouping is retained; try again shortly.');
+    if (this.active >= 2) return immediate('Grouping capacity is busy. The current grouping is retained; try again shortly.', 'busy');
     this.active++;
     const controller = new AbortController();
     const startedAt = Date.now();
     const metrics = { requests: 0 };
+    let outcome = 'proposed', telemetryRecorded = false;
     const entry: SharedProposal = { promise: Promise.resolve(null as unknown as GroupingProposal), controller, subscribers: 0, settled: false, tenantId, repository };
     const work = this.runProviders(snapshot, revision, evidence, excludedFiles, { ...options, signal: AbortSignal.any([controller.signal, fence.signal]) }, metrics).then(proposal => {
       assertScope();
-      if (controller.signal.aborted) return baseline('Grouping analysis was cancelled. The current grouping is retained.');
+      if (controller.signal.aborted) { outcome = 'cancelled'; return baseline('Grouping analysis was cancelled. The current grouping is retained.'); }
       this.cached.set(cacheKey, { proposal: copy(proposal), expires: Date.now() + (this.config.proposalTtlMs ?? 900_000), tenantId, repository });
       if (this.cached.size > 64) this.cached.delete(this.cached.keys().next().value!);
       this.registerProposal(snapshot, proposal, options);
       return proposal;
-    }).catch((error: unknown) => { assertScope(); return baseline(error instanceof GroupingError ? `${error.message} The current grouping is retained.` : 'Grouping analysis failed. The current grouping is retained.'); }).then(proposal => {
-      this.telemetry(proposal, Date.now() - startedAt, false, metrics.requests);
+    }).catch((error: unknown) => { assertScope(); const code = error instanceof GroupingError ? error.code : ''; outcome = ({ TIMEOUT: 'timeout', RATE_LIMITED: 'rate-limited', BUDGET_EXHAUSTED: 'budget-exhausted', CANCELLED: 'cancelled', PROVIDER_AUTH: 'auth-failed', INVALID_OUTPUT: 'invalid-output', UNKNOWN_ID: 'invalid-output', UNKNOWN_EVIDENCE: 'invalid-output' } as Record<string, string>)[code] ?? 'provider-failed'; return baseline(error instanceof GroupingError ? `${error.message} The current grouping is retained.` : 'Grouping analysis failed. The current grouping is retained.'); }).then(proposal => {
+      this.telemetry(proposal, Math.max(0, Date.now() - startedAt), false, metrics.requests, outcome); telemetryRecorded = true;
       return proposal;
     }).finally(() => {
+      if (!telemetryRecorded) this.telemetry(undefined, Math.max(0, Date.now() - startedAt), false, metrics.requests, fence.signal.aborted ? 'revoked' : 'conflict');
       entry.settled = true; this.active--; this.inflight.delete(cacheKey);
     });
     entry.promise = work;
@@ -259,9 +263,10 @@ export class GroupingService {
       entry.subscribers--; if (!entry.subscribers && !entry.settled) entry.controller.abort();
     }
   }
-  private telemetry(proposal: GroupingProposal, durationMs: number, cacheHit: boolean, requests = 0) {
+  private telemetry(proposal: GroupingProposal | undefined, durationMs: number, cacheHit: boolean, requests = 0, outcome = proposal?.status ?? 'provider-failed') {
     // Explicit allowlist: no tenant/repo identifiers, prompts, paths, provider messages or secrets.
-    try { this.config.onTelemetry?.({ event: 'grouping', outcome: proposal.status, durationMs, requests: cacheHit ? 0 : requests, inputTokens: cacheHit ? 0 : proposal.usage?.inputTokens ?? null, outputTokens: cacheHit ? 0 : proposal.usage?.outputTokens ?? null, cacheHit }); } catch { /* A metrics sink cannot interrupt the review flow. */ }
+    const noTraffic = cacheHit || requests === 0;
+    try { this.config.onTelemetry?.({ event: 'grouping', outcome, durationMs, requests: cacheHit ? 0 : requests, inputTokens: noTraffic ? 0 : proposal?.usage?.inputTokens ?? null, outputTokens: noTraffic ? 0 : proposal?.usage?.outputTokens ?? null, cacheHit }); } catch { /* A metrics sink cannot interrupt the review flow. */ }
   }
 
   /** Called only after the server revokes the same owner/repository authority. */
