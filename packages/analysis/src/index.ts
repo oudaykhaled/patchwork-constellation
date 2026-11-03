@@ -43,7 +43,7 @@ function sourceFromCommit(commit: ApiCommit): ChangeSource {
 export async function listRepositorySources(repository: string, kind: 'pr' | 'commit', page = 1, contextSha?: string, options: GitHubOptions = {}) {
   const address = parseRepository(repository); const client = new GitHubClient(options); const prefix = prefixFor(address.fullName);
   const metadata = await client.get<ApiRepository>(prefix);
-  if (metadata.private) throw new GitHubError('This build analyzes public repositories. Private repository authorization is not configured.', 403, 'PRIVATE_UNSUPPORTED');
+  if (metadata.private && !(options.allowPrivate && options.token)) throw new GitHubError('Private repository authorization is not configured. Sign in through the GitHub App.', 403, 'PRIVATE_UNSUPPORTED');
   if (kind === 'pr') { const result = await client.page<ApiPull>(`${prefix}/pulls?state=all&sort=updated&direction=desc`, page, 30); return { sources: result.items.map(sourceFromPull), nextPage: result.nextPage }; }
   const result = await client.page<ApiCommit>(`${prefix}/commits${contextSha ? `?sha=${encodeURIComponent(contextSha)}` : ''}`, page, 30);
   return { sources: result.items.map(sourceFromCommit), nextPage: result.nextPage };
@@ -55,7 +55,7 @@ export async function analyzeRepository(input: AnalyzeInput, options: AnalysisOp
   const emit = (stage: AnalysisProgress['stage'], progress: number, message: string) => { options.signal?.throwIfAborted(); lastProgress = Math.max(lastProgress, progress); options.onProgress?.({ stage, progress: lastProgress, message }); };
   emit('fetching', 3, 'Resolving the public repository and immutable context');
   const repository = await client.get<ApiRepository>(prefix);
-  if (repository.private) throw new GitHubError('This build analyzes public repositories. Private repository authorization is not configured.', 403, 'PRIVATE_UNSUPPORTED');
+  if (repository.private && !(options.allowPrivate && options.token)) throw new GitHubError('Private repository authorization is not configured. Sign in through the GitHub App.', 403, 'PRIVATE_UNSUPPORTED');
   const contextRef = input.contextRef?.trim() || repository.default_branch;
   if (!supportedRef(contextRef)) throw new GitHubError('Enter a valid branch name or commit SHA.', 400, 'INVALID_REF');
   const commit = await client.get<ApiCommit>(`${prefix}/commits/${encodeURIComponent(contextRef)}`);

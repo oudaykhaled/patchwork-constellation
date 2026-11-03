@@ -28,6 +28,8 @@ export interface GitHubOptions {
   maxRetries?: number;
   maxRetryWaitMs?: number;
   cacheTtlMs?: number;
+  /** Set only after live GitHub App user/repository authorization. */
+  allowPrivate?: boolean;
 }
 export interface GitHubPage<T> { items: T[]; nextPage: number | null; }
 export interface RepositoryAddress { owner: string; name: string; fullName: string; }
@@ -190,8 +192,9 @@ export class GitHubClient {
     try {
       for (let attempt = 0; ; attempt++) {
         signal.throwIfAborted();
-        const headers: Record<string, string> = raw ? {} : { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': API_VERSION, 'User-Agent': 'Patchwork-Constellation' };
-        if (!raw && this.token) headers.Authorization = `Bearer ${this.token}`;
+        const privateSource = raw && url.origin === 'https://api.github.com';
+        const headers: Record<string, string> = raw && !privateSource ? {} : { Accept: privateSource ? 'application/vnd.github.raw+json' : 'application/vnd.github+json', 'X-GitHub-Api-Version': API_VERSION, 'User-Agent': 'Patchwork-Constellation' };
+        if ((!raw || privateSource) && this.token) headers.Authorization = `Bearer ${this.token}`;
         if (old?.etag) headers['If-None-Match'] = old.etag;
         let response: Response;
         try { response = await this.fetcher(url.href, { ...(Object.keys(headers).length ? { headers } : {}), signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]), redirect: 'error' }); }
@@ -259,7 +262,9 @@ export class GitHubClient {
     // Revalidate address even when a caller supplies a structural object instead of parseRepository().
     const safe = parseRepository(`${address.owner}/${address.name}`);
     if (!/^[a-f0-9]{40,64}$/i.test(sha) || !path || path.startsWith('/') || path.split('/').some(p => p === '..' || p === '.') || path.includes('\\') || /[\x00-\x1f\x7f]/.test(path) || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_RESPONSE_BYTES) throw new GitHubError('Invalid source path or size limit.', 400, 'INVALID_SOURCE_PATH');
-    const url = new URL(`https://raw.githubusercontent.com/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.name)}/${sha}/${path.split('/').map(encodeURIComponent).join('/')}`);
+    const privateRead = Boolean(this.options.allowPrivate && this.token);
+    const escapedPath = path.split('/').map(encodeURIComponent).join('/');
+    const url = privateRead ? this.apiUrl(`/repos/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.name)}/contents/${escapedPath}?ref=${sha}`) : new URL(`https://raw.githubusercontent.com/${encodeURIComponent(safe.owner)}/${encodeURIComponent(safe.name)}/${sha}/${escapedPath}`);
     return (await this.request(url, true, true, maxBytes)).value as string;
   }
 }

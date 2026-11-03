@@ -25,6 +25,15 @@ describe('repository addressing and outbound boundaries', () => {
     const client = new GitHubClient({ fetch: vi.fn(async () => new Response('', { status: 429, headers: { 'retry-after': '20' } })) as typeof fetch });
     await expect(client.get('/repos/acme/tool')).rejects.toMatchObject({ code: 'RATE_LIMITED', retryAfter: 20 });
   });
+  it('reads authorized private source through the fixed Contents API with a scoped server token', async () => {
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe(`https://api.github.com/repos/acme/tool/contents/src/a.ts?ref=${'a'.repeat(40)}`);
+      expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer installation-test');
+      expect(init?.redirect).toBe('error');
+      return new Response('export {}');
+    });
+    expect(await new GitHubClient({ token: 'installation-test', allowPrivate: true, fetch: fetcher as typeof fetch }).source(parseRepository('acme/tool'), 'a'.repeat(40), 'src/a.ts')).toBe('export {}');
+  });
   it('rejects oversized source before parsing and uses a fixed raw origin', async () => {
     const client = new GitHubClient({ fetch: vi.fn(async () => new Response('large', { headers: { 'content-length': '1000000' } })) as typeof fetch });
     await expect(client.source(parseRepository('acme/tool'), 'a'.repeat(40), 'src/a.ts', 100)).rejects.toMatchObject({ code: 'RESPONSE_LIMIT' });

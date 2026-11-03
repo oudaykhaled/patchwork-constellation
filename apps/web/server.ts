@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
 import { validateGraphSnapshot, type GraphSnapshot } from '@patchwork/contracts';
 import { demoSnapshot } from '@patchwork/fixtures';
@@ -14,6 +15,7 @@ import { createStore, newJob, type SnapshotStore, type StoreScope } from '@patch
 import { BusyError, WorkerAdmission } from './worker-admission';
 import { checkWorkerHealth } from '../worker/src/health';
 import { ConfigurationError, validateEnvironment } from './environment';
+import { GitHubAppAuth, githubAuthConfig, AuthError, type GitHubSession } from './github-auth';
 
 let environmentLoadFailure = false;
 try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') environmentLoadFailure = true; }
@@ -21,6 +23,9 @@ const root = fileURLToPath(new URL('../..', import.meta.url));
 const dist = resolve(root, 'dist');
 const production = process.argv.includes('--production');
 const MAX_SNAPSHOTS = 48;
+const requestScope = new AsyncLocalStorage<{ ownerId: string }>();
+const ownerId = () => requestScope.getStore()?.ownerId ?? 'local-public';
+const snapshotKey = (id: string) => `${ownerId()}:${id}`;
 const snapshots = new Map<string, GraphSnapshot>();
 const jobs = new Map<string, Job>();
 const aborts = new Map<string, AbortController>();
@@ -28,7 +33,7 @@ const grouping = new GroupingService({ enabled: process.env.AI_ENABLED === 'true
 type Job = { id: string; status: 'queued' | 'running' | 'ready' | 'failed' | 'cancelled'; progress: number; message: string; snapshot?: GraphSnapshot; error?: string; code?: string; createdAt: string };
 function remember(snapshot: GraphSnapshot) {
   validateGraphSnapshot(snapshot);
-  snapshots.set(snapshot.id, snapshot);
+  snapshots.set(snapshotKey(snapshot.id), snapshot);
   while (snapshots.size > MAX_SNAPSHOTS) snapshots.delete(snapshots.keys().next().value!);
   return snapshot;
 }
@@ -38,19 +43,21 @@ function json(res: ServerResponse, status: number, value: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(value));
 }
+const requestBodies = new WeakMap<IncomingMessage, unknown>();
 async function body(req: IncomingMessage) {
+  if (requestBodies.has(req)) return requestBodies.get(req);
   if (!req.headers['content-type']?.startsWith('application/json')) throw Object.assign(new Error('Use application/json.'), { status: 415 });
   let size = 0; const chunks: Buffer[] = [];
   for await (const chunk of req) { size += chunk.length; if (size > 128_000) throw Object.assign(new Error('Request exceeds 128 KB.'), { status: 413 }); chunks.push(chunk); }
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown; } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
+  try { const value: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8')); requestBodies.set(req, value); return value; } catch { throw Object.assign(new Error('Invalid JSON.'), { status: 400 }); }
 }
-function getSnapshot(id: string) { const snapshot = snapshots.get(id); if (!snapshot) throw Object.assign(new Error('This snapshot expired. Analyze the repository again.'), { status: 404 }); return snapshot; }
+function getSnapshot(id: string) { const snapshot = snapshots.get(snapshotKey(id)); if (!snapshot) throw Object.assign(new Error('This snapshot expired. Analyze the repository again.'), { status: 404 }); return snapshot; }
 const sourceRequest = z.object({ snapshotId: z.string(), kind: z.enum(['pr', 'commit']), ids: z.array(z.string().max(100)).max(20) });
 const analyzeRequest = z.object({ repository: z.string().trim().min(3).max(250), contextRef: z.string().max(200).optional(), mode: z.enum(['pr', 'commit']).optional() });
 const idRequest = z.object({ snapshotId: z.string().max(500) });
 const rateWindows = new Map<string, { start: number; requests: number }>();
 
-export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker } = {}) {
+export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; auth?: GitHubAppAuth | null } = {}) {
   if (environmentLoadFailure) throw new ConfigurationError(['The .env file could not be read. Check its format and file permissions.']);
   validateEnvironment();
   const useProduction = options.production ?? production;
@@ -58,6 +65,15 @@ export async function createApplicationServer(options: { production?: boolean; s
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
   const loadSources = options.runSources ?? runSourceAnalysisInWorker;
   const admission = new WorkerAdmission(2);
+  const authConfig = options.auth === undefined ? githubAuthConfig() : undefined;
+  const auth = options.auth === undefined ? (authConfig ? new GitHubAppAuth(authConfig) : undefined) : options.auth ?? undefined;
+  const ownerGroupings = new Map<string, GroupingService>();
+  const groupingForOwner = () => {
+    if (!auth) return grouping;
+    const id = ownerId(); let service = ownerGroupings.get(id);
+    if (!service) { if (ownerGroupings.size >= 128) ownerGroupings.delete(ownerGroupings.keys().next().value!); service = new GroupingService({ enabled: process.env.AI_ENABLED === 'true', jevApiKey: process.env.TYPESAFE_API_KEY, jevModel: process.env.JEV_MODEL, generativeApiKey: process.env.OPENAI_API_KEY, generativeModel: process.env.OPENAI_MODEL }); ownerGroupings.set(id, service); }
+    return service;
+  };
   const sourceRequests = new Map<string, { controller: AbortController }>();
   const runningTasks = new Set<Promise<unknown>>();
   const jobScopes = new Map<string, StoreScope>();
@@ -65,14 +81,14 @@ export async function createApplicationServer(options: { production?: boolean; s
   const snapshotWrites = new Map<string, Promise<unknown>>();
   const snapshotPending = new Map<string, number>();
   let workerHealth: { checkedAt: number; result: Promise<{ status: 'ok'; schemaVersion: '1' }> } | undefined;
-  const scopeFor = (repository: string): StoreScope => ({ ownerId: 'local-public', repository: parseRepository(repository).fullName.toLowerCase() });
+  const scopeFor = (repository: string): StoreScope => ({ ownerId: ownerId(), repository: parseRepository(repository).fullName.toLowerCase() });
   async function saveSnapshot(snapshot: GraphSnapshot) {
     validateGraphSnapshot(snapshot);
     await store.putSnapshot(scopeFor(snapshot.repository.fullName), snapshot);
     return remember(snapshot);
   }
   async function lookupSnapshot(id: string, repository?: string | null): Promise<GraphSnapshot> {
-    const cached = snapshots.get(id);
+    const cached = snapshots.get(snapshotKey(id));
     if (cached && (!repository || cached.repository.fullName.toLowerCase() === scopeFor(repository).repository)) return cached;
     if (repository) {
       const saved = await store.getSnapshot(scopeFor(repository), id);
@@ -81,6 +97,7 @@ export async function createApplicationServer(options: { production?: boolean; s
     throw Object.assign(new Error('This snapshot is unavailable. Analyze again, or supply its repository when restoring a saved snapshot.'), { status: 404 });
   }
   async function serialSnapshot<T>(id: string, run: () => Promise<T>): Promise<T> {
+    id = snapshotKey(id);
     const pending = snapshotPending.get(id) ?? 0;
     if (pending >= 2) throw new BusyError();
     snapshotPending.set(id, pending + 1);
@@ -95,31 +112,61 @@ export async function createApplicationServer(options: { production?: boolean; s
   }
   await saveSnapshot(structuredClone(demoSnapshot));
   const vite = useProduction ? null : await (await import('vite')).createServer({ configFile: resolve(root, 'apps/web/vite.config.ts'), server: { middlewareMode: true }, appType: 'spa' });
-  const server = createServer(async (req, res) => {
+  const server = createServer((req, res) => requestScope.run({ ownerId: 'local-public' }, async () => {
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
       if (url.pathname.startsWith('/api/')) {
         // This runnable edition is a local, single-user tool. It only analyzes public repositories.
         const host = req.headers.host ?? '';
-        if (!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return json(res, 403, { error: 'Use the local application address.', code: 'HOST_DENIED' });
+        if (auth ? host !== new URL(auth.config.origin).host : !/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return json(res, 403, { error: 'Use the configured application address.', code: 'HOST_DENIED' });
         if (req.headers.origin && req.headers.origin !== `http://${host}` && req.headers.origin !== `https://${host}`) return json(res, 403, { error: 'Cross-origin requests are not allowed.', code: 'ORIGIN_DENIED' });
         const key = req.socket.remoteAddress ?? 'local'; const now = Date.now(); let window = rateWindows.get(key);
         if (!window || now - window.start > 60_000) { window = { start: now, requests: 0 }; rateWindows.set(key, window); }
         if (++window.requests > 240) { res.setHeader('Retry-After', '60'); return json(res, 429, { error: 'Too many requests. Try again shortly.', code: 'RATE_LIMITED', retryAfter: 60 }); }
+        if (url.pathname.startsWith('/api/auth/')) {
+          if (!auth) return json(res, 200, { configured: false, authenticated: false, code: 'AUTH_UNCONFIGURED' });
+          if (req.method === 'GET' && url.pathname === '/api/auth/login') { res.writeHead(302, { Location: auth.begin(res), 'Cache-Control': 'no-store' }); return res.end(); }
+          if (req.method === 'GET' && url.pathname === '/api/auth/callback') { await auth.complete(req, res, url.searchParams.get('code') ?? '', url.searchParams.get('state') ?? ''); res.writeHead(303, { Location: '/', 'Cache-Control': 'no-store' }); return res.end(); }
+          if (req.method === 'GET' && url.pathname === '/api/auth/session') { const session = auth.session(req); return json(res, 200, session ? { configured: true, authenticated: true, login: session.login, csrf: session.csrf, expiresAt: session.expiresAt } : { configured: true, authenticated: false }); }
+          if (req.method === 'POST' && url.pathname === '/api/auth/disconnect') { auth.disconnect(req, res); return json(res, 200, { authenticated: false }); }
+          if (req.method === 'GET' && url.pathname === '/api/auth/repositories') return json(res, 200, { repositories: await auth.repositories(auth.requireSession(req)) });
+          return json(res, 404, { error: 'Authentication route not found.' });
+        }
+        let session: GitHubSession | undefined; let repositoryToken: string | undefined;
+        const publicRoute = ['/api/health', '/api/config', '/api/demo'].includes(url.pathname);
+        if (auth && !publicRoute) {
+          session = auth.requireSession(req); requestScope.getStore()!.ownerId = session.ownerId;
+          if (!['GET', 'HEAD'].includes(req.method ?? '')) auth.csrf(req, session);
+          const payload = req.method === 'POST' ? await body(req) : undefined;
+          let repository = url.searchParams.get('repository') ?? undefined;
+          if (url.pathname === '/api/analyze') repository = parseRepository(analyzeRequest.parse(payload).repository).fullName;
+          const resourceSnapshot = url.pathname.match(/^\/api\/(?:snapshots|graphs|files)\/([^/]+)/)?.[1];
+          const snapshotId = resourceSnapshot ? decodeURIComponent(resourceSnapshot) : typeof payload === 'object' && payload && 'snapshotId' in payload && typeof payload.snapshotId === 'string' ? payload.snapshotId : url.searchParams.get('snapshotId');
+          if (snapshotId) {
+            const cached = snapshots.get(snapshotKey(snapshotId));
+            if (cached?.mode === 'demo') repository = undefined;
+            else if (cached) repository = cached.repository.fullName;
+            else if (!repository) throw new AuthError('Snapshot not found in your account. Supply its repository or analyze again.', 404, 'SNAPSHOT_NOT_FOUND');
+          }
+          const requestedJob = url.pathname.match(/^\/api\/jobs\/([a-zA-Z0-9-]+)/)?.[1];
+          if (requestedJob) { const scope = jobScopes.get(requestedJob); if (scope && scope.ownerId !== session.ownerId) throw new AuthError('Analysis job not found.', 404, 'JOB_NOT_FOUND'); repository = scope?.repository ?? repository; if (!repository) throw new AuthError('Analysis job not found. Supply its repository to recover it.', 404, 'JOB_NOT_FOUND'); }
+          if (repository) repositoryToken = await auth.repositoryToken(session, repository);
+        } else if (auth && url.pathname === '/api/demo') { const optionalSession = auth.session(req); if (optionalSession) requestScope.getStore()!.ownerId = optionalSession.ownerId; }
+        const grouping = groupingForOwner();
         if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.1.0', mode: 'local-public' });
         if (req.method === 'GET' && url.pathname === '/api/health/worker') {
           if (!workerHealth || Date.now() - workerHealth.checkedAt > 10_000) workerHealth = { checkedAt: Date.now(), result: checkWorkerHealth() };
           try { return json(res, 200, await workerHealth.result); }
           catch { return json(res, 503, { status: 'unavailable', code: 'WORKER_UNAVAILABLE', error: 'The analysis worker could not start. Restart the server and check the Node.js installation.' }); }
         }
-        if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: 'local-public', github: { publicRepositories: true, privateRepositories: false, configuredToken: Boolean(process.env.GITHUB_TOKEN) }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: false } });
+        if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: auth ? 'github-app' : 'local-public', github: { publicRepositories: true, privateRepositories: Boolean(auth), configuredToken: Boolean(process.env.GITHUB_TOKEN), appConfigured: Boolean(auth), loginUrl: auth ? '/api/auth/login' : null }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: false } });
         if (req.method === 'GET' && url.pathname === '/api/demo') return json(res, 200, await saveSnapshot(grouping.view(structuredClone(demoSnapshot)).snapshot));
         if (req.method === 'GET' && url.pathname.startsWith('/api/snapshots/')) return json(res, 200, await lookupSnapshot(decodeURIComponent(url.pathname.slice(15)), url.searchParams.get('repository')));
         if (req.method === 'POST' && url.pathname === '/api/analyze') {
           const input = analyzeRequest.parse(await body(req));
           input.repository = parseRepository(input.repository).fullName;
-          const analysisKey = JSON.stringify(input);
+          const analysisKey = `${ownerId()}:${JSON.stringify(input)}`;
           const existingId = inFlightAnalyses.get(analysisKey);
           if (existingId) return json(res, 202, { jobId: existingId, reused: true });
           const release = admission.reserve();
@@ -150,7 +197,7 @@ export async function createApplicationServer(options: { production?: boolean; s
           const timeout = setTimeout(() => controller.abort(), 180_000);
           // Work is bounded and asynchronous in this process. Persisted interrupted jobs
           // remain inspectable, but automatic restart/resume is intentionally not claimed.
-          const task = Promise.resolve().then(() => analyze(input, { signal: controller.signal, onProgress: p => {
+          const task = Promise.resolve().then(() => analyze(input, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal: controller.signal, onProgress: p => {
             job.progress = p.progress; job.message = p.message; persisted.status = p.stage === 'indexing' ? 'indexing' : 'fetching';
             void persist().catch(() => { controller.abort(); job.code = 'STORAGE_FAILED'; });
           } })).then(async snapshot => {
@@ -194,7 +241,7 @@ export async function createApplicationServer(options: { production?: boolean; s
           const result = await serialSnapshot(input.snapshotId, async () => {
             const snapshot = await lookupSnapshot(input.snapshotId, url.searchParams.get('repository'));
             if (snapshot.mode === 'demo') return { sources: snapshot.sources.filter(source => source.kind === input.kind), nextPage: null, snapshot };
-            const page = await listRepositorySources(snapshot.repository.fullName, input.kind, input.page, snapshot.contextSha, { signal: AbortSignal.timeout(30_000) });
+            const page = await listRepositorySources(snapshot.repository.fullName, input.kind, input.page, snapshot.contextSha, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal: AbortSignal.timeout(30_000) });
             const byId = new Map(snapshot.sources.map(source => [source.id, source]));
             for (const source of page.sources) if (!byId.has(source.id)) byId.set(source.id, source);
             const updated = await saveSnapshot({ ...snapshot, sources: [...byId.values()], sourcePagination: { ...(snapshot.sourcePagination as Record<string, number | null> | undefined), [input.kind]: page.nextPage } });
@@ -208,16 +255,17 @@ export async function createApplicationServer(options: { production?: boolean; s
           if (ids.some(id => !snapshot.sources.some(source => source.id === id && source.kind === input.kind))) throw Object.assign(new Error('Unknown change source.'), { status: 400 });
           if (snapshot.mode === 'demo') return json(res, 200, await serialSnapshot(input.snapshotId, () => saveSnapshot(grouping.view(getSnapshot(input.snapshotId)).snapshot)));
           // A newer selection cancels its predecessor rather than joining a work queue.
-          sourceRequests.get(input.snapshotId)?.controller.abort();
+          const sourceKey = snapshotKey(input.snapshotId);
+          sourceRequests.get(sourceKey)?.controller.abort();
           const release = admission.reserve();
-          const request = { controller: new AbortController() }; sourceRequests.set(input.snapshotId, request);
+          const request = { controller: new AbortController() }; sourceRequests.set(sourceKey, request);
           const signal = AbortSignal.any([request.controller.signal, AbortSignal.timeout(90_000)]);
           const disconnect = () => { if (!res.writableEnded) request.controller.abort(); };
           res.once('close', disconnect);
-          const superseded = () => { if (signal.aborted || sourceRequests.get(input.snapshotId) !== request) throw Object.assign(new Error('This selection was superseded or cancelled. Retry the latest selection.'), { status: 409, code: 'SUPERSEDED' }); };
+          const superseded = () => { if (signal.aborted || sourceRequests.get(sourceKey) !== request) throw Object.assign(new Error('This selection was superseded or cancelled. Retry the latest selection.'), { status: 409, code: 'SUPERSEDED' }); };
           const task = (async () => {
             try {
-              const loaded = await loadSources(snapshot, input.kind, ids, { signal });
+              const loaded = await loadSources(snapshot, input.kind, ids, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal });
               superseded();
               return await serialSnapshot(input.snapshotId, async () => {
                 superseded();
@@ -227,7 +275,7 @@ export async function createApplicationServer(options: { production?: boolean; s
                 return saveSnapshot(grouping.view({ ...loaded, sources: [...sources.values()] }).snapshot);
               });
             } catch (error) { superseded(); throw error; }
-            finally { res.removeListener('close', disconnect); if (sourceRequests.get(input.snapshotId) === request) sourceRequests.delete(input.snapshotId); release(); }
+            finally { res.removeListener('close', disconnect); if (sourceRequests.get(sourceKey) === request) sourceRequests.delete(sourceKey); release(); }
           })();
           runningTasks.add(task);
           void task.finally(() => runningTasks.delete(task)).catch(() => {});
@@ -235,7 +283,7 @@ export async function createApplicationServer(options: { production?: boolean; s
         }
         if (req.method === 'POST' && url.pathname === '/api/grouping') {
           const input = idRequest.extend({ enabled: z.boolean().default(false) }).parse(await body(req));
-          return json(res, 200, await grouping.propose(getSnapshot(input.snapshotId), { enabled: input.enabled, tenantId: 'local', signal: AbortSignal.timeout(60_000) }));
+          return json(res, 200, await grouping.propose(getSnapshot(input.snapshotId), { enabled: input.enabled, tenantId: ownerId(), signal: AbortSignal.timeout(60_000) }));
         }
         if (req.method === 'POST' && url.pathname === '/api/grouping/apply') {
           const input = idRequest.extend({ proposalId: z.string().max(500) }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const value = await grouping.apply(getSnapshot(input.snapshotId), input.proposalId); await saveSnapshot(value.snapshot); return value; }); return json(res, 200, result);
@@ -260,7 +308,7 @@ export async function createApplicationServer(options: { production?: boolean; s
       const code = error instanceof z.ZodError ? 'VALIDATION' : typeof error === 'object' && error && 'code' in error ? String(error.code) : 'REQUEST_FAILED';
       if (!res.headersSent) json(res, status >= 400 && status < 600 ? status : 500, { error: safeError(error), code }); else res.end();
     }
-  });
+  }));
   server.on('close', () => { for (const controller of aborts.values()) controller.abort(); for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void Promise.allSettled([...runningTasks]).then(() => store.close()); });
   return server;
 }
