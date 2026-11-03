@@ -52,8 +52,8 @@ function observations(item: EvaluationCase, membership: Record<string, string>, 
   return item.files.map(file => {
     const decision = proposal?.decisions.find(value => value.fileId === file.id);
     return { expected: file.expected, predicted: membership[file.id]!, confidence: decision?.confidence,
-      accepted: proposal ? file.mockChoice !== null && decision?.confidence !== undefined && decision.confidence >= threshold : true,
-      validEvidence: item.groups.some(group => group.id === membership[file.id]) && (!decision || decision.evidenceIds.length > 0 && decision.evidenceIds.every(id => item.files.some(value => id === `file:${value.id}`))),
+      accepted: proposal ? Boolean(decision && !decision.reviewReason) : true,
+      validEvidence: item.groups.some(group => group.id === membership[file.id]) && (!decision || decision.evidenceIds.length > 0 && decision.evidenceIds.every(id => item.files.some(value => id === `file:${value.id}`) || item.imports.some((_edge, index) => id === `edge:${item.id}-e${index}`))),
     };
   });
 }

@@ -3,6 +3,7 @@ import type { GraphSnapshot } from '@patchwork/contracts';
 import { GroupingService } from './index';
 import { createExternalDataPolicy, externalGroupingCacheKey } from './policy';
 import { ProviderBudgetLedger } from './budget';
+import { testEvaluationManifest } from './evaluation/test-support';
 
 const snapshot = (): GraphSnapshot => ({
   schemaVersion: '1', id: 'policy-snapshot', repository: { owner: 'example', name: 'repo', fullName: 'example/repo', defaultBranch: 'main', htmlUrl: 'https://github.com/example/repo' },
@@ -20,7 +21,7 @@ function mockProviders(holdDiscovery?: (signal: AbortSignal) => Promise<void>) {
     return Response.json({ model: 'test-jev', answers: Object.fromEntries(Object.entries(body.questions).map(([key, question]) => [key, { type: 'choice', choice: 'g0', confidence: 0.9, probabilities: Object.fromEntries(Object.keys((question as { criteria: object }).criteria).map(id => [id, id === 'g0' ? 1 : 0])) }])), usage: { input_tokens: 10, output_tokens: 5 } });
   });
 }
-const service = (transport: ReturnType<typeof mockProviders>, config = {}) => new GroupingService({ enabled: true, jevApiKey: 'server-only-key', jevModel: 'test-jev', generativeApiKey: 'server-only-key', generativeModel: 'test-generative', fetch: transport as typeof fetch, ...config });
+const service = (transport: ReturnType<typeof mockProviders>, config = {}) => new GroupingService({ enabled: true, jevApiKey: 'server-only-key', jevModel: 'test-jev', generativeApiKey: 'server-only-key', generativeModel: 'test-generative', fetch: transport as typeof fetch, evaluationManifest: testEvaluationManifest(), ...config });
 afterEach(() => vi.useRealTimers());
 
 describe('external metadata policy', () => {

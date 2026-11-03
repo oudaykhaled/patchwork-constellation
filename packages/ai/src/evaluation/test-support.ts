@@ -6,7 +6,7 @@ export function testEvaluationManifest(models = { jev: 'test-jev', generative: '
   const reviewed = new Date(now - 1_000).toISOString();
   return {
     schemaVersion: '1', status: 'passed', evaluationId: 'synthetic-test-only', corpusDigest: corpusDigest(), reportDigest: '0'.repeat(64),
-    versions: { ...EVALUATION_VERSIONS }, models, minimumConfidence,
+    versions: { ...EVALUATION_VERSIONS }, models, minimumConfidence, minimumEvidenceCoverage: 1,
     review: { reviewer: 'synthetic-test-reviewer', independentReviewer: 'synthetic-test-independent-reviewer', reviewedAt: reviewed, dataTermsReviewedAt: reviewed },
     live: { kind: 'live', runId: 'synthetic-test-only-not-a-live-run', completedAt: reviewed, actualModels: models, cases: 6, latencyP95Ms: 1, costPerCaseUsd: 0 },
     metrics: { baselineAgreement: 0.6, gatedAgreement: 0.95, selectiveAccuracy: 0.95, reviewRate: 0.2, calibrationError: 0.05, evidenceValidity: 1, stability: 1 },

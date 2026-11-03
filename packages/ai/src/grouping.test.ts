@@ -28,7 +28,7 @@ function providerMock(options: MockOptions = {}) {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     if (url.endsWith('/v1/responses')) {
       const evidence = JSON.parse(body.input as string) as { groups: { id: string; label: string }[]; files: { evidenceId: string; groupId: string }[] };
-      return Response.json({ status: 'completed', model: 'test-generative-2026', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ groups: evidence.groups.map(group => ({ groupId: options.unknownId ? 'invented' : group.id, label: options.label ?? `${group.label} module`, rationale: 'These paths share the same module prefix.', evidenceIds: [evidence.files.find(file => file.groupId === group.id)!.evidenceId] })) }) }] }], usage: { input_tokens: 100, output_tokens: 40 } });
+      return Response.json({ status: 'completed', model: 'test-generative', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ groups: evidence.groups.map(group => ({ groupId: options.unknownId ? 'invented' : group.id, label: options.label ?? `${group.label} module`, rationale: 'These paths share the same module prefix.', evidenceIds: [evidence.files.find(file => file.groupId === group.id)!.evidenceId] })) }) }] }], usage: { input_tokens: 100, output_tokens: 40 } });
     }
     if (url.endsWith('/v1/systemone')) {
       const questions = body.questions as Record<string, { criteria: Record<string, string> }>;
@@ -36,7 +36,7 @@ function providerMock(options: MockOptions = {}) {
         const choice = options.moveToBilling ? 'g1' : 'g0';
         return [key, { type: 'choice', choice, ...(options.omitConfidence ? {} : { confidence: options.confidence ?? 0.9 }), probabilities: Object.fromEntries(Object.keys(question.criteria).map(id => [id, id === choice ? 1 : 0])) }];
       }));
-      return Response.json({ model: options.responseModel ?? 'test-jev-2026', answers, usage: { input_tokens: 150, output_tokens: 50 } });
+      return Response.json({ model: options.responseModel ?? 'test-jev', answers, usage: { input_tokens: 150, output_tokens: 50 } });
     }
     throw new Error('Unexpected outbound destination');
   });
@@ -69,7 +69,7 @@ describe('baseline and provider boundary', () => {
     const transport = providerMock();
     const original = snapshot();
     const result = await configured(transport).propose(original, { enabled: true });
-    expect(result.status).toBe('proposed'); expect(result.models).toEqual({ generative: 'test-generative-2026', jev: 'test-jev-2026' });
+    expect(result.status).toBe('proposed'); expect(result.models).toEqual({ generative: 'test-generative', jev: 'test-jev' });
     expect(result.dataPolicy.excludedFiles).toBe(1); expect(result.dataPolicy.analyzedFiles).toBe(3);
     expect(transport.mock.calls.map(call => String(call[0]))).toEqual(['https://api.typesafe.ai/v1/models', 'https://api.openai.com/v1/responses', 'https://api.typesafe.ai/v1/systemone']);
     expect(JSON.stringify(transport.mock.calls)).not.toContain('.env.production');
@@ -150,7 +150,7 @@ describe('baseline and provider boundary', () => {
 
 describe('revision and override invariants', () => {
   it('previews before apply, applies only for the same tenant and preserves facts', async () => {
-    const service = configured(providerMock({ moveToBilling: true }), { membershipPolicy: { evaluatedJevModel: 'test-jev-2026', evaluationId: 'synthetic-unit-policy', minimumEvidenceCoverage: 1 } }); const original = snapshot();
+    const service = configured(providerMock({ moveToBilling: true }), { membershipPolicy: { evaluatedJevModel: 'test-jev', evaluationId: 'synthetic-unit-policy', minimumEvidenceCoverage: 1 } }); const original = snapshot();
     // A supported move needs observed destination evidence, not only a high model number.
     original.edges = [{ id: 'e1', source: 'a', target: 'c', kind: 'import', evidence: { path: 'src/auth/session.ts', line: 1 } }];
     const proposal = await service.propose(original, { enabled: true, tenantId: 'alice' });

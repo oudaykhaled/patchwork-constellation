@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GraphSnapshot } from '@patchwork/contracts';
 import { createGroupingEvidence, evaluateGroupingProposal, GroupingService } from './index';
 import type { GroupingMembershipPolicy } from './types';
+import { testEvaluationManifest } from './evaluation/test-support';
 
 const policy: GroupingMembershipPolicy = { evaluatedJevModel: 'jev-1.14.0', evaluationId: 'synthetic-evaluation-v1', minimumEvidenceCoverage: 1 };
 function snapshot(): GraphSnapshot {
@@ -124,7 +125,7 @@ it('runs the mocked pipeline as a preview and applies only its grounded membersh
     }));
     return Response.json({ model: 'jev-1.14.0', answers, usage: { input_tokens: 100, output_tokens: 30 } });
   });
-  const service = new GroupingService({ enabled: true, jevApiKey: 'fixture', jevModel: 'jev-1.14.0', generativeApiKey: 'fixture', generativeModel: 'generative-fixture-v1', fetch: transport as typeof fetch, membershipPolicy: policy });
+  const service = new GroupingService({ enabled: true, jevApiKey: 'fixture', jevModel: 'jev-1.14.0', generativeApiKey: 'fixture', generativeModel: 'generative-fixture-v1', fetch: transport as typeof fetch, evaluationManifest: testEvaluationManifest({ jev: 'jev-1.14.0', generative: 'generative-fixture-v1' }), membershipPolicy: policy });
   const active = service.current(value);
   const proposal = await service.propose(value, { enabled: true });
   expect(proposal.changedMemberships).toEqual([{ fileId: 'a', fromGroupId: 'core', toGroupId: 'billing' }]);

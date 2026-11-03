@@ -157,7 +157,7 @@ export class GroupingService {
     if (JSON.stringify(evidence).length > this.config.maxInputCharacters) return baseline('The metadata budget was exceeded. Narrow the repository scope before requesting AI grouping.');
     const tenantId = options.tenantId ?? 'local';
     const repository = repositoryKey(snapshot);
-    const cacheKey = externalGroupingCacheKey({ tenantId, snapshot, revisionId: revision.id, evidence, jevModel: this.config.jevModel, generativeModel: this.config.generativeModel, policyDigest: this.policy.digest, minimumConfidence: this.config.minimumConfidence, pipelineVersion: GROUPING_PIPELINE_VERSION, membershipPolicy: this.config.membershipPolicy });
+    const cacheKey = externalGroupingCacheKey({ tenantId, snapshot, revisionId: revision.id, evidence, jevModel: this.config.jevModel, generativeModel: this.config.generativeModel, policyDigest: this.policy.digest, minimumConfidence: this.config.minimumConfidence, pipelineVersion: GROUPING_PIPELINE_VERSION, membershipPolicy: this.capabilities().evaluation });
     const cached = this.cached.get(cacheKey);
     if (cached) { this.registerProposal(snapshot, cached.proposal, options); this.telemetry(cached.proposal, 0, true); return copy(cached.proposal); }
     const running = this.inflight.get(cacheKey);
@@ -308,7 +308,9 @@ export class GroupingService {
     const generated = await generateLabels({ apiKey: this.config.generativeApiKey!, model: this.config.generativeModel! }, evidence, budget);
     const decisions = await decideMembership({ apiKey: this.config.jevApiKey!, model: this.config.jevModel! }, evidence, generated.labels, budget);
     actualTokens = generated.usage.inputTokens + generated.usage.outputTokens + decisions.usage.inputTokens + decisions.usage.outputTokens;
-    const evaluated = evaluateGroupingProposal({ snapshot, revision, evidence, labels: generated.labels, decisions: decisions.decisions, model: decisions.model, minimumConfidence: this.config.minimumConfidence, policy: this.config.membershipPolicy });
+    const gate = this.capabilities().evaluation;
+    if (!gate.passed || !evaluationAllowsTenant(gate, context.tenantId ?? 'local') || generated.model !== gate.evaluatedGenerativeModel || decisions.model !== gate.evaluatedJevModel) throw new GroupingError('MODEL_MISMATCH', 'The response models or evaluation no longer match the reviewed release.');
+    const evaluated = evaluateGroupingProposal({ snapshot, revision, evidence, labels: generated.labels, decisions: decisions.decisions, model: decisions.model, minimumConfidence: gate.minimumConfidence!, policy: { evaluatedJevModel: gate.evaluatedJevModel!, evaluationId: gate.evaluationId!, minimumEvidenceCoverage: gate.minimumEvidenceCoverage! } });
     assertMembership(snapshot, evaluated.groups, evaluated.membership);
     return {
       schemaVersion: '1', provenance: { snapshotId: snapshot.id, contextSha: snapshot.contextSha, source: 'model', models: { generative: generated.model, jev: decisions.model } },

@@ -2,11 +2,15 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { z } from 'zod';
 import { corpusDigest } from './evaluation/corpus';
+import { AI_POLICY_VERSION, AI_PROMPT_VERSION, AI_SCHEMA_VERSION } from './policy';
+import { PROVIDER_CONTRACT_VERSION, LABEL_PROMPT_VERSION, MEMBERSHIP_PROMPT_VERSION } from './providers';
+import { GROUPING_PIPELINE_VERSION } from './pipeline';
+import { GROUPING_SCHEMA_VERSION } from './contracts';
 
 /** Any change requires a new reviewed holdout run; keep synchronized with the policy/provider modules. */
 export const EVALUATION_VERSIONS = {
-  policy: 'metadata-only-v2', prompt: 'island-label-membership-v1', schema: 'grouping-evidence-v1',
-  providerContract: 'system-one-v2', labelPrompt: 'island-labels-v1', membershipPrompt: 'island-membership-v1', pipeline: 'evidence-gated-v1',
+  policy: AI_POLICY_VERSION, prompt: AI_PROMPT_VERSION, schema: AI_SCHEMA_VERSION, groupingSchema: GROUPING_SCHEMA_VERSION,
+  providerContract: PROVIDER_CONTRACT_VERSION, labelPrompt: LABEL_PROMPT_VERSION, membershipPrompt: MEMBERSHIP_PROMPT_VERSION, pipeline: GROUPING_PIPELINE_VERSION,
 } as const;
 export const QUALITY_TARGETS = {
   minimumAgreementGain: 0.05, minimumSelectiveAccuracy: 0.9, maximumReviewRate: 0.5,
@@ -21,6 +25,7 @@ const ManifestSchema = z.object({
   versions: z.object(Object.fromEntries(Object.keys(EVALUATION_VERSIONS).map(key => [key, z.string().min(1).max(160)])) as Record<keyof typeof EVALUATION_VERSIONS, z.ZodString>).strict(),
   models: z.object({ jev: z.string().min(1).max(160), generative: z.string().min(1).max(160) }).strict(),
   minimumConfidence: score,
+  minimumEvidenceCoverage: score,
   review: z.object({ reviewer: z.string().min(1).max(160), independentReviewer: z.string().min(1).max(160), reviewedAt: timestamp, dataTermsReviewedAt: timestamp }).strict(),
   live: z.object({ kind: z.literal('live'), runId: z.string().min(1).max(160), completedAt: timestamp, actualModels: z.object({ jev: z.string().min(1).max(160), generative: z.string().min(1).max(160) }).strict(), cases: z.number().int().min(6), latencyP95Ms: z.number().finite().nonnegative(), costPerCaseUsd: z.number().finite().nonnegative() }).strict(),
   metrics: z.object({ baselineAgreement: score, gatedAgreement: score, selectiveAccuracy: score, reviewRate: score, calibrationError: score, evidenceValidity: score, stability: score }).strict(),
@@ -29,7 +34,7 @@ const ManifestSchema = z.object({
   expiresAt: timestamp,
 }).strict();
 export type EvaluationManifest = z.infer<typeof ManifestSchema>;
-export interface EvaluationGate { passed: boolean; reason: string; evaluationId?: string; rolloutPercent: number; minimumConfidence?: number; evaluatedJevModel?: string }
+export interface EvaluationGate { passed: boolean; reason: string; evaluationId?: string; rolloutPercent: number; minimumConfidence?: number; minimumEvidenceCoverage?: number; evaluatedJevModel?: string; evaluatedGenerativeModel?: string }
 
 /** Server-only bounded file loader. Unreadable/invalid configuration is a blocked gate, never provider access. */
 export function loadEvaluationManifest(path = process.env.AI_EVALUATION_MANIFEST): unknown {
@@ -53,7 +58,7 @@ export function evaluateReleaseGate(value: unknown, config: { jevModel?: string;
   const metrics = manifest.metrics;
   if (metrics.gatedAgreement - metrics.baselineAgreement < QUALITY_TARGETS.minimumAgreementGain || metrics.selectiveAccuracy < QUALITY_TARGETS.minimumSelectiveAccuracy || metrics.reviewRate > QUALITY_TARGETS.maximumReviewRate || metrics.calibrationError > QUALITY_TARGETS.maximumCalibrationError || metrics.evidenceValidity !== 1 || metrics.stability !== 1 || manifest.live.latencyP95Ms > QUALITY_TARGETS.maximumLatencyP95Ms || manifest.live.costPerCaseUsd > QUALITY_TARGETS.maximumCostPerCaseUsd) return blocked('The live evaluation did not meet the declared quality, safety, latency or cost targets.');
   if (manifest.rollout.phase === 'canary' && manifest.rollout.percentage > 10) return blocked('Canary rollout is limited to ten percent until a general-release review.');
-  return { passed: true, reason: 'AI + Jev passed the recorded evaluation for these exact versions.', evaluationId: manifest.evaluationId, rolloutPercent: manifest.rollout.percentage, minimumConfidence: manifest.minimumConfidence, evaluatedJevModel: manifest.models.jev };
+  return { passed: true, reason: 'AI + Jev passed the recorded evaluation for these exact versions.', evaluationId: manifest.evaluationId, rolloutPercent: manifest.rollout.percentage, minimumConfidence: manifest.minimumConfidence, minimumEvidenceCoverage: manifest.minimumEvidenceCoverage, evaluatedJevModel: manifest.models.jev, evaluatedGenerativeModel: manifest.models.generative };
 }
 export function evaluationAllowsTenant(gate: EvaluationGate, tenantId: string): boolean {
   if (!gate.passed || gate.rolloutPercent <= 0) return false;

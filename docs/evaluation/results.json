@@ -2,7 +2,7 @@
   "schemaVersion": "1",
   "kind": "authored-mock",
   "status": "blocked",
-  "generatedAt": "2026-11-03T17:21:23.563Z",
+  "generatedAt": "2026-11-03T17:24:24.538Z",
   "corpus": {
     "version": "authored-holdout-v1",
     "holdoutDigest": "f1fb3a6732b073e0fb5ee78f9c19bd615ac2c0d516bc827cc300d0c0a748e001",
@@ -19,6 +19,7 @@
     "policy": "metadata-only-v2",
     "prompt": "island-label-membership-v1",
     "schema": "grouping-evidence-v1",
+    "groupingSchema": "1",
     "providerContract": "system-one-v2",
     "labelPrompt": "island-labels-v1",
     "membershipPrompt": "island-membership-v1",
@@ -132,13 +133,13 @@
     },
     "jevGated": {
       "count": 18,
-      "membershipAgreement": 1,
-      "reviewRate": 0.16666666666666663,
-      "abstentionRate": 0.16666666666666666,
+      "membershipAgreement": 0.6666666666666666,
+      "reviewRate": 0.5555555555555556,
+      "abstentionRate": 0.5555555555555556,
       "selectiveAccuracy": 1,
-      "acceptedCoverage": 0.8333333333333334,
+      "acceptedCoverage": 0.4444444444444444,
       "evidenceValidity": 1,
-      "calibrationError": 0.060000000000000386,
+      "calibrationError": 0.060000000000000275,
       "brierScore": 0.0036000000000000064,
       "reliability": [
         {
@@ -172,8 +173,8 @@
         {
           "from": 0.8,
           "to": 1,
-          "count": 15,
-          "meanConfidence": 0.9399999999999996,
+          "count": 8,
+          "meanConfidence": 0.9399999999999997,
           "accuracy": 1
         }
       ]
@@ -188,7 +189,7 @@
   "stability": 1,
   "latency": {
     "kind": "mock-service-wall-clock",
-    "p95Ms": 22.12209999999999
+    "p95Ms": 30.806100000000015
   },
   "cost": {
     "kind": "mock",
@@ -204,7 +205,7 @@
   "cases": [
     {
       "id": "hold-monorepo",
-      "elapsedMs": 22.12209999999999,
+      "elapsedMs": 30.806100000000015,
       "usage": {
         "inputTokens": 40,
         "outputTokens": 17,
@@ -212,7 +213,7 @@
       },
       "predictedMembership": {
         "hm-ui": "interface",
-        "hm-core": "domain",
+        "hm-core": "interface",
         "hm-shared": "domain"
       },
       "models": {
@@ -222,7 +223,7 @@
     },
     {
       "id": "hold-layered",
-      "elapsedMs": 0.6219999999999857,
+      "elapsedMs": 1.3179000000000087,
       "usage": {
         "inputTokens": 40,
         "outputTokens": 17,
@@ -230,7 +231,7 @@
       },
       "predictedMembership": {
         "hl-ui": "interface",
-        "hl-core": "domain",
+        "hl-core": "interface",
         "hl-data": "domain"
       },
       "models": {
@@ -240,7 +241,7 @@
     },
     {
       "id": "hold-feature",
-      "elapsedMs": 0.6034000000000219,
+      "elapsedMs": 0.9060000000000059,
       "usage": {
         "inputTokens": 40,
         "outputTokens": 17,
@@ -248,7 +249,7 @@
       },
       "predictedMembership": {
         "hf-ui": "interface",
-        "hf-rule": "domain",
+        "hf-rule": "interface",
         "hf-data": "domain"
       },
       "models": {
@@ -258,7 +259,7 @@
     },
     {
       "id": "hold-shared",
-      "elapsedMs": 0.4233999999999867,
+      "elapsedMs": 0.7139999999999986,
       "usage": {
         "inputTokens": 40,
         "outputTokens": 17,
@@ -267,7 +268,7 @@
       "predictedMembership": {
         "hs-a": "interface",
         "hs-b": "domain",
-        "hs-c": "domain"
+        "hs-c": "interface"
       },
       "models": {
         "generative": "synthetic-generative-2026-11-03",
@@ -276,7 +277,7 @@
     },
     {
       "id": "hold-unsupported",
-      "elapsedMs": 0.372099999999989,
+      "elapsedMs": 0.772700000000043,
       "usage": {
         "inputTokens": 40,
         "outputTokens": 17,
@@ -285,7 +286,7 @@
       "predictedMembership": {
         "hu-ui": "interface",
         "hu-rust": "domain",
-        "hu-core": "domain"
+        "hu-core": "interface"
       },
       "models": {
         "generative": "synthetic-generative-2026-11-03",
@@ -294,7 +295,7 @@
     },
     {
       "id": "hold-malicious",
-      "elapsedMs": 0.6862000000000137,
+      "elapsedMs": 0.6429999999999723,
       "usage": {
         "inputTokens": 40,
         "outputTokens": 17,
@@ -302,7 +303,7 @@
       },
       "predictedMembership": {
         "hx-ui": "interface",
-        "hx-core": "domain",
+        "hx-core": "interface",
         "hx-shared": "domain"
       },
       "models": {

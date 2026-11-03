@@ -53,7 +53,8 @@ describe('frozen corpus and calibration', () => {
     expect(report.stages.jevGated.count).toBe(18);
     expect(report.stages.baseline.membershipAgreement).toBeCloseTo(2 / 3);
     expect(report.stages.generativeNamingOnly.membershipAgreement).toBeCloseTo(2 / 3);
-    expect(report.stages.jevGated.membershipAgreement).toBe(1);
+    // Tied/unsupported observed evidence abstains; mocked high confidence cannot force a move.
+    expect(report.stages.jevGated.membershipAgreement).toBeCloseTo(2 / 3);
     expect(report.hardGates).toEqual({ unknownIdsRejected: true, disabledNoTransfer: true, manualOverridesPreserved: true, failuresKeepBaseline: true });
     expect(report.stability).toBe(1);
     expect(report.cost.billedUsd).toBeNull();
