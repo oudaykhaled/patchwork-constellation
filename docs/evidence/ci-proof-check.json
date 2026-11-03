@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "suite": "check",
+  "success": false,
+  "results": [
+    {
+      "check": "format:check",
+      "exitCode": 0,
+      "durationMs": 842
+    },
+    {
+      "check": "lint",
+      "exitCode": 0,
+      "durationMs": 1295
+    },
+    {
+      "check": "test:quality",
+      "exitCode": 0,
+      "durationMs": 1488
+    },
+    {
+      "check": "typecheck",
+      "exitCode": 0,
+      "durationMs": 7878
+    },
+    {
+      "check": "test",
+      "exitCode": 1,
+      "durationMs": 21940
+    }
+  ]
+}
