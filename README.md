@@ -15,6 +15,8 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
+Typechecking uses the pinned TypeScript 7 native CLI. The source analyzer and lint rules use Microsoft's pinned TypeScript 6 compatibility API side by side; TypeScript 7.0 does not expose the JavaScript compiler API they require.
+
 Open **http://127.0.0.1:4310**. The sample opens without credentials or external model calls. The server binds to loopback and checks API Host/Origin headers. Hosted deployment needs the explicit proxy, account and release configuration described in the runbooks.
 
 Stop either server with **Ctrl+C** in its terminal. To reset the default in-memory demo, stop and restart it, then open the root URL without saved-view query parameters. Configured PostgreSQL data and any explicit `GROUPING_STORAGE_PATH` are durable and are not erased by restarting.
