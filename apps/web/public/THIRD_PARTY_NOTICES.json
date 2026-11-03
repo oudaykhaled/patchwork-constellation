@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "1",
+  "noticeSha256": "e1d73225ccde64c1d1c50f13d99d0315161af2a83500122207d642d954c090c0",
+  "packages": [
+    {
+      "name": "react",
+      "version": "19.3.1",
+      "declaredLicense": "MIT",
+      "source": "node_modules/.pnpm/react@19.3.1/node_modules/react/LICENSE",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+    },
+    {
+      "name": "react-dom",
+      "version": "19.3.1",
+      "declaredLicense": "MIT",
+      "source": "node_modules/.pnpm/react-dom@19.3.1_react@19.3.1/node_modules/react-dom/LICENSE",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+    },
+    {
+      "name": "scheduler",
+      "version": "0.28.0",
+      "declaredLicense": "MIT",
+      "source": "node_modules/.pnpm/scheduler@0.28.0/node_modules/scheduler/LICENSE",
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+    },
+    {
+      "name": "lucide-react",
+      "version": "1.67.0",
+      "declaredLicense": "ISC",
+      "source": "node_modules/.pnpm/lucide-react@1.67.0_@types+react@19.3.0_react@19.3.1/node_modules/lucide-react/LICENSE",
+      "sha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+    },
+    {
+      "name": "zod",
+      "version": "4.6.7",
+      "declaredLicense": "MIT",
+      "source": "node_modules/.pnpm/zod@4.6.7/node_modules/zod/LICENSE",
+      "sha256": "3f1189b28e3866e0d979968d466b78f813f76827cfdca1fbb124cc0a5c8841f8"
+    },
+    {
+      "name": "@fontsource/geist",
+      "version": "5.3.0",
+      "declaredLicense": "OFL-1.1",
+      "source": "node_modules/.pnpm/@fontsource+geist@5.3.0/node_modules/@fontsource/geist/LICENSE",
+      "sha256": "71609cbb5c78b5870d712eab73a31d76622635c6ed034ab5cee3b9ecbda8685f"
+    },
+    {
+      "name": "@fontsource/geist-mono",
+      "version": "5.3.0",
+      "declaredLicense": "OFL-1.1",
+      "source": "node_modules/.pnpm/@fontsource+geist-mono@5.3.0/node_modules/@fontsource/geist-mono/LICENSE",
+      "sha256": "cc815ed4fc045f0e991abb10395b7932bd028c6a067deb13316d6002105074e6"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "types": ["node", "vite/client"],
+    "paths": {
+      "@patchwork/contracts": ["./packages/contracts/src/index.ts"],
+      "@patchwork/fixtures": ["./packages/fixtures/src/index.ts"],
+      "@patchwork/graph-core": ["./packages/graph-core/src/index.ts"],
+      "@patchwork/github": ["./packages/github/src/index.ts"],
+      "@patchwork/analysis": ["./packages/analysis/src/index.ts"],
+      "@patchwork/ai": ["./packages/ai/src/index.ts"],
+      "@patchwork/storage": ["./packages/storage/src/index.ts"]
+    }
+  },
+  "include": ["apps", "packages", "tests", "*.ts"],
+  "exclude": ["node_modules", "dist", "test-results", "playwright-report"]
+}

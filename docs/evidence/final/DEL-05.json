@@ -1,0 +1,89 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-11-03T19:36:48.397Z",
+  "status": "partial",
+  "releaseReady": false,
+  "commit": "bcfa5110ee0c4f30568b730e868d5be658c3aae9",
+  "checks": [
+    {
+      "id": "retention-212",
+      "status": "passed",
+      "evidence": "1000 review toggles; retained GC heap delta 1064468 B; worker/handler/DOM counts are separate measurements. This detects gross growth, not absence of every leak."
+    },
+    {
+      "id": "soak-212",
+      "status": "passed",
+      "evidence": "1000 toggles over 33.30 s; longer wall-clock staging sessions remain separate evidence."
+    },
+    {
+      "id": "retention-2000",
+      "status": "passed",
+      "evidence": "1000 review toggles; retained GC heap delta 967360 B; worker/handler/DOM counts are separate measurements. This detects gross growth, not absence of every leak."
+    },
+    {
+      "id": "soak-2000",
+      "status": "passed",
+      "evidence": "1000 toggles over 33.31 s; longer wall-clock staging sessions remain separate evidence."
+    },
+    {
+      "id": "selection-budget",
+      "status": "passed",
+      "evidence": "Warm event-to-feedback p95 26.90 ms; target ≤250 ms."
+    },
+    {
+      "id": "hover-budget",
+      "status": "passed",
+      "evidence": "Pointer-event-to-tooltip p95 7.40 ms; target <100 ms."
+    },
+    {
+      "id": "warm-navigation-sample",
+      "status": "passed",
+      "evidence": "Warm navigation to painted file circles 184.60 ms. Includes modules/network; does not substitute for authenticated-response-to-view timing."
+    },
+    {
+      "id": "retention-10000",
+      "status": "passed",
+      "evidence": "1000 review toggles; retained GC heap delta 438216 B; worker/handler/DOM counts are separate measurements. This detects gross growth, not absence of every leak."
+    },
+    {
+      "id": "soak-10000",
+      "status": "passed",
+      "evidence": "1000 toggles over 67.44 s; longer wall-clock staging sessions remain separate evidence."
+    },
+    {
+      "id": "same-production-build",
+      "status": "passed",
+      "evidence": "Artifacts must share one recorded immutable commit and production build; observed bcfa5110ee0c4f30568b730e868d5be658c3aae9."
+    },
+    {
+      "id": "GRAPH-04",
+      "status": "partial",
+      "evidence": "4 linked checks, status partial, same measured commit true. Preserve its detailed renderer/backend report."
+    },
+    {
+      "id": "DATA-09",
+      "status": "partial",
+      "evidence": "5 linked checks, status partial, same measured commit true. Preserve its detailed renderer/backend report."
+    },
+    {
+      "id": "reference-runner",
+      "status": "partial",
+      "evidence": "No stable reference-runner assertion supplied; concurrent agent activity cannot establish a release budget."
+    },
+    {
+      "id": "analysis-phases",
+      "status": "passed",
+      "evidence": "docs/evidence/final/backend.json"
+    },
+    {
+      "id": "authenticated-useful-view",
+      "status": "passed",
+      "evidence": "20 warm controlled-identity BFF samples; response-body-arrival to worker-ready file pixels p95 156.70 ms; same measured commit true. docs/evidence/final/authenticated-view.json No live App registration or WAN claim."
+    }
+  ],
+  "limitations": [
+    "This report aggregates evidence supplied by the caller; it does not certify independent human review or staging conditions.",
+    "API timeout, worker restart, GitHub retry and provider-outage outcomes come from linked backend suites; browser fixture timings do not establish those outcomes.",
+    "Do not enable intelligence or publish beta solely because bounded synthetic interaction budgets pass."
+  ]
+}

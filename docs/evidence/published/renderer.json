@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1",
+  "status": "partial",
+  "commit": "2f6a59174ed981b27957218890ee75c4d6b9019a",
+  "checks": [
+    {
+      "id": "supported-2k-hosted-reference",
+      "status": "passed",
+      "evidence": "Dedicated Ubuntu 4-vCPU EPYC/SwiftShader job41712031705 passed unchanged 2k targets. Tested merge76aa8e4 has exactly the same tree as application2f6a591; raw artifact records actual merge SHA."
+    },
+    {
+      "id": "complete-scene-cache",
+      "status": "passed",
+      "evidence": "Actual >=2000 circle and >=8000 curve assemblies, zero extra assembly on pure pan, shifted colored pixels >98% matching; bounded allocation and invalidation/context recovery tests pass in three hosted browsers."
+    },
+    {
+      "id": "stress-and-manual-matrix",
+      "status": "partial",
+      "evidence": "10k cached pan16.8ms in this hosted sample; initial-task budget still fails and capacity remains stress-only. Human GPU matrix and deployment-specific acceptance remain."
+    }
+  ]
+}

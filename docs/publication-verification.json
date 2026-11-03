@@ -1,0 +1,84 @@
+{
+  "schemaVersion": "1",
+  "recordedAt": "2026-11-03T20:43:42.674Z",
+  "applicationCommit": "2f6a59174ed981b27957218890ee75c4d6b9019a",
+  "hostedMergeCommit": "76aa8e4aba5227dbc28efedb211d8180627e7e5c",
+  "hostedMergeTreeEqualsApplicationTree": true,
+  "publication": {
+    "complete": true,
+    "branch": "feat/constellation-mvp",
+    "pullRequest": "https://github.com/oudaykhaled/patchwork-constellation/pull/32",
+    "merged": false,
+    "method": "Authenticated GitHub CLI and ordinary fast-forward Git push",
+    "legacyPartialBranch": "fix/31-issue-integration at 630bbe9 is historical and incomplete"
+  },
+  "authentication": {
+    "cliVersion": "2.103.3",
+    "account": "oudaykhaled",
+    "storage": "Windows keyring",
+    "git": "Repository-scoped HTTPS helper and bounded 8 MiB upload buffer; no credential values stored in the repository",
+    "productGitHubApp": "Deployment configuration remains independent of publishing authentication"
+  },
+  "validation": {
+    "automatedPassed": 389,
+    "optInSkipped": 3,
+    "qualityChecksPassed": 5,
+    "productionBuild": "passed",
+    "hostedBrowserPassed": 185,
+    "hostedBrowserSkipped": 16,
+    "browserVersions": {
+      "chromium": "156.0.8078.4",
+      "firefox": "157.0",
+      "webkit": "27.2"
+    },
+    "hostedChecksRun": 41712031764,
+    "hostedChecksConclusion": "success",
+    "hostedGraphRun": 41712031705,
+    "hostedGraphConclusion": "success",
+    "localRendererCasesPassed": 5,
+    "soakFixturesPassed": 3,
+    "togglesEach": 1000,
+    "authenticatedCasesPassed": 2,
+    "authenticatedWarmSamples": 20,
+    "authenticatedP95Ms": 149.29999995231628,
+    "postgresActualChecksPassed": 22,
+    "postgresNote": "Previously tested storage/database implementation is unchanged by these renderer and harness fixes."
+  },
+  "acceptance": {
+    "conditionalCandidates": 22,
+    "partial": 9,
+    "partialIssues": [
+      5,
+      15,
+      17,
+      18,
+      21,
+      26,
+      27,
+      28,
+      31
+    ],
+    "issuesClosed": 0,
+    "releaseReady": false
+  },
+  "intentionalFailureProof": {
+    "pr": 33,
+    "state": "closed",
+    "merged": false,
+    "checkJobConclusion": "failure",
+    "aggregateRunConclusion": "cancelled after completed check failure",
+    "artifactBytes": 515,
+    "evidence": "docs/evidence/ci-hosted-proof.json",
+    "testMergedIntoProduct": false
+  },
+  "changesAfterInitialPublication": [
+    "Bounded scene raster cache for translations; all facts and edges retained; one backing bitmap capped at 16M pixels/64MB, with direct rendering fallback.",
+    "Benchmark reference timing excludes trace/video recording, preserves raw intervals/GPU/browser details and continues stress fixtures after a failed target.",
+    "Tooltip test waits for intentional inspector opening autofocus before asserting a subsequent search focus and Escape dismissal. Runtime focus behavior unchanged."
+  ],
+  "limits": [
+    "10k remains stress-only: cached pan improved but initial rendering still has long tasks on the hosted software renderer.",
+    "A backing-bitmap cap is not a bound on total browser/GPU/process memory. Manual GPU/reference matrix and staging remain required.",
+    "Human browser-zoom/accessibility/task review, live account terms/model evaluation and hosted release acceptance remain open; intelligence stays disabled."
+  ]
+}

@@ -1,0 +1,134 @@
+{
+  "schemaVersion": "1",
+  "status": "partial",
+  "measuredAt": "2026-11-03T19:31:12.527Z",
+  "commit": "bcfa5110ee0c4f30568b730e868d5be658c3aae9",
+  "conditions": {
+    "platform": "win32",
+    "osRelease": "10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "totalMemoryBytes": 33752997888,
+    "runtime": "v24.22.1",
+    "database": "memory",
+    "concurrency": "Single local measurement; all issue agents and browser suites stopped; idle local preview; ordinary desktop background activity uncontrolled",
+    "externalServices": "all GitHub responses controlled; no external GitHub, models or webhook delivery"
+  },
+  "checks": [
+    {
+      "id": "authored-git-pr-counts",
+      "status": "passed",
+      "evidence": "8 directly touched files / 1 overlapping file; real Git histories, hand-declared expected sets"
+    },
+    {
+      "id": "progressive-10k-http",
+      "status": "passed",
+      "evidence": "10,000 nodes and 40,000 edges across bounded pages; complete item counts"
+    },
+    {
+      "id": "retention-input-isolation",
+      "status": "partial",
+      "evidence": "This measurement command does not execute the separate test suite. Run pnpm exec vitest run tests/backend-release and retain its result alongside this report; cases are documented in docs/issues/28.md."
+    },
+    {
+      "id": "postgres-staging-isolation",
+      "status": "partial",
+      "evidence": "No staging PostgreSQL/App registration/live removal or account disconnect was available in this worktree"
+    },
+    {
+      "id": "process-containment",
+      "status": "partial",
+      "evidence": "Git fallback process/bytes/disk/time bounded; kernel CPU/memory sandbox and adversarial staging capacity not established"
+    }
+  ],
+  "analysis": {
+    "fixture": "authored real Git history behind controlled GitHub transport",
+    "inventory": 8,
+    "edges": 1,
+    "counts": {
+      "changedFiles": 8,
+      "overlappingFiles": 1,
+      "overlappingSources": 2,
+      "dependencyNeighbors": 1
+    },
+    "coverage": "partial",
+    "phases": [
+      {
+        "stage": "fetching",
+        "progress": 3,
+        "elapsedMs": 0.42
+      },
+      {
+        "stage": "fetching",
+        "progress": 12,
+        "elapsedMs": 88.59
+      },
+      {
+        "stage": "indexing",
+        "progress": 35,
+        "elapsedMs": 228.54
+      },
+      {
+        "stage": "indexing",
+        "progress": 47,
+        "elapsedMs": 270.45
+      },
+      {
+        "stage": "indexing",
+        "progress": 58,
+        "elapsedMs": 272.3
+      },
+      {
+        "stage": "indexing",
+        "progress": 69,
+        "elapsedMs": 272.55
+      },
+      {
+        "stage": "sources",
+        "progress": 76,
+        "elapsedMs": 272.59
+      },
+      {
+        "stage": "ready",
+        "progress": 100,
+        "elapsedMs": 359.43
+      }
+    ],
+    "totalAnalysisMs": 366.75,
+    "sourceOverlayMs": 174.62,
+    "network": "no external traffic; actual local Git object reads inside fixture transport"
+  },
+  "progressive": {
+    "fixture": "10k files / 40k authored synthetic edges",
+    "seed": 42,
+    "state": "cold in-process memory store recovery; sequential loopback HTTP pages, no browser",
+    "metadataMs": 249.48,
+    "metadataBytes": 1970,
+    "results": [
+      {
+        "kind": "nodes",
+        "count": 10000,
+        "pages": 20,
+        "bytes": 3821556,
+        "maxBytes": 191148,
+        "totalMs": 179.49,
+        "p95PageMs": 11.96
+      },
+      {
+        "kind": "edges",
+        "count": 40000,
+        "pages": 40,
+        "bytes": 7450485,
+        "maxBytes": 186593,
+        "totalMs": 343.58,
+        "p95PageMs": 9.44
+      }
+    ]
+  },
+  "limitations": [
+    "One sample does not establish production capacity or latency percentiles across users.",
+    "Synthetic edge evidence is authored fixture data, never claimed to be observed source dependencies.",
+    "No archive extractor exists. Unsafe Git paths are denied; this does not validate a future archive ingestion path.",
+    "Human and live multi-user staging acceptance remain required before beta."
+  ]
+}

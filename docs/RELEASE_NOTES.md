@@ -1,0 +1,7 @@
+# Deterministic preview — 0.1.0 candidate
+
+Explore the second [Constellation design](https://www.figma.com/design/A7h1fCr1SbLPRwY4vstSup?node-id=17-2113): each circle is one file, connections show static imports, and labeled islands reveal repository structure. The first contribution-grid direction is excluded.
+
+Run `pnpm install --frozen-lockfile`, `pnpm dev`, then open http://127.0.0.1:4310. The credential-free sample has 212 files in six islands. Select three PRs to see 68 touched files and 14 overlaps, remove a source to compare its footprint, search for `refresh.ts`, inspect its neighbors and try the accessible file list. Synthetic sample diff links are visibly disabled. Connect a public repository to inspect real pinned source evidence.
+
+The candidate adds safe, versioned source artifacts and a local artifact/rollback rehearsal. It remains a deterministic preview, with external intelligence disabled in release automation. [Capabilities and limits](CAPABILITIES.md), [release/rollback instructions](RELEASE.md), [open issues](https://github.com/oudaykhaled/patchwork-constellation/issues) and [issue evidence](issues/31.md) describe outstanding live-provider, hosting, database and human-review gates. No release tag or hosted deployment is implied by these notes.

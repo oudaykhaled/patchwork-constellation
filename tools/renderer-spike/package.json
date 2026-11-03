@@ -1,0 +1,7 @@
+{
+  "name": "@patchwork/renderer-spike",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "dependencies": { "sigma": "4.0.4", "graphology": "0.26.0" }
+}

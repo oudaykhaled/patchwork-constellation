@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "1",
+  "files": 212,
+  "edges": 235,
+  "seed": "authored-constellation-v1",
+  "navigationToRenderedMs": 192.9715000000001,
+  "firstUsefulAfterDataMs": 103.69999992847443,
+  "startupLongTasks": [],
+  "heap": {
+    "usedBytes": 14157894,
+    "allocatedBytes": 17664722,
+    "limitBytes": 4395630592
+  },
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "frames": 86,
+  "frameMedianMs": 16.699999999999818,
+  "frameP95Ms": 16.90000000000009,
+  "longTasks": [],
+  "browser": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.8078.4 Safari/537.36",
+  "devicePixelRatio": 1,
+  "conditions": {
+    "platform": "win32",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "totalMemoryBytes": 33752997888,
+    "node": "v24.22.1",
+    "network": "loopback; synthetic /api/demo response; no GitHub/AI",
+    "concurrency": "Single local measurement; issue agents and other test suites stopped; idle preview4310; desktop background uncontrolled",
+    "cacheState": "new browser context; first page navigation"
+  },
+  "budgets": {
+    "firstUsefulMs": 2000,
+    "selectionP95Ms": 250,
+    "hoverP95Ms": 100,
+    "panP95Ms": 33,
+    "layoutLongTaskMs": 100
+  },
+  "checks": {
+    "firstUseful": true,
+    "pan": true,
+    "startupLongTask": true
+  },
+  "capacity": "target",
+  "build": "production",
+  "note": "First-use time begins after demo JSON is available and ends at polled green-circle/worker-ready proof; it includes polling overhead. Startup long tasks include app/rendering plus pixel-proof overhead, not isolated worker CPU. JS heap is browser-reported and is not GPU or process memory. Frame samples measure keyboard panning, not ingestion or AI.",
+  "layoutSeed": 0,
+  "commit": "bcfa5110ee0c4f30568b730e868d5be658c3aae9"
+}

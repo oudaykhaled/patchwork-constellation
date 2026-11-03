@@ -1,0 +1,99 @@
+{
+  "schemaVersion": "1",
+  "issue": 2,
+  "scope": "actual hosted intentional unit-test failure and bounded diagnostic proof",
+  "observedAt": "2026-11-03T20:29:15Z",
+  "repository": "oudaykhaled/patchwork-constellation",
+  "base": {
+    "branch": "feat/constellation-mvp",
+    "sha": "2f6a59174ed981b27957218890ee75c4d6b9019a"
+  },
+  "proof": {
+    "branch": "test/ci-failure-proof",
+    "sha": "9c6a3c2f8c9212e499a042e04487973995cef426",
+    "pullRequest": 33,
+    "url": "https://github.com/oudaykhaled/patchwork-constellation/pull/33",
+    "changedFiles": [
+      {
+        "path": "tests/ci/intentional-failure-proof.test.ts",
+        "additions": 5,
+        "deletions": 0
+      }
+    ],
+    "runtimeOrWorkflowChanged": false
+  },
+  "local": {
+    "command": "pnpm check",
+    "exitCode": 1,
+    "priorStagesPassed": ["format:check", "lint", "test:quality", "typecheck"],
+    "intentionalAssertionsFailed": 1,
+    "otherTestsPassed": 389,
+    "testsSkipped": 3,
+    "buildRanAfterFailure": false
+  },
+  "hosted": {
+    "event": "pull_request",
+    "runId": 41712260638,
+    "runUrl": "https://github.com/oudaykhaled/patchwork-constellation/actions/runs/41712260638",
+    "checkJobId": 126183046159,
+    "checkJobUrl": "https://github.com/oudaykhaled/patchwork-constellation/actions/runs/41712260638/job/126183046159",
+    "checkConclusion": "failure",
+    "checkCompletedAt": "2026-11-03T20:25:13Z",
+    "intentionalAssertionsFailed": 1,
+    "otherTestsPassed": 389,
+    "testsSkipped": 3,
+    "commandExitCode": 1,
+    "artifact": {
+      "id": 13268885309,
+      "name": "check-failure-summary",
+      "url": "https://github.com/oudaykhaled/patchwork-constellation/actions/runs/41712260638/artifacts/13268885309",
+      "zipBytes": 309,
+      "zipSha256": "ed33e59b47eaad2df6c6e5ddc4e4541ec661091a81da1d883af1339d8b5cf247",
+      "file": "ci-proof-check.json",
+      "fileBytes": 515,
+      "fileSha256": "4014bc28031a4eb98e551e20e54dd63b38d6fd7211defc13ca9f237956669305",
+      "topLevelFields": ["schemaVersion", "suite", "success", "results"],
+      "resultFields": ["check", "exitCode", "durationMs"],
+      "strictAllowlistVerified": true,
+      "under2048Bytes": true,
+      "retentionDays": 7,
+      "expiresAt": "2026-11-10T20:25:09Z"
+    },
+    "actualJobTokenPermissions": { "contents": "read", "metadata": "read" },
+    "workflowBlobSha": "5739b1e276148d68356e95c4d973ae337ed0ddc4",
+    "allActionsPinnedToFullSha": true,
+    "checkoutPersistsCredentials": false,
+    "workflowSecretReferences": false,
+    "repositoryDefaultWorkflowPermissions": "read",
+    "repositoryCanApprovePullRequestReviews": false
+  },
+  "passingBaseCheck": {
+    "runId": 41712031764,
+    "checkJobId": 126182272849,
+    "checkJobUrl": "https://github.com/oudaykhaled/patchwork-constellation/actions/runs/41712031764/job/126182272849",
+    "checkConclusion": "success",
+    "browserConclusionAtReadback": null
+  },
+  "cleanup": {
+    "proofPullRequestState": "CLOSED",
+    "proofPullRequestIsDraft": true,
+    "proofPullRequestMergedAt": null,
+    "proofPullRequestClosedAt": "2026-11-03T20:26:14Z",
+    "proofBranchRetained": true,
+    "proofBranchShaVerified": "9c6a3c2f8c9212e499a042e04487973995cef426",
+    "implementationCancellationRequested": true,
+    "implementationBrowserStatusAtReadback": "completed",
+    "implementationBrowserConclusionAtReadback": "cancelled",
+    "implementationBrowserCompletedAt": "2026-11-03T20:27:42Z",
+    "implementationRunConclusion": "cancelled",
+    "implementationRunCompletedAtReadback": "2026-11-03T20:27:43Z",
+    "proofGraphRunId": 41712260692,
+    "proofGraphConclusion": "success"
+  },
+  "limitations": [
+    "This is deliberate-failure proof, not product browser or release acceptance.",
+    "Aggregate workflow cancellation was requested only after the failed check and artifact upload completed.",
+    "No branch-protection configuration or provider/deployment credential access is claimed.",
+    "The intentionally failing test is isolated on a closed unmerged proof PR and retained branch."
+  ]
+}

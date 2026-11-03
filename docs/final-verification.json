@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "1",
+  "recordedAt": "2026-11-03T19:36:41.649Z",
+  "implementationCommit": "bcfa5110ee0c4f30568b730e868d5be658c3aae9",
+  "license": "Apache-2.0",
+  "acceptance": {
+    "conditionalCandidates": 21,
+    "partial": 10,
+    "partialIssues": [
+      2,
+      5,
+      15,
+      17,
+      18,
+      21,
+      26,
+      27,
+      28,
+      31
+    ],
+    "issuesClosed": 0,
+    "releaseReady": false
+  },
+  "automated": {
+    "command": "pnpm check",
+    "testsPassed": 386,
+    "optInTestsSkipped": 3,
+    "qualityScriptTestsPassed": 5,
+    "typecheck": "passed",
+    "format": "passed",
+    "lint": "passed",
+    "productionBuild": "passed",
+    "thirdPartyPackagesVerified": 7
+  },
+  "browsers": {
+    "chromiumWebkitFunctionalPassed": 118,
+    "intentionalSkips": 2,
+    "chromium": "156.0.8078.80",
+    "webkit": "27.2",
+    "firefox": "not locally verified: Windows process launch UNKNOWN; hosted current-build CI pending",
+    "performanceCasesPassed": 5,
+    "soakCasesPassed": 3,
+    "togglesPerFixture": 1000,
+    "authenticatedCasesPassed": 2,
+    "authenticatedWarmSamples": 20
+  },
+  "postgres": {
+    "checksPassed": 22,
+    "suites": 4,
+    "version": "17.11",
+    "scope": "isolated loopback synthetic databases; no service installation or production database changed",
+    "evidenceSource": "Integrated run at a1ea343; subsequent implementation changes are UI camera only, with unchanged storage/database/runtime webhook files. Current-schema native backup/restore also passed.",
+    "stoppedAfterRun": true
+  },
+  "incremental": {
+    "analyzerVersion": "static-v4",
+    "golden": "9 reusable syntax facts, 2 source downloads/parses; graph facts exactly equal full analysis",
+    "configuredWebhook": "4 reused / 0 downloads / 0 parses after configuration change; fresh alias target; changed source 3 reused / 1 download / 1 parse; same-SHA refresh 4 reused / 0 / 0"
+  },
+  "camera": {
+    "regression": "Old production reproducibly saved bootstrap camera rather than settled worker fit; fixed production passes real 10k pixel reload and rapid-pan/current-selection regressions in both engines."
+  },
+  "productionAssets": [
+    {
+      "path": "dist/assets/index-BrrA8EjA.css",
+      "sha256": "1e4a7e1978870fb68d308a4bed4e0f7095c31c0f5dcb61487ff1040f8c85e0a0"
+    },
+    {
+      "path": "dist/assets/index-CY11Ud3-.js",
+      "sha256": "8165c5420f80a6b4e4d48367fcd2e2c53c08d1e138174e3a13255984a7003e93"
+    },
+    {
+      "path": "dist/assets/layout.worker-xUEj1lZZ.js",
+      "sha256": "7a9de8c4102c4082168435eae8e2eca76f36310bb390dc0ae9a4f63cb3ed56ef"
+    }
+  ],
+  "publication": {
+    "complete": true,
+    "activeBranch": "feat/constellation-mvp",
+    "applicationCommit": "2f6a59174ed981b27957218890ee75c4d6b9019a",
+    "pullRequest": 32,
+    "merged": false,
+    "previousIncompleteUpload": {
+      "complete": false,
+      "remotePartialHead": "630bbe9e5a8a372ac86106d7bbbb33a17225f82e",
+      "initialFilesPublished": 118,
+      "initialFilesAttempted": 221,
+      "connector": "403 Resource not accessible by integration",
+      "git": "No saved noninteractive GitHub account",
+      "webEditor": "File could not be edited, including fresh verified tabs; cause not established",
+      "remediationPullRequestCreated": false,
+      "existingDraftPr": 32,
+      "kanbanChanged": false
+    }
+  },
+  "limits": [
+    "No native 200% browser-zoom or human assistive-technology/task-study acceptance claimed.",
+    "No current hosted CI, deployed staging isolation, manual GPU matrix or hosted traffic rollback claimed.",
+    "No live paid provider call, reviewed account terms or human holdout model evaluation; intelligence remains disabled.",
+    "10k rendering is stress-only; all files remain counted and accessible through scope/Files."
+  ],
+  "historicalMeasurement": true,
+  "currentReport": "publication-verification.json"
+}

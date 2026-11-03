@@ -1,0 +1,320 @@
+{
+  "schemaVersion": "1",
+  "kind": "authored-mock",
+  "status": "blocked",
+  "generatedAt": "2026-11-03T17:24:24.538Z",
+  "corpus": {
+    "version": "authored-holdout-v1",
+    "holdoutDigest": "f1fb3a6732b073e0fb5ee78f9c19bd615ac2c0d516bc827cc300d0c0a748e001",
+    "tuningDigest": "2c78611b169ab3cd4d7b8e8ec898467d4a0d0e25259ea8636bacfbfbe511672e",
+    "review": {
+      "status": "pending",
+      "reviewer": null,
+      "independentReviewer": null
+    },
+    "tuningCases": 2,
+    "holdoutCases": 6
+  },
+  "versions": {
+    "policy": "metadata-only-v2",
+    "prompt": "island-label-membership-v1",
+    "schema": "grouping-evidence-v1",
+    "groupingSchema": "1",
+    "providerContract": "system-one-v2",
+    "labelPrompt": "island-labels-v1",
+    "membershipPrompt": "island-membership-v1",
+    "pipeline": "evidence-gated-v1"
+  },
+  "targets": {
+    "minimumAgreementGain": 0.05,
+    "minimumSelectiveAccuracy": 0.9,
+    "maximumReviewRate": 0.5,
+    "maximumCalibrationError": 0.15,
+    "maximumLatencyP95Ms": 15000,
+    "maximumCostPerCaseUsd": 0.05
+  },
+  "minimumConfidence": 0.8,
+  "stages": {
+    "baseline": {
+      "count": 18,
+      "membershipAgreement": 0.6666666666666666,
+      "reviewRate": 0,
+      "abstentionRate": 0,
+      "selectiveAccuracy": 0.6666666666666666,
+      "acceptedCoverage": 1,
+      "evidenceValidity": 1,
+      "calibrationError": null,
+      "brierScore": null,
+      "reliability": [
+        {
+          "from": 0,
+          "to": 0.2,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.2,
+          "to": 0.4,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.4,
+          "to": 0.6,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.6,
+          "to": 0.8,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.8,
+          "to": 1,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        }
+      ]
+    },
+    "generativeNamingOnly": {
+      "count": 18,
+      "membershipAgreement": 0.6666666666666666,
+      "reviewRate": 0,
+      "abstentionRate": 0,
+      "selectiveAccuracy": 0.6666666666666666,
+      "acceptedCoverage": 1,
+      "evidenceValidity": 1,
+      "calibrationError": null,
+      "brierScore": null,
+      "reliability": [
+        {
+          "from": 0,
+          "to": 0.2,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.2,
+          "to": 0.4,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.4,
+          "to": 0.6,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.6,
+          "to": 0.8,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.8,
+          "to": 1,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        }
+      ]
+    },
+    "jevGated": {
+      "count": 18,
+      "membershipAgreement": 0.6666666666666666,
+      "reviewRate": 0.5555555555555556,
+      "abstentionRate": 0.5555555555555556,
+      "selectiveAccuracy": 1,
+      "acceptedCoverage": 0.4444444444444444,
+      "evidenceValidity": 1,
+      "calibrationError": 0.060000000000000275,
+      "brierScore": 0.0036000000000000064,
+      "reliability": [
+        {
+          "from": 0,
+          "to": 0.2,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.2,
+          "to": 0.4,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.4,
+          "to": 0.6,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.6,
+          "to": 0.8,
+          "count": 0,
+          "meanConfidence": null,
+          "accuracy": null
+        },
+        {
+          "from": 0.8,
+          "to": 1,
+          "count": 8,
+          "meanConfidence": 0.9399999999999997,
+          "accuracy": 1
+        }
+      ]
+    }
+  },
+  "hardGates": {
+    "unknownIdsRejected": true,
+    "disabledNoTransfer": true,
+    "manualOverridesPreserved": true,
+    "failuresKeepBaseline": true
+  },
+  "stability": 1,
+  "latency": {
+    "kind": "mock-service-wall-clock",
+    "p95Ms": 30.806100000000015
+  },
+  "cost": {
+    "kind": "mock",
+    "billedUsd": null,
+    "note": "No provider calls or billed usage. Mock token fields test telemetry only."
+  },
+  "environment": {
+    "platform": "win32",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "node": "v24.22.1"
+  },
+  "cases": [
+    {
+      "id": "hold-monorepo",
+      "elapsedMs": 30.806100000000015,
+      "usage": {
+        "inputTokens": 40,
+        "outputTokens": 17,
+        "requests": 3
+      },
+      "predictedMembership": {
+        "hm-ui": "interface",
+        "hm-core": "interface",
+        "hm-shared": "domain"
+      },
+      "models": {
+        "generative": "synthetic-generative-2026-11-03",
+        "jev": "jev-1.14.0"
+      }
+    },
+    {
+      "id": "hold-layered",
+      "elapsedMs": 1.3179000000000087,
+      "usage": {
+        "inputTokens": 40,
+        "outputTokens": 17,
+        "requests": 3
+      },
+      "predictedMembership": {
+        "hl-ui": "interface",
+        "hl-core": "interface",
+        "hl-data": "domain"
+      },
+      "models": {
+        "generative": "synthetic-generative-2026-11-03",
+        "jev": "jev-1.14.0"
+      }
+    },
+    {
+      "id": "hold-feature",
+      "elapsedMs": 0.9060000000000059,
+      "usage": {
+        "inputTokens": 40,
+        "outputTokens": 17,
+        "requests": 3
+      },
+      "predictedMembership": {
+        "hf-ui": "interface",
+        "hf-rule": "interface",
+        "hf-data": "domain"
+      },
+      "models": {
+        "generative": "synthetic-generative-2026-11-03",
+        "jev": "jev-1.14.0"
+      }
+    },
+    {
+      "id": "hold-shared",
+      "elapsedMs": 0.7139999999999986,
+      "usage": {
+        "inputTokens": 40,
+        "outputTokens": 17,
+        "requests": 3
+      },
+      "predictedMembership": {
+        "hs-a": "interface",
+        "hs-b": "domain",
+        "hs-c": "interface"
+      },
+      "models": {
+        "generative": "synthetic-generative-2026-11-03",
+        "jev": "jev-1.14.0"
+      }
+    },
+    {
+      "id": "hold-unsupported",
+      "elapsedMs": 0.772700000000043,
+      "usage": {
+        "inputTokens": 40,
+        "outputTokens": 17,
+        "requests": 3
+      },
+      "predictedMembership": {
+        "hu-ui": "interface",
+        "hu-rust": "domain",
+        "hu-core": "interface"
+      },
+      "models": {
+        "generative": "synthetic-generative-2026-11-03",
+        "jev": "jev-1.14.0"
+      }
+    },
+    {
+      "id": "hold-malicious",
+      "elapsedMs": 0.6429999999999723,
+      "usage": {
+        "inputTokens": 40,
+        "outputTokens": 17,
+        "requests": 3
+      },
+      "predictedMembership": {
+        "hx-ui": "interface",
+        "hx-core": "interface",
+        "hx-shared": "domain"
+      },
+      "models": {
+        "generative": "synthetic-generative-2026-11-03",
+        "jev": "jev-1.14.0"
+      }
+    }
+  ],
+  "releaseBlockers": [
+    "Holdout goldens require human review and independent sign-off.",
+    "No bounded live model run, account data-terms review, measured cost or live calibration has been performed.",
+    "Authored mock predictions are not evidence of model quality."
+  ]
+}

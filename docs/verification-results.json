@@ -1,0 +1,39 @@
+{
+  "date": "2026-11-03",
+  "environment": {
+    "os": "Windows x64",
+    "node": "24.22.1",
+    "pnpm": "11.25.0",
+    "app": "production frontend served on loopback",
+    "defaultBrowserViewport": { "width": 1600, "height": 1000 }
+  },
+  "checks": {
+    "typecheck": "passed",
+    "productionBuild": "passed",
+    "unitAndIntegration": { "passed": 90, "skipped": 1, "skipReason": "PostgreSQL integration requires TEST_DATABASE_URL" },
+    "coreBrowserJourneys": {
+      "chromium": { "passed": 12, "channel": "installed Chrome" },
+      "webkit": { "passed": 11, "skipped": 1, "skipReason": "Shared single-user manual revision API is exercised once in Chromium" },
+      "firefox": { "status": "not-verified", "reason": "Official Playwright Firefox installation succeeded, but Windows process launch returned spawn UNKNOWN before page creation" }
+    },
+    "graphArea": {
+      "minimum": 0.8,
+      "passedViewports": [
+        { "width": 1280, "height": 720 },
+        { "width": 1440, "height": 900 },
+        { "width": 1600, "height": 1000 }
+      ]
+    },
+    "narrowReducedMotionJourney": { "status": "passed", "viewport": { "width": 390, "height": 844 } },
+    "staleGroupingContextRegression": "passed in Chromium and WebKit",
+    "demoGroupingReloadUndoConsistency": "passed",
+    "liveAiProviders": "not-verified",
+    "livePostgreSQL": "not-verified",
+    "hostedCiAndDeployment": "not-verified"
+  },
+  "commands": [
+    "pnpm check",
+    "PLAYWRIGHT_CHROME=1 pnpm test:e2e --project=chromium --project=webkit --workers=2 tests/e2e/constellation.spec.ts"
+  ],
+  "relatedEvidence": ["VERIFICATION.md", "GRAPH_BENCHMARK.md", "IMPLEMENTATION_STATUS.md"]
+}
