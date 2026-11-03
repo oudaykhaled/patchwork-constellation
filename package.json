@@ -1,10 +1,13 @@
 {
   "name": "patchwork-constellation",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
-  "engines": { "node": ">=24 <25" },
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "dev": "tsx apps/web/server.ts",
     "start": "tsx apps/web/server.ts --production",
@@ -14,7 +17,12 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "format:check": "node scripts/source-quality.mjs --format",
+    "format": "node scripts/source-quality.mjs --format --fix",
+    "lint": "node scripts/source-quality.mjs",
+    "test:quality": "node --test scripts/source-quality.test.mjs scripts/run-checks.test.mjs",
+    "check": "node scripts/run-checks.mjs check",
+    "check:browser": "node scripts/run-checks.mjs browser"
   },
   "dependencies": {
     "@fontsource/geist": "5.3.0",
@@ -33,6 +41,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@playwright/test": "1.64.1",
     "@types/node": "26.6.6",
     "@types/pg": "8.23.1",

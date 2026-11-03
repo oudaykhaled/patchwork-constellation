@@ -92,8 +92,8 @@ const sourceSpecs: SourceSpec[] = [
   { id: 'pr-251', kind: 'pr', title: 'Add subscription checkout', label: '#251', number: 251, url: `${DEMO_REPOSITORY.htmlUrl}/pull/251`, comparisonKind: 'merge-base', baseSha: SNAPSHOT_SHA, headSha: '2510000000000000000000000000000000000000', commitCount: 6 },
   { id: 'pr-256', kind: 'pr', title: 'Consolidate request validation', label: '#256', number: 256, url: `${DEMO_REPOSITORY.htmlUrl}/pull/256`, comparisonKind: 'merge-base', baseSha: SNAPSHOT_SHA, headSha: '2560000000000000000000000000000000000000', commitCount: 3 },
   { id: 'pr-259', kind: 'pr', title: 'Update docs navigation', label: '#259', number: 259, url: `${DEMO_REPOSITORY.htmlUrl}/pull/259`, comparisonKind: 'merge-base', baseSha: SNAPSHOT_SHA, headSha: '2590000000000000000000000000000000000000', commitCount: 2 },
-  { id: 'commit-a81f3c2', kind: 'commit', title: 'Rotate refresh tokens', label: 'a81f3c2', sha: 'a81f3c20000000000000000000000000000000000', baseSha: SNAPSHOT_SHA, headSha: 'a81f3c20000000000000000000000000000000000', comparisonKind: 'first-parent', url: `${DEMO_REPOSITORY.htmlUrl}/commit/a81f3c2` },
-  { id: 'commit-b72d9e1', kind: 'commit', title: 'Normalize input validation', label: 'b72d9e1', sha: 'b72d9e10000000000000000000000000000000000', baseSha: SNAPSHOT_SHA, headSha: 'b72d9e10000000000000000000000000000000000', comparisonKind: 'first-parent', url: `${DEMO_REPOSITORY.htmlUrl}/commit/b72d9e1` },
+  { id: 'commit-a81f3c2', kind: 'commit', title: 'Rotate refresh tokens', label: 'a81f3c2', sha: 'a81f3c2'.padEnd(40, '0'), baseSha: SNAPSHOT_SHA, headSha: 'a81f3c2'.padEnd(40, '0'), comparisonKind: 'first-parent', url: `${DEMO_REPOSITORY.htmlUrl}/commit/a81f3c2` },
+  { id: 'commit-b72d9e1', kind: 'commit', title: 'Normalize input validation', label: 'b72d9e1', sha: 'b72d9e1'.padEnd(40, '0'), baseSha: SNAPSHOT_SHA, headSha: 'b72d9e1'.padEnd(40, '0'), comparisonKind: 'first-parent', url: `${DEMO_REPOSITORY.htmlUrl}/commit/b72d9e1` },
 ];
 
 function changedFile(node: FileNode, index: number): FileChange {

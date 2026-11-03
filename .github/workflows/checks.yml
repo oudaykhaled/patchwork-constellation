@@ -27,6 +27,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4, verified 2026-11-03
+        if: failure()
+        with:
+          name: check-failure-summary
+          path: .ci-diagnostics/check.json
+          retention-days: 7
+          if-no-files-found: ignore
 
   browser:
     runs-on: ubuntu-latest
@@ -42,12 +49,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
-      - run: pnpm test:e2e
+      - run: pnpm check:browser
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
-          name: browser-failure-evidence
-          path: |
-            playwright-report/
-            test-results/
+          name: browser-failure-summary
+          path: .ci-diagnostics/browser.json
           retention-days: 7
+          if-no-files-found: ignore

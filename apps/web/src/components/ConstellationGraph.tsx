@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { fitCamera, islandBounds, neighborsOf, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
+import { islandBounds, neighborsOf, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
 import type { Bounds, Camera, GraphData, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
 import { boundsIntersect, connectionInViewport, exceedsGraphEnvelope, scopeSummary, viewportBounds } from '../../../../packages/graph-core/src/render-policy';
 import { useSettledLayout } from './useSettledLayout';
