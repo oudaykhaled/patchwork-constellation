@@ -128,7 +128,7 @@ export async function createConfiguredWebhookRefresh(options: Omit<WebhookRefres
   if (env.GITHUB_WEBHOOK_SECRET.length < 16) throw failure('A webhook secret of at least 16 characters is required.', 503);
   if (!env.DATABASE_URL) throw failure('Webhook durability requires DATABASE_URL.', 503);
   const { createPostgresWebhookInbox } = await import('@patchwork/storage');
-  const inbox = configuredInbox ?? await createPostgresWebhookInbox({ databaseUrl: env.DATABASE_URL });
+  const inbox = configuredInbox ?? await createPostgresWebhookInbox({ databaseUrl: env.DATABASE_URL, autoMigrate: env.DATABASE_AUTO_MIGRATE !== 'false' });
   try { return new WebhookRefreshService({ ...options, secret: env.GITHUB_WEBHOOK_SECRET, inbox }); }
   catch (error) { await inbox.close(); throw error; }
 }

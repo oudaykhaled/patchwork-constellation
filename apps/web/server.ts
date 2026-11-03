@@ -49,7 +49,7 @@ const revisionRequest = idRequest.extend({ expectedRevisionId: z.string().min(1)
 
 export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput>; auth?: GitHubAppAuth | null; grouping?: GroupingService; webhooks?: WebhookRefreshService; webhookInbox?: WebhookInbox } = {}) {
   if (environmentLoadFailure) throw new ConfigurationError(['The .env file could not be read. Check its format and file permissions.']);
-  const { apiRequestsPerMinute } = validateEnvironment();
+  const { apiRequestsPerMinute, databaseAutoMigrate } = validateEnvironment();
   const requestScope = new AsyncLocalStorage<{ ownerId: string; epochs: Map<string, number> }>();
   const ownerId = () => requestScope.getStore()?.ownerId ?? 'local-public';
   const snapshotKey = (id: string) => `${ownerId()}:${id}`;
@@ -76,7 +76,7 @@ export async function createApplicationServer(options: { production?: boolean; s
   const authConfig = options.auth === undefined ? githubAuthConfig() : undefined;
   const auth = options.auth === undefined ? (authConfig ? new GitHubAppAuth(authConfig) : undefined) : options.auth ?? undefined;
   if (process.env.GITHUB_WEBHOOK_SECRET && !auth && !options.webhooks) throw new ConfigurationError(['GITHUB_WEBHOOK_SECRET requires GitHub App configuration.']);
-  const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100 });
+  const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100, autoMigrate: databaseAutoMigrate });
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
   const loadSources = options.runSources ?? runSourceAnalysisInWorker;
   const admission = new WorkerAdmission(2);
