@@ -1,0 +1,35 @@
+{
+  "measured": "CPU layout + footprint + neighbor computation; excludes browser canvas rendering and network",
+  "node": "v24.22.1",
+  "platform": "win32",
+  "architecture": "x64",
+  "results": [
+    {
+      "files": 212,
+      "edges": 235,
+      "seed": "authored-constellation-v1",
+      "runs": 25,
+      "medianMs": 0.26,
+      "p95Ms": 0.8,
+      "layoutSeed": 0
+    },
+    {
+      "files": 2000,
+      "edges": 8000,
+      "seed": 42,
+      "runs": 25,
+      "medianMs": 1.06,
+      "p95Ms": 2.23,
+      "layoutSeed": 0
+    },
+    {
+      "files": 10000,
+      "edges": 40000,
+      "seed": 42,
+      "runs": 25,
+      "medianMs": 4.82,
+      "p95Ms": 10.19,
+      "layoutSeed": 0
+    }
+  ]
+}

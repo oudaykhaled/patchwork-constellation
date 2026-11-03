@@ -37,6 +37,7 @@ test('worker construction failure preserves selection and accessible list plus r
   await expect(page.getByRole('button', { name: 'Retry layout' })).toBeVisible();
   await expect(page.getByTestId('changed-count')).toHaveText('68');
   await page.getByTestId('accessible-list-toggle').click();
+  await page.getByRole('searchbox', { name: 'Filter file list' }).fill('refresh.ts');
   await page.getByRole('button', { name: /refresh\.ts/ }).first().click();
   await expect(page.getByTestId('file-inspector')).toContainText('refresh.ts');
 });

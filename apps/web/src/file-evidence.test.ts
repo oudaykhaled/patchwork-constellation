@@ -47,8 +47,8 @@ describe('file review evidence', () => {
   });
   it('keeps verified selected-head edges independent of context and rejects foreign or stale evidence', () => {
     const file = live.nodes[0]!, target = live.nodes[1]!;
-    const edge = { id: 'head-edge', source: file.id, target: target.id, kind: 'type-import', provenance: 'selected-head', sourceId: source.id, evidence: { path: file.path, line: 7, resolver: 'typescript-ast', sourceId: source.id, snapshotSha: head } };
-    const enriched = { ...source, importHeadSha: head, importCoverage: { status: 'partial', reasons: ['Outgoing changed-file imports only.'] }, importFiles: [{ fileId: file.id, path: file.path, status: 'partial', reasons: ['Missing target identity.'] }], importEdges: [edge, { ...edge, id: 'foreign', sourceId: 'other-pr' }, { ...edge, id: 'dangling', target: 'unknown-file' }] };
+    const edge: NonNullable<ChangeSource['importEdges']>[number] = { id: 'head-edge', source: file.id, target: target.id, kind: 'type-import', provenance: 'selected-head', sourceId: source.id, evidence: { path: file.path, line: 7, resolver: 'typescript-ast', sourceId: source.id, snapshotSha: head } };
+    const enriched: ChangeSource = { ...source, importHeadSha: head, importCoverage: { status: 'partial', reasons: ['Outgoing changed-file imports only.'] }, importFiles: [{ fileId: file.id, path: file.path, status: 'partial', reasons: ['Missing target identity.'] }], importEdges: [edge, { ...edge, id: 'foreign', sourceId: 'other-pr' }, { ...edge, id: 'dangling', target: 'unknown-file' }] };
     const contextEdges = live.edges.length;
     const result = selectedHeadEvidence(live, enriched, file);
     expect(result).toMatchObject({ status: 'partial', pinned: true, fileStatus: 'partial', fileReasons: ['Missing target identity.'], rejectedEdges: 2 });
