@@ -31,6 +31,18 @@ describe('bounded memory storage', () => {
     await expect(store.putSnapshot({ ...scope, repository: 'other/repo' }, snapshot)).rejects.toThrow('does not match');
     await expect(store.putSnapshot(scope, { ...snapshot, nodes: [{ ...snapshot.nodes[0]!, groupId: 'missing' }] })).rejects.toThrow();
   });
+  it('loads latest by writes rather than LRU reads or caller dates and isolates scope', async () => {
+    await store.putSnapshot(scope, { ...snapshot, id: 'older', createdAt: '2026-11-03T23:59:59Z' });
+    await store.putSnapshot(scope, { ...snapshot, id: 'newer', createdAt: '2026-11-03T00:00:00Z' });
+    await store.getSnapshot(scope, 'older');
+    const latest = await store.getLatestSnapshot({ ...scope, repository: 'example/repo' });
+    expect(latest?.id).toBe('newer'); latest!.nodes[0]!.path = 'changed';
+    expect((await store.getLatestSnapshot(scope))?.nodes[0]!.path).toBe('src/index.ts');
+    expect(await store.getLatestSnapshot({ ...scope, ownerId: 'bob' })).toBeUndefined();
+    expect(await store.getLatestSnapshot({ ...scope, repository: 'other/repository' })).toBeUndefined();
+    await store.putSnapshot(scope, { ...snapshot, id: 'older' }); expect((await store.getLatestSnapshot(scope))?.id).toBe('older');
+    now += 60_001; expect(await store.getLatestSnapshot(scope)).toBeUndefined();
+  });
   it('expires snapshots and jobs, with bounded snapshot LRU', async () => {
     await store.putSnapshot(scope, snapshot); await store.putSnapshot(scope, { ...snapshot, id: 'second' });
     await store.getSnapshot(scope, snapshot.id); await store.putSnapshot(scope, { ...snapshot, id: 'third' });
@@ -123,6 +135,11 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)('PostgreSQL persistence (opt-in 
       second = await createStore({ databaseUrl: process.env.TEST_DATABASE_URL });
       expect((await second.getSnapshot(scope, snapshot.id))?.contextSha).toBe(snapshot.contextSha);
       expect(await second.getSnapshot({ ...scope, ownerId: 'outsider' }, snapshot.id)).toBeUndefined();
+      await first.putSnapshot(scope, { ...snapshot, id: 'pg-latest', createdAt: '2026-01-01T00:00:00Z' });
+      await first.getSnapshot(scope, snapshot.id);
+      expect((await second.getLatestSnapshot(scope))?.id).toBe('pg-latest');
+      expect(await second.getLatestSnapshot({ ...scope, ownerId: 'outsider' })).toBeUndefined();
+      expect(await second.getLatestSnapshot({ ...scope, repository: 'foreign/repository' })).toBeUndefined();
       const claims = await Promise.all([first.claimJob(scope, 'one'), second.claimJob(scope, 'two')]); expect(claims.filter(Boolean)).toHaveLength(1);
       expect(await first.cancelJob(scope, 'pg-job')).toBe(true);
       expect(await second.completeJob(scope, 'pg-job', claims[0]?.leaseOwner ?? claims[1]!.leaseOwner!, { status: 'ready' })).toBe(false);

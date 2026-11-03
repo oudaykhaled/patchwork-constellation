@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 import type { ImportEdge } from '@patchwork/contracts';
 
 export const RESOLVER_VERSION = 'typescript-static-exports-v3';
+export const PARSER_VERSION = `syntax-v1:${RESOLVER_VERSION}:typescript-${ts.version}`;
+export function scriptKindForPath(path: string): 'ts' | 'tsx' | 'js' | 'jsx' { return /\.tsx$/i.test(path) ? 'tsx' : /\.jsx$/i.test(path) ? 'jsx' : /\.[cm]?js$/i.test(path) ? 'js' : 'ts'; }
 export interface ImportReference { specifier: string; line: number; kind: ImportEdge['kind']; resolutionMode?: 'import' | 'require'; }
 export interface ImportScan { references: ImportReference[]; reasons: string[]; }
 export interface WorkspacePackage { directory: string; entry: string; exports?: unknown; }
@@ -12,11 +14,11 @@ const parseCache = new Map<string, ImportScan>();
 const MAX_PARSE_CACHE = 500;
 
 /** Cache syntax facts only. Resolution is rerun against each snapshot's paths and config. */
-export function scanImports(content: string, path: string, blobSha = ''): ImportScan {
-  const scriptKind = /\.tsx$/i.test(path) ? ts.ScriptKind.TSX : /\.jsx$/i.test(path) ? ts.ScriptKind.JSX : /\.[cm]?js$/i.test(path) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+export function scanImportsDetailed(content: string, path: string, blobSha = ''): { facts: ImportScan; parsed: boolean } {
+  const scriptKind = ({ ts: ts.ScriptKind.TS, tsx: ts.ScriptKind.TSX, js: ts.ScriptKind.JS, jsx: ts.ScriptKind.JSX })[scriptKindForPath(path)];
   const key = `${RESOLVER_VERSION}:${ts.version}:${scriptKind}:${blobSha}:${createHash('sha256').update(content).digest('hex')}`;
   const cached = parseCache.get(key);
-  if (cached) return structuredClone(cached);
+  if (cached) return { facts: structuredClone(cached), parsed: false };
   const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true, scriptKind);
   const references: ImportReference[] = []; const reasons: string[] = [];
   const diagnostics = (source as ts.SourceFile & { parseDiagnostics?: ts.Diagnostic[] }).parseDiagnostics ?? [];
@@ -53,8 +55,9 @@ export function scanImports(content: string, path: string, blobSha = ''): Import
   const result = { references, reasons };
   if (parseCache.size >= MAX_PARSE_CACHE) parseCache.delete(parseCache.keys().next().value!);
   parseCache.set(key, structuredClone(result));
-  return result;
+  return { facts: result, parsed: true };
 }
+export function scanImports(content: string, path: string, blobSha = ''): ImportScan { return scanImportsDetailed(content, path, blobSha).facts; }
 export function extractImports(content: string, path: string): ImportReference[] { return scanImports(content, path).references; }
 export function clearImportCacheForTests() { parseCache.clear(); }
 

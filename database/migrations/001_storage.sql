@@ -6,9 +6,14 @@ CREATE TABLE IF NOT EXISTS patchwork_snapshots (
   id TEXT NOT NULL,
   payload JSONB NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
+  stored_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (owner_id, repository, id)
 );
+-- Existing installations predate incremental refresh. Backfill a deterministic
+-- tie-breakable write time; later writes always update it independently of reads.
+ALTER TABLE patchwork_snapshots ADD COLUMN IF NOT EXISTS stored_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp();
 CREATE INDEX IF NOT EXISTS patchwork_snapshots_expiry ON patchwork_snapshots(expires_at);
+CREATE INDEX IF NOT EXISTS patchwork_snapshots_latest ON patchwork_snapshots(owner_id, repository, stored_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS patchwork_jobs (
   owner_id TEXT NOT NULL,

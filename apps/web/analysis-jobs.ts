@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { GitHubClient, parseRepository, type GitHubOptions, type GitHubTelemetry } from '@patchwork/github';
 import { newJob, type SnapshotStore, type StoreScope, type StoredJob } from '@patchwork/storage';
-import { ANALYZER_VERSION, GROUPING_RULES_VERSION, type AnalyzeInput } from '@patchwork/analysis';
+import { ANALYZER_VERSION, GROUPING_RULES_VERSION, createIncrementalAnalysisBaseline, type AnalyzeInput } from '@patchwork/analysis';
 import { AnalysisJobSchema, type AnalysisJob, type GraphSnapshot, type ImportEdge } from '@patchwork/contracts';
 import type { runAnalysisInWorker } from '../worker/src/index';
 import { WorkerAdmission } from './worker-admission';
@@ -179,7 +179,18 @@ export class AnalysisJobs {
     try {
       const input: PinnedAnalysisInput = { repository: String(job.input.repository), contextRef: String(job.input.contextRef), mode: job.input.mode === 'commit' ? 'commit' : 'pr' };
       const credentials = await this.credentials?.(scope);
-      const snapshot = await this.analyze(input, { ...credentials, signal: controller.signal, onTelemetry: event => { try { this.observations?.onGitHub?.(scope, event); } catch { /* optional source-free sink */ } }, onProgress: progress => {
+      if (!isCurrent()) return;
+      if (parseRepository(input.repository).fullName.toLowerCase() !== scope.repository.toLowerCase()) throw Object.assign(new Error('Analysis repository does not match its authorized scope.'), { status: 403, code: 'REPOSITORY_DENIED' });
+      // Reuse is an optimization, not job identity or persisted input. Read only
+      // after obtaining current authority, then convert the exact scoped result
+      // to a bounded metadata-only baseline before crossing the worker boundary.
+      const previous = await this.store.getLatestSnapshot(scope);
+      if (!isCurrent()) return;
+      let incrementalBaseline: ReturnType<typeof createIncrementalAnalysisBaseline>;
+      if (typeof previous?.repository?.fullName === 'string' && previous.repository.fullName.toLowerCase() === scope.repository.toLowerCase()) {
+        try { incrementalBaseline = createIncrementalAnalysisBaseline(previous); } catch { /* Invalid old metadata safely falls back to full bounded analysis. */ }
+      }
+      const snapshot = await this.analyze(input, { ...credentials, incrementalBaseline, signal: controller.signal, onTelemetry: event => { try { this.observations?.onGitHub?.(scope, event); } catch { /* optional source-free sink */ } }, onProgress: progress => {
         const stage = progress.stage === 'indexing' ? 'indexing' : progress.stage === 'ready' ? 'grouping' : 'fetching';
         job.progress = Math.max(job.progress, Math.min(99, progress.progress)); job.status = stage; job.input.progressMessage = progress.message; job.updatedAt = new Date().toISOString(); this.cache(scope, job);
         // Serialize at most the producer's bounded phase events, never overwrite lease state.

@@ -1,21 +1,25 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import ts from 'typescript';
-import { FileModeSchema, type Coverage, type FileNode, type ImportEdge } from '@patchwork/contracts';
+import { AstImportFactsSchema, FileModeSchema, IncrementalAnalysisBaselineSchema, type Coverage, type FileNode, type ImportEdge, type IncrementalAnalysisBaseline, type IncrementalAnalysisStats } from '@patchwork/contracts';
 import { GitHubClient, type RepositoryAddress } from '@patchwork/github';
 import { applyHierarchy, deriveRepositoryHierarchy, nodeForPath, type ManifestBoundary } from './groups';
-import { importIsInternal, isSourceFile, languageFor, resolveImport, scanImports, RESOLVER_VERSION, type ResolverOptions, type WorkspacePackage } from './imports';
+import { importIsInternal, isSourceFile, languageFor, resolveImport, scanImportsDetailed, scriptKindForPath, PARSER_VERSION, RESOLVER_VERSION, type ImportScan, type ResolverOptions, type WorkspacePackage } from './imports';
+import { ANALYZER_VERSION } from './incremental';
 
 export interface TreeEntry { path: string; type: 'blob' | 'tree' | 'commit'; mode: string; sha: string; size?: number; }
 export interface StaticGraphOptions {
   maxFiles?: number; maxSourceFiles?: number; maxManifests?: number; signal?: AbortSignal;
   parsePaths?: Set<string>;
-  onProgress?: (analyzed: number, eligible: number) => void;
+  /** Internal authorized snapshot projection only; never accepted from HTTP request input. */
+  incrementalBaseline?: unknown;
+  onProgress?: (analyzed: number, eligible: number, incremental: Readonly<IncrementalAnalysisStats>) => void;
 }
 export interface StaticGraphResult {
   nodes: FileNode[]; edges: ImportEdge[]; coverage: Coverage;
   hierarchy: ReturnType<typeof deriveRepositoryHierarchy>;
   parserLimits: { maxFiles: number; maxSourceFiles: number; maxSourceBytes: number; maxManifests: number };
+  incremental: IncrementalAnalysisStats;
 }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 20);
 const unique = (values: string[]) => [...new Set(values)];
@@ -33,6 +37,19 @@ async function mapLimit<T, R>(items: T[], concurrency: number, run: (item: T) =>
 
 /** Fetches only pinned text blobs and declarative JSON. Never follows links or executes code. */
 export async function buildStaticGraph(client: GitHubClient, address: RepositoryAddress, sha: string, options: StaticGraphOptions = {}): Promise<StaticGraphResult> {
+  let baseline: IncrementalAnalysisBaseline | undefined;
+  const incremental: IncrementalAnalysisStats = { mode: 'full', baselineStatus: 'missing', reason: 'No reusable authorized baseline was supplied; source blobs are analyzed normally.', eligibleFiles: 0, reusedFiles: 0, parsedFiles: 0, parserCacheHits: 0, fetchedSourceFiles: 0, renamedFiles: 0, invalidatedFiles: 0 };
+  if (options.incrementalBaseline !== undefined) {
+    const parsed = IncrementalAnalysisBaselineSchema.safeParse(options.incrementalBaseline);
+    if (!parsed.success) { incremental.baselineStatus = 'invalid'; incremental.reason = 'The incremental baseline failed bounded metadata validation; a full analysis was used.'; }
+    else if (parsed.data.repository.toLowerCase() !== address.fullName.toLowerCase() || parsed.data.analyzerVersion !== ANALYZER_VERSION || parsed.data.parserVersion !== PARSER_VERSION) {
+      incremental.baselineStatus = 'incompatible'; incremental.reason = 'The incremental baseline repository or analyzer/parser version is incompatible; a full analysis was used.';
+    } else {
+      baseline = parsed.data; incremental.mode = 'incremental'; incremental.baselineStatus = 'accepted'; incremental.basisSha = baseline.contextSha; delete incremental.reason;
+    }
+  }
+  const baselineByPath = new Map(baseline?.files.map(file => [file.path, file]) ?? []);
+  const baselineByBlob = new Map(baseline?.files.map(file => [`${file.blobSha}:${file.parseFacts.scriptKind}`, file]) ?? []);
   const prefix = `/repos/${encodeURIComponent(address.owner)}/${encodeURIComponent(address.name)}`;
   const tree = await client.get<{ tree: TreeEntry[]; truncated: boolean }>(`${prefix}/git/trees/${sha}?recursive=1`, true);
   const reasons: string[] = [];
@@ -61,6 +78,7 @@ export async function buildStaticGraph(client: GitHubClient, address: Repository
   const nodeByPath = new Map(nodes.map(node => [node.path, node]));
   const eligible = inventory.filter(entry => nodeByPath.get(entry.path)?.importCoverage === 'partial' && (!options.parsePaths || options.parsePaths.has(entry.path)));
   const parseEntries = eligible.slice(0, maxSourceFiles);
+  incremental.eligibleFiles = parseEntries.length;
   const parseSet = new Set(parseEntries.map(entry => entry.path));
   for (const node of nodes) if (node.importCoverage === 'partial' && !parseSet.has(node.path)) {
     node.importCoverage = 'partial'; node.importReasons = [options.parsePaths && !options.parsePaths.has(node.path) ? 'Selected-head analysis is scoped to directly changed files.' : 'Source was not parsed because the configured file budget was reached.'];
@@ -135,10 +153,26 @@ export async function buildStaticGraph(client: GitHubClient, address: Repository
   await mapLimit(parseEntries, 6, async entry => {
     options.signal?.throwIfAborted(); const node = nodeByPath.get(entry.path)!;
     try {
-      const text = await client.source(address, sha, entry.path, MAX_SOURCE_BYTES);
-      if (text.startsWith('version https://git-lfs.github.com/spec/v1\n') || text.startsWith('version https://git-lfs.github.com/spec/v1\r\n')) { node.fileKind = 'lfs-pointer'; node.importCoverage = 'excluded'; node.importReasons = ['Git LFS pointer is inventoried without downloading its target.']; return; }
-      if (text.includes('\0')) { node.fileKind = 'binary'; node.importCoverage = 'unsupported'; node.importReasons = ['Binary source blob is not parsed.']; return; }
-      const resolver = resolverFor(entry.path); const scan = scanImports(text, entry.path, entry.sha);
+      const previous = baselineByPath.get(entry.path);
+      const candidate = previous?.blobSha === entry.sha && previous.parseFacts.scriptKind === scriptKindForPath(entry.path) ? previous : baselineByBlob.get(`${entry.sha}:${scriptKindForPath(entry.path)}`);
+      let scan: ImportScan;
+      if (candidate) {
+        scan = structuredClone(candidate.parseFacts); incremental.reusedFiles++;
+        if (candidate.path !== entry.path) incremental.renamedFiles++;
+        node.parseFacts = structuredClone(candidate.parseFacts); node.parserVersion = PARSER_VERSION;
+      } else {
+        if (previous) incremental.invalidatedFiles++;
+        incremental.fetchedSourceFiles++;
+        const text = await client.source(address, sha, entry.path, MAX_SOURCE_BYTES);
+        if (text.startsWith('version https://git-lfs.github.com/spec/v1\n') || text.startsWith('version https://git-lfs.github.com/spec/v1\r\n')) { node.fileKind = 'lfs-pointer'; node.importCoverage = 'excluded'; node.importReasons = ['Git LFS pointer is inventoried without downloading its target.']; return; }
+        if (text.includes('\0')) { node.fileKind = 'binary'; node.importCoverage = 'unsupported'; node.importReasons = ['Binary source blob is not parsed.']; return; }
+        const scanned = scanImportsDetailed(text, entry.path, entry.sha); scan = scanned.facts;
+        if (scanned.parsed) incremental.parsedFiles++; else incremental.parserCacheHits++;
+        const stored = AstImportFactsSchema.safeParse({ schemaVersion: '1', scriptKind: scriptKindForPath(entry.path), references: scan.references, reasons: scan.reasons });
+        if (stored.success) { node.parseFacts = stored.data; node.parserVersion = PARSER_VERSION; }
+      }
+      // Syntax facts are reusable. Resolved edges/configuration decisions never are.
+      const resolver = resolverFor(entry.path);
       const fileReasons = [...(resolver.coverageReasons ?? []), ...scan.reasons]; const externalImports: FileNode['externalImports'] = []; const unresolvedImports: FileNode['unresolvedImports'] = [];
       for (const reference of scan.references) {
         const target = resolveImport(entry.path, reference.specifier, paths, { ...resolver, resolutionMode: reference.resolutionMode });
@@ -159,11 +193,11 @@ export async function buildStaticGraph(client: GitHubClient, address: Repository
       if (options.signal?.aborted) throw error;
       node.importCoverage = 'failed'; node.importReasons = ['Source could not be downloaded or parsed at this immutable SHA.']; failed++;
     }
-    options.onProgress?.(analyzed, parseEntries.length);
+    options.onProgress?.(analyzed, parseEntries.length, incremental);
   });
   if (failed) reasons.push(`${failed} source files could not be downloaded or parsed; their dependency coverage is unavailable.`);
   if (partial) reasons.push(`${partial} parsed source files have unresolved imports, non-literal imports, or syntax errors. Per-file reasons are attached to nodes.`);
   const newlyExcluded = nodes.filter(node => node.fileKind === 'lfs-pointer' || node.fileKind === 'binary' && isSourceFile(node.path)).length;
   if (newlyExcluded) reasons.push(`${newlyExcluded} LFS pointers or binary source blobs were not parsed or followed.`);
-  return { nodes, edges: edges.sort((a, b) => a.id.localeCompare(b.id)), hierarchy, coverage: { status: reasons.length ? 'partial' : 'complete', reasons: unique(reasons), filesAnalyzed: analyzed, totalFiles: allEntries.length, importsSupported: 'JavaScript/TypeScript static imports', excludedExternalPackages: true }, parserLimits: { maxFiles, maxSourceFiles, maxSourceBytes: MAX_SOURCE_BYTES, maxManifests } };
+  return { nodes, edges: edges.sort((a, b) => a.id.localeCompare(b.id)), hierarchy, coverage: { status: reasons.length ? 'partial' : 'complete', reasons: unique(reasons), filesAnalyzed: analyzed, totalFiles: allEntries.length, importsSupported: 'JavaScript/TypeScript static imports', excludedExternalPackages: true }, parserLimits: { maxFiles, maxSourceFiles, maxSourceBytes: MAX_SOURCE_BYTES, maxManifests }, incremental };
 }

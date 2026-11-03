@@ -38,6 +38,82 @@ export const RepositorySchema = z.object({
 export type Repository = z.infer<typeof RepositorySchema>;
 
 export const ImportKindSchema = z.enum(['import', 'reexport', 'type-import', 'dynamic-import']);
+export const AstImportFactsSchema = z.object({
+  schemaVersion: z.literal('1'),
+  scriptKind: z.enum(['ts', 'tsx', 'js', 'jsx']),
+  references: z.array(z.object({
+    specifier: z.string().max(2_048), line: z.number().int().positive(), kind: ImportKindSchema,
+    resolutionMode: z.enum(['import', 'require']).optional(),
+  }).strict()).max(1_024),
+  reasons: z.array(z.string().max(2_048)).max(8),
+}).strict();
+export type AstImportFacts = z.infer<typeof AstImportFactsSchema>;
+export const INCREMENTAL_BASELINE_LIMITS = { maxFiles: 500, maxBytes: 2 * 1024 * 1024, maxReferences: 20_000 } as const;
+
+// Reject oversized/cyclic/unknown shapes before Zod traverses their child arrays. This
+// boundary is also used before worker transfer; it never admits source text or edges.
+const boundedBaselineInput = (input: unknown): unknown => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const value = input as Record<string, unknown>;
+  if (Object.keys(value).some(key => !['schemaVersion', 'repository', 'analyzerVersion', 'parserVersion', 'contextSha', 'files'].includes(key))) return undefined;
+  if (value.schemaVersion !== '1') return undefined;
+  for (const [key, max] of [['repository', 140], ['analyzerVersion', 80], ['parserVersion', 160], ['contextSha', 64]] as const) if (typeof value[key] !== 'string' || (value[key] as string).length > max) return undefined;
+  if (!Array.isArray(value.files) || value.files.length > INCREMENTAL_BASELINE_LIMITS.maxFiles) return undefined;
+  let references = 0, characters = 0;
+  for (const file of value.files) {
+    if (!file || typeof file !== 'object' || Array.isArray(file)) return undefined;
+    const record = file as Record<string, unknown>;
+    if (Object.keys(record).some(key => !['path', 'blobSha', 'parseFacts'].includes(key))) return undefined;
+    if (typeof record.path !== 'string' || record.path.length > 1_024 || typeof record.blobSha !== 'string' || record.blobSha.length > 64) return undefined;
+    const facts = record.parseFacts;
+    if (!facts || typeof facts !== 'object' || Array.isArray(facts)) return undefined;
+    const parsed = facts as Record<string, unknown>;
+    if (Object.keys(parsed).some(key => !['schemaVersion', 'scriptKind', 'references', 'reasons'].includes(key))) return undefined;
+    if (parsed.schemaVersion !== '1' || !['ts', 'tsx', 'js', 'jsx'].includes(String(parsed.scriptKind))) return undefined;
+    if (!Array.isArray(parsed.references) || parsed.references.length > 1_024 || !Array.isArray(parsed.reasons) || parsed.reasons.length > 8) return undefined;
+    references += parsed.references.length;
+    if (references > INCREMENTAL_BASELINE_LIMITS.maxReferences) return undefined;
+    for (const reference of parsed.references) {
+      if (!reference || typeof reference !== 'object' || Array.isArray(reference)) return undefined;
+      const item = reference as Record<string, unknown>;
+      if (Object.keys(item).some(key => !['specifier', 'line', 'kind', 'resolutionMode'].includes(key)) || typeof item.specifier !== 'string' || item.specifier.length > 2_048) return undefined;
+      if (!['import', 'reexport', 'type-import', 'dynamic-import'].includes(String(item.kind)) || !Number.isInteger(item.line) || Number(item.line) < 1 || (item.resolutionMode !== undefined && !['import', 'require'].includes(String(item.resolutionMode)))) return undefined;
+      characters += item.specifier.length;
+    }
+    for (const reason of parsed.reasons) { if (typeof reason !== 'string' || reason.length > 2_048) return undefined; characters += reason.length; }
+    if (characters > INCREMENTAL_BASELINE_LIMITS.maxBytes) return undefined;
+  }
+  try { return new TextEncoder().encode(JSON.stringify(input)).byteLength <= INCREMENTAL_BASELINE_LIMITS.maxBytes ? input : undefined; }
+  catch { return undefined; }
+};
+export const IncrementalAnalysisBaselineSchema = z.preprocess(boundedBaselineInput, z.object({
+  schemaVersion: z.literal('1'), repository: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/),
+  analyzerVersion: z.string().min(1).max(80), parserVersion: z.string().min(1).max(160), contextSha: GitShaSchema,
+  files: z.array(z.object({ path: RepositoryPathSchema, blobSha: GitShaSchema, parseFacts: AstImportFactsSchema }).strict()).min(1).max(INCREMENTAL_BASELINE_LIMITS.maxFiles),
+}).strict().superRefine((baseline, ctx) => {
+  if (new Set(baseline.files.map(file => file.path)).size !== baseline.files.length) ctx.addIssue({ code: 'custom', path: ['files'], message: 'Duplicate incremental baseline path' });
+  const byBlob = new Map<string, string>();
+  for (const file of baseline.files) {
+    const key = `${file.blobSha}:${file.parseFacts.scriptKind}`, value = JSON.stringify(file.parseFacts);
+    if (byBlob.has(key) && byBlob.get(key) !== value) ctx.addIssue({ code: 'custom', path: ['files'], message: 'Conflicting syntax facts for one immutable blob' });
+    byBlob.set(key, value);
+  }
+}));
+export type IncrementalAnalysisBaseline = z.infer<typeof IncrementalAnalysisBaselineSchema>;
+export const IncrementalAnalysisStatsSchema = z.object({
+  mode: z.enum(['full', 'incremental']), baselineStatus: z.enum(['missing', 'invalid', 'incompatible', 'accepted']),
+  basisSha: GitShaSchema.optional(), reason: z.string().min(1).optional(),
+  eligibleFiles: z.number().int().nonnegative(), reusedFiles: z.number().int().nonnegative(), parsedFiles: z.number().int().nonnegative(),
+  parserCacheHits: z.number().int().nonnegative(),
+  fetchedSourceFiles: z.number().int().nonnegative(), renamedFiles: z.number().int().nonnegative(), invalidatedFiles: z.number().int().nonnegative(),
+}).strict().superRefine((stats, ctx) => {
+  const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
+  if (stats.reusedFiles + stats.parsedFiles + stats.parserCacheHits > stats.eligibleFiles || stats.fetchedSourceFiles > stats.eligibleFiles || stats.invalidatedFiles > stats.eligibleFiles) fail('Incremental counts exceed eligible files');
+  if (stats.renamedFiles > stats.reusedFiles) fail('Renamed reuse exceeds total reuse');
+  if ((stats.baselineStatus === 'accepted') !== (stats.mode === 'incremental' && stats.basisSha !== undefined)) fail('Incremental basis must describe an accepted baseline');
+  if (stats.mode === 'full' && stats.reusedFiles !== 0) fail('Full analysis cannot claim baseline reuse');
+});
+export type IncrementalAnalysisStats = z.infer<typeof IncrementalAnalysisStatsSchema>;
 export const FileKindSchema = z.enum(['file', 'binary', 'generated', 'symlink', 'submodule', 'lfs-pointer', 'unknown']);
 export const FileModeSchema = z.enum(['100644', '100755', '120000', '160000']);
 export const FileImportReferenceSchema = z.object({
@@ -65,11 +141,14 @@ export const FileNodeSchema = z.object({
   blobSha: z.string().min(1).optional(), fileMode: FileModeSchema.optional(), size: z.number().int().nonnegative().optional(),
   folder: FolderPathSchema.optional(), folderId: IdSchema.optional(), componentIds: z.array(IdSchema).optional(),
   lineageAliases: z.array(RepositoryPathSchema).optional(), ambiguousLineage: z.boolean().optional(), binary: z.boolean().optional(),
+  parseFacts: AstImportFactsSchema.optional(), parserVersion: z.string().min(1).max(160).optional(),
 }).passthrough().superRefine((node, ctx) => {
   const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
   if (node.importCoverage !== 'complete' && !node.importReasons.some(reason => reason.trim())) fail('Incomplete file dependency extraction requires a reason');
   if (node.fileKind !== 'file' && node.importCoverage === 'complete') fail('Unknown or excluded file classification cannot imply complete dependency extraction');
   if (node.unresolvedImports.length && node.importCoverage === 'complete') fail('Unresolved imports cannot have complete dependency coverage');
+  if (Boolean(node.parseFacts) !== Boolean(node.parserVersion)) fail('Stored parse facts require their parser version');
+  if (node.parseFacts && (!node.blobSha || node.fileKind !== 'file')) fail('Stored import facts require a regular source blob');
 });
 export type FileNode = z.infer<typeof FileNodeSchema>;
 
@@ -233,6 +312,7 @@ const GraphSnapshotBaseSchema = z.object({
   hierarchy: RepositoryHierarchySchema.optional(),
   sources: z.array(ChangeSourceSchema),
   coverage: CoverageSchema,
+  incremental: IncrementalAnalysisStatsSchema.optional(),
   createdAt: TimestampSchema,
   mode: z.enum(['demo', 'github']),
 }).passthrough();
