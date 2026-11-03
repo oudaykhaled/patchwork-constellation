@@ -4,14 +4,16 @@ export const CONTRACT_VERSION = '1' as const;
 const IdSchema = z.string().min(1);
 const TimestampSchema = z.string().refine(value => Number.isFinite(Date.parse(value)), 'Invalid timestamp');
 const GitShaSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i, 'Expected immutable Git object SHA');
-export const RepositoryPathSchema = z.string().min(1).refine(path => !path.startsWith('/') && !path.includes('\\') && !/[\u0000-\u001f\u007f]/.test(path) && !path.split('/').some(segment => segment === '..' || segment === '.' || segment === ''), 'Expected repository-relative path');
+export const RepositoryPathSchema = z.string().min(1).max(1_024).refine(path => !path.startsWith('/') && !/[:\\\u0000-\u001f\u007f]/.test(path) && !path.split('/').some(segment => segment === '..' || segment === '.' || segment === ''), 'Expected repository-relative path');
+const FolderPathSchema = z.union([z.literal(''), RepositoryPathSchema]);
+export const CoverageStatusSchema = z.enum(['complete', 'partial', 'unsupported', 'failed', 'excluded']);
 
 export const ChangeStatusSchema = z.enum([
   'added', 'modified', 'deleted', 'removed', 'renamed', 'copied', 'unchanged', 'binary', 'unparsed',
 ]);
 export type ChangeStatus = z.infer<typeof ChangeStatusSchema>;
 export const CoverageSchema = z.object({
-  status: z.enum(['complete', 'partial', 'unsupported', 'failed', 'excluded']),
+  status: CoverageStatusSchema,
   reasons: z.array(z.string()),
   filesAnalyzed: z.number().int().nonnegative().optional(),
   totalFiles: z.number().int().nonnegative().optional(),
@@ -44,6 +46,7 @@ export const FileNodeSchema = z.object({
 }).passthrough();
 export type FileNode = z.infer<typeof FileNodeSchema>;
 
+const HierarchyEvidenceSchema = z.object({ kind: z.enum(['path-rule', 'manifest', 'repository-mapping']), path: FolderPathSchema, rule: z.string().min(1) }).strict();
 export const GroupSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
@@ -51,6 +54,11 @@ export const GroupSchema = z.object({
   color: z.string().optional(),
   origin: z.enum(['rules', 'manifest', 'manual', 'ai']).optional(),
   parentId: z.string().optional(),
+  path: FolderPathSchema.optional(),
+  fileCount: z.number().int().nonnegative().optional(),
+  folderIds: z.array(IdSchema).optional(),
+  componentIds: z.array(IdSchema).optional(),
+  evidence: z.array(HierarchyEvidenceSchema).optional(),
 }).passthrough();
 export type Group = z.infer<typeof GroupSchema>;
 
@@ -63,6 +71,8 @@ export const ImportEvidenceSchema = z.union([
     snapshotSha: z.string().min(1).optional(),
     snapshotId: IdSchema.optional(),
     sourceId: IdSchema.optional(),
+    contextSha: z.string().min(1).optional(),
+    headSha: z.string().min(1).optional(),
     resolver: z.string().min(1).optional(),
   }).passthrough(),
 ]);
@@ -73,9 +83,18 @@ export const ImportEdgeSchema = z.object({
   target: z.string().min(1),
   kind: z.enum(['import', 'reexport', 'type-import', 'dynamic-import']),
   direction: z.literal('source-to-target').optional(),
+  provenance: z.enum(['context', 'selected-head']).optional(),
+  sourceId: IdSchema.optional(),
   evidence: ImportEvidenceSchema.optional(),
 }).passthrough();
 export type ImportEdge = z.infer<typeof ImportEdgeSchema>;
+
+export const SourceImportFileCoverageSchema = z.object({
+  fileId: IdSchema, path: RepositoryPathSchema, status: CoverageStatusSchema, reasons: z.array(z.string()),
+}).strict().superRefine((file, ctx) => {
+  if (file.status !== 'complete' && !file.reasons.some(reason => reason.trim())) ctx.addIssue({ code: 'custom', path: ['reasons'], message: 'Incomplete file import coverage requires a reason' });
+});
+export type SourceImportFileCoverage = z.infer<typeof SourceImportFileCoverageSchema>;
 
 export const FileChangeSchema = z.object({
   fileId: z.string().min(1),
@@ -103,8 +122,67 @@ export const ChangeSourceSchema = z.object({
   comparisonKind: z.enum(['merge-base', 'first-parent', 'empty-tree']).optional(),
   url: z.string().url(),
   files: z.array(FileChangeSchema),
+  coverage: CoverageSchema.optional(),
+  importEdges: z.array(ImportEdgeSchema).optional(),
+  importCoverage: CoverageSchema.optional(),
+  importFiles: z.array(SourceImportFileCoverageSchema).optional(),
+  importHeadSha: GitShaSchema.optional(),
 }).passthrough();
 export type ChangeSource = z.infer<typeof ChangeSourceSchema>;
+
+export const RepositoryHierarchySchema = z.object({
+  schemaVersion: z.literal(CONTRACT_VERSION), rulesVersion: z.string().min(1), revision: IdSchema, mappingVersion: z.literal(1).optional(),
+  groups: z.array(GroupSchema),
+  folders: z.array(z.object({ id: IdSchema, path: FolderPathSchema, parentId: IdSchema.optional(), directFileCount: z.number().int().nonnegative(), descendantFileCount: z.number().int().nonnegative() }).strict()),
+  components: z.array(z.object({ id: IdSchema, label: z.string().min(1), moduleIds: z.array(IdSchema), filePaths: z.array(RepositoryPathSchema), origin: z.literal('manual'), evidence: z.array(HierarchyEvidenceSchema) }).strict()),
+  memberships: z.array(z.object({ path: RepositoryPathSchema, folderId: IdSchema, groupId: IdSchema, componentIds: z.array(IdSchema) }).strict()),
+  warnings: z.array(z.string()),
+}).strict().superRefine((hierarchy, ctx) => {
+  const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
+  const unique = (values: string[], label: string) => { if (new Set(values).size !== values.length) fail(`Duplicate hierarchy ${label}`); };
+  for (const key of ['groups', 'folders', 'components'] as const) unique(hierarchy[key].map(item => item.id), `${key} identity`);
+  unique(hierarchy.folders.map(item => item.path), 'folder path'); unique(hierarchy.memberships.map(item => item.path), 'file membership');
+  const groups = new Map(hierarchy.groups.map(item => [item.id, item]));
+  const folders = new Map(hierarchy.folders.map(item => [item.id, item]));
+  const components = new Map(hierarchy.components.map(item => [item.id, item]));
+  const memberships = new Map(hierarchy.memberships.map(item => [item.path, item]));
+  const direct = new Map<string, number>(), descendants = new Map<string, number>(), byGroup = new Map<string, number>();
+  for (const membership of hierarchy.memberships) {
+    if (!groups.has(membership.groupId)) fail('Hierarchy file references unknown group');
+    const folder = folders.get(membership.folderId);
+    const parentPath = membership.path.includes('/') ? membership.path.slice(0, membership.path.lastIndexOf('/')) : '';
+    if (!folder || folder.path !== parentPath) fail('Hierarchy file references wrong physical folder');
+    direct.set(membership.folderId, (direct.get(membership.folderId) ?? 0) + 1);
+    byGroup.set(membership.groupId, (byGroup.get(membership.groupId) ?? 0) + 1);
+    const parts = parentPath ? parentPath.split('/') : [];
+    for (let depth = 0; depth <= parts.length; depth++) { const path = parts.slice(0, depth).join('/'); descendants.set(path, (descendants.get(path) ?? 0) + 1); }
+    unique(membership.componentIds, 'component membership');
+    for (const id of membership.componentIds) if (!components.get(id)?.filePaths.includes(membership.path)) fail('Hierarchy component membership is foreign or asymmetric');
+  }
+  for (const folder of hierarchy.folders) {
+    if (folder.path) {
+      const expectedParent = folder.path.includes('/') ? folder.path.slice(0, folder.path.lastIndexOf('/')) : '';
+      if (!folder.parentId || folders.get(folder.parentId)?.path !== expectedParent) fail('Hierarchy folder parent is missing, cyclic or non-physical');
+    } else if (folder.parentId) fail('Hierarchy root folder cannot have a parent');
+    if (folder.directFileCount !== (direct.get(folder.id) ?? 0) || folder.descendantFileCount !== (descendants.get(folder.path) ?? 0)) fail('Hierarchy folder counts disagree with file membership');
+  }
+  const paths = new Set(hierarchy.folders.map(folder => folder.path));
+  for (const path of descendants.keys()) if (!paths.has(path)) fail('Hierarchy is missing an ancestor folder');
+  for (const group of hierarchy.groups) {
+    if (group.fileCount !== undefined && group.fileCount !== (byGroup.get(group.id) ?? 0)) fail('Hierarchy group count disagrees with file membership');
+    if (group.parentId && !groups.has(group.parentId)) fail('Hierarchy group references foreign parent');
+    const visited = new Set([group.id]); let parent = group.parentId;
+    while (parent) { if (visited.has(parent)) { fail('Cyclic hierarchy group'); break; } visited.add(parent); parent = groups.get(parent)?.parentId; }
+    for (const id of group.folderIds ?? []) if (!folders.has(id)) fail('Hierarchy group references foreign folder');
+    for (const id of group.componentIds ?? []) if (!components.has(id)) fail('Hierarchy group references foreign component');
+  }
+  for (const component of hierarchy.components) {
+    unique(component.moduleIds, 'component module'); unique(component.filePaths, 'component file');
+    for (const id of component.moduleIds) if (!groups.has(id)) fail('Hierarchy component references foreign module');
+    for (const path of component.filePaths) if (!memberships.get(path)?.componentIds.includes(component.id)) fail('Hierarchy component file is foreign or asymmetric');
+  }
+});
+export type RepositoryHierarchyData = z.infer<typeof RepositoryHierarchySchema>;
 
 const GraphSnapshotBaseSchema = z.object({
   schemaVersion: z.literal(CONTRACT_VERSION),
@@ -115,6 +193,7 @@ const GraphSnapshotBaseSchema = z.object({
   nodes: z.array(FileNodeSchema),
   edges: z.array(ImportEdgeSchema),
   groups: z.array(GroupSchema),
+  hierarchy: RepositoryHierarchySchema.optional(),
   sources: z.array(ChangeSourceSchema),
   coverage: CoverageSchema,
   createdAt: TimestampSchema,
@@ -133,7 +212,7 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
   const nodes = checkUnique(snapshot.nodes, 'nodes');
   const groups = checkUnique(snapshot.groups, 'groups');
   const sources = checkUnique(snapshot.sources, 'sources');
-  checkUnique(snapshot.edges, 'edges');
+  const edgeIds = checkUnique(snapshot.edges, 'edges');
   snapshot.nodes.forEach((node, index) => {
     if (!groups.has(node.groupId)) ctx.addIssue({ code: 'custom', path: ['nodes', index, 'groupId'], message: 'Unknown group reference' });
     if (new Set(node.sourceIds).size !== node.sourceIds.length) ctx.addIssue({ code: 'custom', path: ['nodes', index, 'sourceIds'], message: 'Duplicate source membership' });
@@ -153,10 +232,13 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
     }
   });
   if (snapshot.mode === 'github' && !GitShaSchema.safeParse(snapshot.contextSha).success) ctx.addIssue({ code: 'custom', path: ['contextSha'], message: 'Context must be pinned to an immutable SHA' });
+  const visiblePaths = new Set(snapshot.nodes.map(node => node.path));
+  for (const membership of snapshot.hierarchy?.memberships ?? []) if (!visiblePaths.has(membership.path)) ctx.addIssue({ code: 'custom', path: ['hierarchy', 'memberships'], message: 'Hierarchy contains a foreign file path' });
   snapshot.edges.forEach((edge, index) => {
     if (!nodes.has(edge.source) || !nodes.has(edge.target)) ctx.addIssue({ code: 'custom', path: ['edges', index], message: 'Dangling import edge' });
     const evidence = edge.evidence;
     const fail = (message: string) => ctx.addIssue({ code: 'custom', path: ['edges', index, 'evidence'], message });
+    if (edge.provenance === 'selected-head' || edge.sourceId || (typeof evidence === 'object' && evidence.sourceId)) fail('Selected-head imports must stay in their source layer');
     if (snapshot.mode === 'github' && (!evidence || typeof evidence === 'string' || !evidence.snapshotSha || !evidence.resolver)) fail('Observed import requires pinned evidence and resolver');
     if (evidence && typeof evidence !== 'string') {
       if (evidence.snapshotId && evidence.snapshotId !== snapshot.id) fail('Foreign snapshot evidence');
@@ -164,6 +246,8 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
       if (nodeById.get(edge.source)?.path !== evidence.path && !source?.files.some(file => file.fileId === edge.source && file.path === evidence.path)) fail('Evidence path must identify the importing file');
       if (evidence.sourceId && !source) fail('Unknown source evidence');
       if (evidence.snapshotSha && evidence.snapshotSha !== (source ? source.headSha : snapshot.contextSha)) fail('Foreign or unpinned evidence SHA');
+      if (evidence.contextSha && evidence.contextSha !== snapshot.contextSha) fail('Foreign context evidence SHA');
+      if (evidence.headSha && evidence.headSha !== snapshot.contextSha) fail('Source-head evidence cannot be used as context evidence');
     }
   });
   snapshot.sources.forEach((source, index) => {
@@ -179,6 +263,28 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
       fileIds.add(file.fileId);
       if (!nodeById.get(file.fileId)?.sourceIds.includes(source.id)) fail('Source change missing from node membership');
     });
+    const hasImportMetadata = source.importEdges !== undefined || source.importFiles !== undefined || source.importHeadSha !== undefined;
+    if (hasImportMetadata && !source.importCoverage) fail('Source-head layer requires explicit import coverage');
+    if (source.importHeadSha && source.importHeadSha !== source.headSha) fail('Source-head layer belongs to a different pinned head');
+    if (!source.importHeadSha && (source.importCoverage?.status === 'complete' || source.importFiles?.some(file => file.status === 'complete'))) fail('Completed source-head analysis requires a pinned head even when no imports are found');
+    const changes = new Map(source.files.map(file => [file.fileId, file]));
+    const importFiles = new Map((source.importFiles ?? []).map(file => [file.fileId, file]));
+    if (source.importFiles) {
+      if (importFiles.size !== source.importFiles.length) fail('Duplicate source-head file coverage');
+      if (importFiles.size !== changes.size) fail('Source-head file coverage must describe every changed file exactly once');
+      for (const file of source.importFiles) if (!changes.has(file.fileId) || changes.get(file.fileId)!.path !== file.path) fail('Source-head file coverage contains a foreign file identity/path');
+    }
+    if (source.importEdges?.length && (!source.importHeadSha || !source.importFiles || !source.importCoverage || ['failed', 'unsupported', 'excluded'].includes(source.importCoverage.status))) fail('Observed source-head imports require pinned per-file coverage');
+    for (const edge of source.importEdges ?? []) {
+      if (edgeIds.has(edge.id)) fail('Duplicate import edge identity across layers'); edgeIds.add(edge.id);
+      if (!nodes.has(edge.source) || !nodes.has(edge.target)) fail('Dangling source-head import edge');
+      const changed = changes.get(edge.source), file = importFiles.get(edge.source), evidence = edge.evidence;
+      if (!changed || ['deleted', 'removed'].includes(changed.status) || !file || !['complete', 'partial'].includes(file.status)) fail('Source-head importer is not an analyzed directly changed file');
+      if (edge.provenance !== 'selected-head' || edge.sourceId !== source.id) fail('Source-head edge has foreign or unsupported provenance');
+      if (!evidence || typeof evidence === 'string') { fail('Source-head edge requires object evidence'); continue; }
+      if (evidence.sourceId !== source.id || evidence.snapshotSha !== source.headSha || evidence.headSha !== source.headSha || evidence.contextSha !== snapshot.contextSha || evidence.path !== changed?.path || !evidence.resolver || !evidence.line || !evidence.specifier) fail('Source-head edge evidence must identify its exact importer, resolver, source, head and context');
+      if (evidence.snapshotId && evidence.snapshotId !== snapshot.id) fail('Source-head edge contains a foreign snapshot ID');
+    }
   });
   snapshot.nodes.forEach((node, index) => node.sourceIds.forEach(sourceId => {
     if (sources.has(sourceId) && !sourceFileIds.get(sourceId)!.has(node.id)) ctx.addIssue({ code: 'custom', path: ['nodes', index, 'sourceIds'], message: 'Node membership missing from source change list' });
