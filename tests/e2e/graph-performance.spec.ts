@@ -45,11 +45,11 @@ test.describe('Constellation rendering evidence @performance', () => {
           requestAnimationFrame(frame);
         });
         observer.disconnect(); frames.sort((a, b) => a - b);
-        return { frames: frames.length, frameMedianMs: frames[Math.floor(frames.length / 2)], frameP95Ms: frames[Math.floor(frames.length * .95)], longTasks, browser: navigator.userAgent, devicePixelRatio: devicePixelRatio };
+        return { viewport: { width: innerWidth, height: innerHeight }, frames: frames.length, frameMedianMs: frames[Math.floor(frames.length / 2)], frameP95Ms: frames[Math.floor(frames.length * .95)], longTasks, browser: navigator.userAgent, devicePixelRatio: devicePixelRatio };
       });
       await expect.poll(async () => Number(await canvas.getAttribute('data-camera-x'))).toBeGreaterThan(initialX);
       expect(errors).toEqual([]);
-      const report = { files, edges, seed: 42, viewport: { width: 1600, height: 1000 }, navigationToRenderedMs, ...evidence, note: 'Local development build. Navigation time includes network and module loading. Frame samples measure keyboard panning, not ingestion or AI. Scale data are injected only by this test.' };
+      const report = { files, edges, seed: 42, navigationToRenderedMs, ...evidence, build: process.env.GRAPH_BENCHMARK_BUILD || 'unspecified', note: 'Local loopback application. Navigation time includes network and module loading. Frame samples measure keyboard panning, not ingestion or AI. Scale data are injected only by this test.' };
       console.log('Graph rendering evidence:', JSON.stringify(report));
       await testInfo.attach(`graph-performance-${files}.json`, { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
     });
