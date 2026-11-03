@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads';
-import type { GraphSnapshot } from '@patchwork/contracts';
+import { validateGraphSnapshot, type GraphSnapshot } from '@patchwork/contracts';
 import type { AnalysisOptions, AnalysisProgress, AnalyzeInput } from '@patchwork/analysis';
 
 type WorkerOptions = Omit<AnalysisOptions, 'fetch'>;
@@ -19,7 +19,12 @@ function runTask(task: Task, options: WorkerOptions = {}): Promise<GraphSnapshot
     worker.on('message', (message: { type: string; progress?: AnalysisProgress; snapshot?: GraphSnapshot; error?: { message: string; code?: string; status?: number; retryAfter?: number } }) => {
       if (finished) return;
       if (message.type === 'progress' && message.progress) onProgress?.(message.progress);
-      else if (message.type === 'result' && message.snapshot) { finished = true; void cleanup().then(() => resolve(message.snapshot!), reject); }
+      else if (message.type === 'result' && message.snapshot) {
+        try {
+          const snapshot = validateGraphSnapshot(message.snapshot);
+          finished = true; void cleanup().then(() => resolve(snapshot), reject);
+        } catch { fail(new Error('Analysis worker returned an invalid graph snapshot.')); }
+      }
       else if (message.type === 'error' && message.error) fail(Object.assign(new Error(message.error.message), { code: message.error.code, status: message.error.status, retryAfter: message.error.retryAfter }));
     });
     worker.once('error', fail);

@@ -49,11 +49,13 @@ export class AnalysisJobs {
   private closing = false;
   private recovering = false;
   private failuresSinceStart = 0;
+  private repositoryEpochs = new Map<string, number>();
+  private invalidatingRepositories = new Set<string>();
   private readonly workerId = `bff:${randomUUID()}`;
   private timer?: ReturnType<typeof setInterval>;
   private recoveryOwners = new Set<string>();
   constructor(private store: SnapshotStore, private admission: WorkerAdmission, private analyze: typeof runAnalysisInWorker,
-    private save: (snapshot: GraphSnapshot, scope: StoreScope) => Promise<GraphSnapshot>,
+    private save: (snapshot: GraphSnapshot, scope: StoreScope, isCurrent: () => boolean) => Promise<GraphSnapshot>,
     private credentials?: (scope: StoreScope) => Promise<Partial<NonNullable<Parameters<typeof runAnalysisInWorker>[1]>>>) {}
 
   startRecovery(ownerId = 'local-public') {
@@ -73,8 +75,21 @@ export class AnalysisJobs {
     while (this.views.size > 100) { const evict = [...this.views].find(([, value]) => ['ready', 'failed', 'cancelled'].includes(value.status)); if (!evict) break; this.views.delete(evict[0]); this.scopes.delete(evict[0]); }
     return view;
   }
+  scopeForOwner(id: string, ownerId: string): StoreScope | undefined { const scope = this.scopes.get(id); return scope?.ownerId === ownerId ? { ...scope } : undefined; }
+  private repositoryKey(scope: StoreScope) { return JSON.stringify([scope.ownerId, scope.repository.toLowerCase()]); }
+  /** Fence before awaiting deletion; obsolete workers may terminate later but cannot publish. */
+  async invalidateRepository(scope: StoreScope) {
+    const key = this.repositoryKey(scope); this.repositoryEpochs.set(key, (this.repositoryEpochs.get(key) ?? 0) + 1); this.invalidatingRepositories.add(key);
+    const ids = [...this.scopes].filter(([, value]) => this.repositoryKey(value) === key).map(([id]) => id);
+    for (const id of ids) { this.controllers.get(id)?.abort(); this.cancelled.add(id); this.views.delete(id); }
+    await Promise.allSettled(ids.map(id => this.pending.get(id)));
+    await Promise.all(ids.map(id => this.store.cancelJob(scope, id)));
+    for (const id of ids) { this.views.delete(id); this.scopes.delete(id); this.cancelled.delete(id); }
+  }
+  finishInvalidation(scope: StoreScope) { this.invalidatingRepositories.delete(this.repositoryKey(scope)); }
   async submit(scope: StoreScope, input: PinnedAnalysisInput): Promise<{ jobId: string; reused: boolean }> {
     if (this.closing) throw Object.assign(new Error('Server is stopping. Reconnect and retry.'), { status: 503 });
+    if (this.invalidatingRepositories.has(this.repositoryKey(scope))) throw Object.assign(new Error('Repository access changed. Reconnect and analyze again.'), { status: 409, code: 'REPOSITORY_INVALIDATED' });
     const id = analysisJobId(scope, input), pending = this.pending.get(id);
     this.startRecovery(scope.ownerId);
     if (pending) return { jobId: id, reused: true };
@@ -102,11 +117,14 @@ export class AnalysisJobs {
     if (scope && known && (scope.ownerId !== known.ownerId || scope.repository.toLowerCase() !== known.repository.toLowerCase())) return undefined;
     const selected = scope ?? known;
     if (!selected) return undefined;
+    const epoch = this.repositoryEpochs.get(this.repositoryKey(selected)) ?? 0;
     this.startRecovery(selected.ownerId);
     if (this.pending.has(id)) return this.views.get(id);
     const saved = await this.store.getJob(selected, id); if (!saved) return undefined;
+    if ((this.repositoryEpochs.get(this.repositoryKey(selected)) ?? 0) !== epoch) return undefined;
     const view = this.cache(selected, saved);
     if (saved.snapshotId && includeSnapshot) view.snapshot = await this.store.getSnapshot(selected, saved.snapshotId);
+    if ((this.repositoryEpochs.get(this.repositoryKey(selected)) ?? 0) !== epoch) return undefined;
     if (!includeSnapshot) { const { snapshot: _snapshot, ...metadata } = view; return metadata; }
     return view;
   }
@@ -132,6 +150,7 @@ export class AnalysisJobs {
     try {
       for (const { scope, job } of await this.store.listJobs(ownerId, 100)) {
         if (this.closing) break;
+        if (this.invalidatingRepositories.has(this.repositoryKey(scope))) continue;
         this.cache(scope, job);
         if (this.controllers.has(job.id) || this.pending.has(job.id) || Date.parse(job.availableAt) > Date.now() || (job.leaseExpiresAt && Date.parse(job.leaseExpiresAt) > Date.now())) continue;
         let release: () => void; try { release = this.admission.reserve(); } catch { break; }
@@ -145,6 +164,8 @@ export class AnalysisJobs {
     this.tasks.add(task); void task.catch(() => {});
   }
   private async run(scope: StoreScope, id: string, controller: AbortController) {
+    const epoch = this.repositoryEpochs.get(this.repositoryKey(scope)) ?? 0;
+    const isCurrent = () => !controller.signal.aborted && (this.repositoryEpochs.get(this.repositoryKey(scope)) ?? 0) === epoch;
     const job = await this.store.claimJob(scope, this.workerId, 30_000, id); if (!job) return;
     this.cache(scope, job);
     const timeout = setTimeout(() => controller.abort(), 180_000);
@@ -161,7 +182,9 @@ export class AnalysisJobs {
       } });
       controller.signal.throwIfAborted(); await writes;
       const current = await this.store.getJob(scope, id); if (!current || current.status === 'cancelled') return;
-      const saved = await this.save({ ...snapshot, contextRef: String(job.input.displayContextRef ?? snapshot.contextRef) }, scope);
+      if (!isCurrent()) return;
+      const saved = await this.save({ ...snapshot, contextRef: String(job.input.displayContextRef ?? snapshot.contextRef) }, scope, isCurrent);
+      if (!isCurrent()) return;
       const status = snapshot.coverage.status === 'complete' ? 'ready' : 'partial';
       if (await this.store.completeJob(scope, id, this.workerId, { snapshotId: saved.id, status })) {
         const view = this.cache(scope, { ...job, status, snapshotId: saved.id, progress: 100, updatedAt: new Date().toISOString() }); view.snapshot = saved; view.message = 'Graph ready';

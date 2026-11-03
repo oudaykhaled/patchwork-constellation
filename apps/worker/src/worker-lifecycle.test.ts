@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { GraphSnapshot } from '@patchwork/contracts';
+import { demoSnapshot } from '@patchwork/fixtures';
 const control = vi.hoisted(() => ({ current: undefined as undefined | { emit: (event: string, value?: unknown) => void; finishTermination: () => void } }));
 vi.mock('node:worker_threads', () => ({
   Worker: class {
@@ -31,11 +31,18 @@ describe('worker admission lifecycle', () => {
   it('does not release successful completion until termination completes', async () => {
     const work = runAnalysisInWorker({ repository: 'acme/tool' });
     let settled = false; void work.then(() => { settled = true; });
-    const snapshot = { id: 'result' } as GraphSnapshot;
+    const snapshot = structuredClone(demoSnapshot);
     control.current!.emit('message', { type: 'result', snapshot });
     await Promise.resolve(); await Promise.resolve();
     expect(settled).toBe(false);
     control.current!.finishTermination();
-    await expect(work).resolves.toBe(snapshot);
+    await expect(work).resolves.toEqual(snapshot);
+  });
+  it('rejects invalid worker payloads before crossing the service boundary', async () => {
+    const work = runAnalysisInWorker({ repository: 'acme/tool' });
+    const rejected = expect(work).rejects.toThrow('invalid graph snapshot');
+    control.current!.emit('message', { type: 'result', snapshot: { id: 'unvalidated' } });
+    control.current!.finishTermination();
+    await rejected;
   });
 });
