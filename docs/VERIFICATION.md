@@ -1,3 +1,5 @@
+> Historical MVP verification. For the complete 31-lane implementation and current measured limits, use [final integrated verification](FINAL_VERIFICATION.md).
+
 # Verification evidence
 
 Local checks recorded on 2026-11-03 using Windows, Node.js 24.22.1, pnpm 11.25.0 and the committed lockfile. Final core browser checks use the production frontend served locally. Hosted CI, deployment and external provider verification have separate gates.

@@ -93,3 +93,5 @@ The TypeScript workspace contains the React frontend/BFF in `apps/web`, job orch
 Licensed under [Apache License 2.0](LICENSE), selected by the repository owner on 2026-11-03. Third-party dependencies retain their own licenses.
 
 The frontend and distributed fonts retain the exact installed [third-party license notices](apps/web/public/THIRD_PARTY_NOTICES.txt), with [package/version/source digests](apps/web/public/THIRD_PARTY_NOTICES.json). Builds verify these notices and copy them into `dist`; Geist and Geist Mono remain under OFL-1.1.
+
+See [final integrated verification](docs/FINAL_VERIFICATION.md) for the 31-issue acceptance audit, current production measurements, incremental refresh and publication status.

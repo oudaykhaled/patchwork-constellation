@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "1",
+  "recordedAt": "2026-11-03T19:30:15.704Z",
+  "scope": "local-source-artifact-rehearsal",
+  "results": [
+    {
+      "stage": "candidate",
+      "artifact": "patchwork-constellation-0.1.0-bcfa5110ee0c",
+      "commit": "bcfa5110ee0c4f30568b730e868d5be658c3aae9",
+      "checks": [
+        "manifest-integrity",
+        "frozen-offline-install",
+        "production-health",
+        "integrated-worker-storage-queue-readiness",
+        "distributed-exact-third-party-and-OFL-notices",
+        "disabled-provider-observed-zero-transfer",
+        "production-html",
+        "212-file-demo",
+        "provider-disabled-baseline"
+      ],
+      "network": "loopback-only application probes; package install offline",
+      "database": "memory",
+      "externalModels": false
+    },
+    {
+      "stage": "rollback",
+      "artifact": "patchwork-constellation-0.1.0-65dc1bd17695",
+      "commit": "65dc1bd17695da3332f210a841386cf2d2b14b07",
+      "checks": [
+        "manifest-integrity",
+        "frozen-offline-install",
+        "production-health",
+        "distributed-exact-third-party-and-OFL-notices",
+        "production-html",
+        "212-file-demo",
+        "provider-disabled-baseline"
+      ],
+      "network": "loopback-only application probes; package install offline",
+      "database": "memory",
+      "externalModels": false
+    }
+  ],
+  "stagingDatabase": "not-verified",
+  "hostedDeployment": "not-performed",
+  "retainedDirectory": "C:\\Users\\youne\\Desktop\\gitchangelogs\\constellation-build\\.cache\\release-rehearsal-efIRoT"
+}

@@ -87,3 +87,7 @@ The aggregator expects versioned dependency envelopes `{schemaVersion:'1',status
 ## Remaining acceptance
 
 Rerun the three final integrated fixtures and linked dependency suites on one immutable build; collect real authenticated-response-to-view and analysis-phase timings; perform PostgreSQL worker-outage recovery where persistence is used; run a longer staging review session with controlled runner contention. Record any missed budget as a linked remediation. The 10k fixture is a stress case, not an accepted capacity claim; consult GRAPH-04 before expanding the supported envelope. Beta remains blocked by missing or failed evidence.
+
+## Final integrated measurement
+
+The original samples above are historical. [Final verification](FINAL_VERIFICATION.md) and [final raw evidence](evidence/final/) now record the same-commit worker-era renderer, 1,000-toggle retention, controlled authenticated BFF and real-Git phase measurements at bcfa511. All proposed 2k targets passed; 10k is stress-only. The aggregate release gate remains partial for explicitly unverified reference/GPU/deployed acceptance.

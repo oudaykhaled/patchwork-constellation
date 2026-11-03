@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1",
+  "status": "partial",
+  "commit": "bcfa5110ee0c4f30568b730e868d5be658c3aae9",
+  "checks": [
+    {
+      "id": "supported-target",
+      "status": "passed",
+      "evidence": "Dedicated production Chromium: both 212 and 2k/8k first-use, pan and startup-task budgets passed; raw per-size reports retained."
+    },
+    {
+      "id": "failure-recovery",
+      "status": "passed",
+      "evidence": "Two dedicated production scope/worker/context-loss tests passed; functional Chrome/WebKit suite also passed."
+    },
+    {
+      "id": "stress-limit",
+      "status": "partial",
+      "evidence": "10k/40k pan p95 66.7 ms exceeds the 33 ms supported-target budget. Stress-only; complete counts and scope controls remain. Existing issue #27 tracks capacity limits."
+    },
+    {
+      "id": "reference-gpu-hosted",
+      "status": "partial",
+      "evidence": "Ordinary Windows desktop profile is recorded. Dedicated reference/manual GPU and hosted CI certification remain unperformed."
+    }
+  ]
+}

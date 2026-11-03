@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1",
+  "recordedAt": "2026-11-03T19:27:36.829Z",
+  "scope": "disposable-local-postgresql-release-rehearsal",
+  "outcome": "passed",
+  "serverVersion": "17.11",
+  "migrations": [
+    "001_storage.sql",
+    "002_webhook_inbox.sql"
+  ],
+  "checks": [
+    "fresh-database-migration",
+    "synthetic-scoped-snapshot-and-job",
+    "synthetic-webhook-and-refresh-state",
+    "native-custom-backup",
+    "native-fresh-database-restore",
+    "snapshot-and-job-digest-equality",
+    "all-four-table-counts",
+    "idempotent-migration-after-restore"
+  ],
+  "counts": {
+    "patchwork_snapshots": 1,
+    "patchwork_jobs": 1,
+    "patchwork_webhook_inbox": 1,
+    "patchwork_refresh_state": 1
+  },
+  "snapshotDigest": "0ec32418c71b896fdb9eb0132749fce4c67255ddf674a688bdace41ab4fee043",
+  "jobDigest": "6589c9e1f0cff5f4f95d5df6dbc440d6cd1517539db24ea8d0ade664d703ab24",
+  "backupSha256": "d0bbe6d08827e254d4628336d4a763945b7c015372ba332de11546e0aee19b39",
+  "backupBytes": 20992,
+  "sourceData": "synthetic-only",
+  "liveDatabaseOverwritten": false,
+  "hostedDeployment": false,
+  "credentialsRetained": false,
+  "cleanup": {
+    "disposableDatabasesDropped": 2
+  }
+}
