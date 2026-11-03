@@ -1,0 +1,17 @@
+# Incremental static refresh
+
+The static analyzer version is `static-v4`. Each successfully scanned, bounded JS/TS source node can retain `parseFacts` and `parserVersion`: literal import specifiers, relation kinds, source line numbers, syntax limitations, and the parser script kind. These facts contain no source body, resolved file IDs, edges, credentials, or executable configuration.
+
+`createIncrementalAnalysisBaseline(snapshot)` projects a previously authorized stored GitHub snapshot into the strict `IncrementalAnalysisBaselineSchema`. This is an internal analysis option, never an HTTP request field. The queue/worker integration must authorize the previous snapshot in the current owner/repository scope before creating or transferring it.
+
+The baseline is limited to 500 files, 20,000 references and 2 MiB of serialized UTF-8 metadata. Per-file facts allow at most 1,024 references, eight syntax reasons and 2,048 characters per specifier/reason. Unknown graph/source fields, invalid paths, duplicate paths and conflicting facts for an immutable blob are rejected. Parser/schema/analyzer version mismatches and foreign repositories cause a normal full analysis with an explicit fallback reason.
+
+For a compatible baseline, the analyzer still reads the current pinned tree and current bounded declarative configurations. Every import is resolved again against the fresh inventory, nearest tsconfig, workspace package exports, and path policy. Resolved edges are never copied from a prior snapshot. An unchanged blob with compatible parser/script-kind facts needs no source fetch or AST parse. A relocated matching blob can reuse syntax while resolving relative imports at its new path; this reuse does not establish Git rename lineage. Changed/new unmatched blobs are fetched and scanned, and deleted paths disappear with the fresh inventory. A `.ts` to `.tsx` move invalidates reuse when the parser script kind changes.
+
+The current source/manifest/inventory budgets still apply. Unparsed files remain visible with partial coverage. Unsupported tsconfig inheritance, external packages, special files and source-head layers retain their existing explicit policies. Fresh declarative JSON is read independently rather than transferring configuration/source contents in a baseline.
+
+`snapshot.incremental` reports the accepted basis SHA, eligible files, actual baseline reuse, reuse at new paths, source-fetch calls, new AST parses, process parser-cache hits, and invalidated same-path facts. Invalid/missing baselines report full mode and a reason. These statistics describe analysis reuse; graph coverage separately describes dependency completeness. Indexing progress includes the number of unchanged blobs reused.
+
+The regression fixture compares complete graph facts from full and incremental analyses of two authored contexts. It changes aliases, package exports and a source import, deletes a file, adds a file, and moves a same-content file. With process/GitHub caches cleared, the second context reuses nine files, fetches/parses two source blobs, and produces the same nodes, evidenced edges, hierarchy and coverage as a full analysis. Separate tests cover same-SHA refresh, script-kind changes, foreign/malformed/versioned/oversized baselines and transfer bounds.
+
+Run `pnpm exec vitest run packages/analysis/src packages/contracts/src` and `pnpm typecheck` for the core regression suite. Configured webhook, owner-scoped storage and worker-transfer verification are covered by the queue/webhook integration suites.

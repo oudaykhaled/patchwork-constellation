@@ -38,7 +38,7 @@ async function mapLimit<T, R>(items: T[], concurrency: number, run: (item: T) =>
 /** Fetches only pinned text blobs and declarative JSON. Never follows links or executes code. */
 export async function buildStaticGraph(client: GitHubClient, address: RepositoryAddress, sha: string, options: StaticGraphOptions = {}): Promise<StaticGraphResult> {
   let baseline: IncrementalAnalysisBaseline | undefined;
-  const incremental: IncrementalAnalysisStats = { mode: 'full', baselineStatus: 'missing', reason: 'No reusable authorized baseline was supplied; source blobs are analyzed normally.', eligibleFiles: 0, reusedFiles: 0, parsedFiles: 0, parserCacheHits: 0, fetchedSourceFiles: 0, renamedFiles: 0, invalidatedFiles: 0 };
+  const incremental: IncrementalAnalysisStats = { mode: 'full', baselineStatus: 'missing', reason: 'No reusable authorized baseline was supplied; source blobs are analyzed normally.', eligibleFiles: 0, reusedFiles: 0, parsedFiles: 0, parserCacheHits: 0, fetchedSourceFiles: 0, reusedAtNewPaths: 0, invalidatedFiles: 0 };
   if (options.incrementalBaseline !== undefined) {
     const parsed = IncrementalAnalysisBaselineSchema.safeParse(options.incrementalBaseline);
     if (!parsed.success) { incremental.baselineStatus = 'invalid'; incremental.reason = 'The incremental baseline failed bounded metadata validation; a full analysis was used.'; }
@@ -158,7 +158,7 @@ export async function buildStaticGraph(client: GitHubClient, address: Repository
       let scan: ImportScan;
       if (candidate) {
         scan = structuredClone(candidate.parseFacts); incremental.reusedFiles++;
-        if (candidate.path !== entry.path) incremental.renamedFiles++;
+        if (candidate.path !== entry.path) incremental.reusedAtNewPaths++;
         node.parseFacts = structuredClone(candidate.parseFacts); node.parserVersion = PARSER_VERSION;
       } else {
         if (previous) incremental.invalidatedFiles++;

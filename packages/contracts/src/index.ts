@@ -69,7 +69,7 @@ const boundedBaselineInput = (input: unknown): unknown => {
     if (!facts || typeof facts !== 'object' || Array.isArray(facts)) return undefined;
     const parsed = facts as Record<string, unknown>;
     if (Object.keys(parsed).some(key => !['schemaVersion', 'scriptKind', 'references', 'reasons'].includes(key))) return undefined;
-    if (parsed.schemaVersion !== '1' || !['ts', 'tsx', 'js', 'jsx'].includes(String(parsed.scriptKind))) return undefined;
+    if (parsed.schemaVersion !== '1' || typeof parsed.scriptKind !== 'string' || !['ts', 'tsx', 'js', 'jsx'].includes(parsed.scriptKind)) return undefined;
     if (!Array.isArray(parsed.references) || parsed.references.length > 1_024 || !Array.isArray(parsed.reasons) || parsed.reasons.length > 8) return undefined;
     references += parsed.references.length;
     if (references > INCREMENTAL_BASELINE_LIMITS.maxReferences) return undefined;
@@ -77,7 +77,7 @@ const boundedBaselineInput = (input: unknown): unknown => {
       if (!reference || typeof reference !== 'object' || Array.isArray(reference)) return undefined;
       const item = reference as Record<string, unknown>;
       if (Object.keys(item).some(key => !['specifier', 'line', 'kind', 'resolutionMode'].includes(key)) || typeof item.specifier !== 'string' || item.specifier.length > 2_048) return undefined;
-      if (!['import', 'reexport', 'type-import', 'dynamic-import'].includes(String(item.kind)) || !Number.isInteger(item.line) || Number(item.line) < 1 || (item.resolutionMode !== undefined && !['import', 'require'].includes(String(item.resolutionMode)))) return undefined;
+      if (typeof item.kind !== 'string' || !['import', 'reexport', 'type-import', 'dynamic-import'].includes(item.kind) || !Number.isInteger(item.line) || Number(item.line) < 1 || (item.resolutionMode !== undefined && (typeof item.resolutionMode !== 'string' || !['import', 'require'].includes(item.resolutionMode)))) return undefined;
       characters += item.specifier.length;
     }
     for (const reason of parsed.reasons) { if (typeof reason !== 'string' || reason.length > 2_048) return undefined; characters += reason.length; }
@@ -105,11 +105,11 @@ export const IncrementalAnalysisStatsSchema = z.object({
   basisSha: GitShaSchema.optional(), reason: z.string().min(1).optional(),
   eligibleFiles: z.number().int().nonnegative(), reusedFiles: z.number().int().nonnegative(), parsedFiles: z.number().int().nonnegative(),
   parserCacheHits: z.number().int().nonnegative(),
-  fetchedSourceFiles: z.number().int().nonnegative(), renamedFiles: z.number().int().nonnegative(), invalidatedFiles: z.number().int().nonnegative(),
+  fetchedSourceFiles: z.number().int().nonnegative(), reusedAtNewPaths: z.number().int().nonnegative(), invalidatedFiles: z.number().int().nonnegative(),
 }).strict().superRefine((stats, ctx) => {
   const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
   if (stats.reusedFiles + stats.parsedFiles + stats.parserCacheHits > stats.eligibleFiles || stats.fetchedSourceFiles > stats.eligibleFiles || stats.invalidatedFiles > stats.eligibleFiles) fail('Incremental counts exceed eligible files');
-  if (stats.renamedFiles > stats.reusedFiles) fail('Renamed reuse exceeds total reuse');
+  if (stats.reusedAtNewPaths > stats.reusedFiles) fail('Cross-path syntax reuse exceeds total reuse');
   if ((stats.baselineStatus === 'accepted') !== (stats.mode === 'incremental' && stats.basisSha !== undefined)) fail('Incremental basis must describe an accepted baseline');
   if (stats.mode === 'full' && stats.reusedFiles !== 0) fail('Full analysis cannot claim baseline reuse');
 });
