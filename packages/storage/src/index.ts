@@ -36,6 +36,8 @@ export interface SnapshotStore {
   readonly kind: 'memory' | 'postgres';
   putSnapshot(scope: StoreScope, snapshot: GraphSnapshot): Promise<void>;
   getSnapshot(scope: StoreScope, id: string): Promise<GraphSnapshot | undefined>;
+  /** Most recently written unexpired snapshot in this exact owner/repository scope. */
+  getLatestSnapshot(scope: StoreScope): Promise<GraphSnapshot | undefined>;
   deleteRepository(scope: StoreScope): Promise<void>;
   putJob(scope: StoreScope, job: StoredJob): Promise<void>;
   /** Atomic insert without replacing an existing idempotency key. */
@@ -89,7 +91,8 @@ export function newJob(input: Record<string, unknown>, options: { id?: string; m
 
 class MemoryStore implements SnapshotStore {
   readonly kind = 'memory' as const;
-  private snapshots = new Map<string, { scope: StoreScope; value: GraphSnapshot; expires: number }>();
+  private snapshots = new Map<string, { scope: StoreScope; value: GraphSnapshot; expires: number; storedOrder: number }>();
+  private snapshotWriteOrder = 0;
   private jobs = new Map<string, { scope: StoreScope; value: StoredJob; expires: number }>();
   private deliveries = new Map<string, number>();
   private readonly now: () => number;
@@ -109,12 +112,18 @@ class MemoryStore implements SnapshotStore {
   async putSnapshot(scope: StoreScope, snapshot: GraphSnapshot): Promise<void> {
     snapshot = checkedSnapshot(snapshot);
     const s = normalizeScope(scope); if (snapshot.repository.fullName.toLowerCase() !== s.repository) throw new Error('Snapshot repository does not match scope');
-    const key = this.key(s, snapshot.id); this.snapshots.delete(key); this.snapshots.set(key, { scope: s, value: structuredClone(snapshot), expires: this.now() + this.retention }); this.trim(this.snapshots, this.maxSnapshots);
+    const key = this.key(s, snapshot.id); this.snapshots.delete(key); this.snapshots.set(key, { scope: s, value: structuredClone(snapshot), expires: this.now() + this.retention, storedOrder: ++this.snapshotWriteOrder }); this.trim(this.snapshots, this.maxSnapshots);
   }
   async getSnapshot(scope: StoreScope, id: string): Promise<GraphSnapshot | undefined> {
     const key = this.key(scope, id), entry = this.snapshots.get(key); if (!entry) return undefined;
     if (entry.expires <= this.now()) { this.snapshots.delete(key); return undefined; }
     this.snapshots.delete(key); this.snapshots.set(key, entry); return structuredClone(entry.value);
+  }
+  async getLatestSnapshot(scope: StoreScope): Promise<GraphSnapshot | undefined> {
+    const selected = normalizeScope(scope);
+    let latest: { value: GraphSnapshot; storedOrder: number } | undefined;
+    for (const entry of this.snapshots.values()) if (entry.scope.ownerId === selected.ownerId && entry.scope.repository === selected.repository && entry.expires > this.now() && (!latest || entry.storedOrder > latest.storedOrder)) latest = entry;
+    return latest ? structuredClone(latest.value) : undefined;
   }
   async putJob(scope: StoreScope, job: StoredJob): Promise<void> {
     const s = normalizeScope(scope), value = checkedJob(job); const key = this.key(s, job.id);
@@ -197,9 +206,13 @@ class PostgresStore implements SnapshotStore {
   async putSnapshot(scope: StoreScope, snapshot: GraphSnapshot): Promise<void> {
     snapshot = checkedSnapshot(snapshot);
     const p = this.params(scope); validateId(snapshot.id); if (snapshot.repository.fullName.toLowerCase() !== p[1]) throw new Error('Snapshot repository does not match scope');
-    await this.pool.query('INSERT INTO patchwork_snapshots(owner_id, repository, id, payload, expires_at) VALUES($1,$2,$3,$4::jsonb,NOW()+$5*INTERVAL \'1 millisecond\') ON CONFLICT(owner_id,repository,id) DO UPDATE SET payload=EXCLUDED.payload, expires_at=EXCLUDED.expires_at', [...p, snapshot.id, JSON.stringify(snapshot), this.retention]);
+    await this.pool.query('INSERT INTO patchwork_snapshots(owner_id, repository, id, payload, expires_at, stored_at) VALUES($1,$2,$3,$4::jsonb,NOW()+$5*INTERVAL \'1 millisecond\',clock_timestamp()) ON CONFLICT(owner_id,repository,id) DO UPDATE SET payload=EXCLUDED.payload, expires_at=EXCLUDED.expires_at, stored_at=EXCLUDED.stored_at', [...p, snapshot.id, JSON.stringify(snapshot), this.retention]);
   }
   async getSnapshot(scope: StoreScope, id: string): Promise<GraphSnapshot | undefined> { validateId(id); const r = await this.pool.query<{ payload: GraphSnapshot }>('SELECT payload FROM patchwork_snapshots WHERE owner_id=$1 AND repository=$2 AND id=$3 AND expires_at>NOW()', [...this.params(scope), id]); return r.rows[0]?.payload; }
+  async getLatestSnapshot(scope: StoreScope): Promise<GraphSnapshot | undefined> {
+    const result = await this.pool.query<{ payload: GraphSnapshot }>('SELECT payload FROM patchwork_snapshots WHERE owner_id=$1 AND repository=$2 AND expires_at>NOW() ORDER BY stored_at DESC,id DESC LIMIT 1', this.params(scope));
+    return result.rows[0]?.payload;
+  }
   async putJob(scope: StoreScope, job: StoredJob): Promise<void> {
     const j = checkedJob(job); await this.pool.query('INSERT INTO patchwork_jobs(owner_id,repository,id,payload,status,available_at,lease_owner,lease_expires_at,attempts,max_attempts,expires_at) VALUES($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,NOW()+$11*INTERVAL \'1 millisecond\') ON CONFLICT(owner_id,repository,id) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status,available_at=EXCLUDED.available_at,lease_owner=EXCLUDED.lease_owner,lease_expires_at=EXCLUDED.lease_expires_at,attempts=EXCLUDED.attempts,max_attempts=EXCLUDED.max_attempts,expires_at=EXCLUDED.expires_at', [...this.params(scope), j.id, JSON.stringify(j), j.status, j.availableAt, j.leaseOwner ?? null, j.leaseExpiresAt ?? null, j.attempts, j.maxAttempts, this.retention]);
   }

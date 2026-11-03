@@ -1,13 +1,14 @@
 import { Worker } from 'node:worker_threads';
 import { validateGraphSnapshot, type GraphSnapshot } from '@patchwork/contracts';
-import type { AnalysisOptions, AnalysisProgress, AnalyzeInput } from '@patchwork/analysis';
+import type { AnalysisProgress, AnalyzeInput } from '@patchwork/analysis';
 import { receiveWorkerTelemetry } from './telemetry';
+import { serializableWorkerOptions, type WorkerOptions } from './options';
 
-type WorkerOptions = Omit<AnalysisOptions, 'fetch' | 'gitFallback'>;
 type Task = { kind: 'repository'; input: AnalyzeInput } | { kind: 'sources'; snapshot: GraphSnapshot; sourceKind: 'pr' | 'commit'; ids: string[] };
 function runTask(task: Task, options: WorkerOptions = {}): Promise<GraphSnapshot> {
   options.signal?.throwIfAborted();
-  const { signal, onProgress, onTelemetry, ...serializable } = options;
+  const { signal, onProgress, onTelemetry } = options;
+  const serializable = serializableWorkerOptions(options, task.kind === 'repository' ? task.input.repository : undefined);
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./thread.ts', import.meta.url), { workerData: { task, options: serializable }, execArgv: ['--import', 'tsx'], resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 4 } });
     let finished = false;
