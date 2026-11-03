@@ -1,0 +1,419 @@
+[
+  {
+    "key": "DEL-01",
+    "title": "Scaffold the TypeScript monorepo and reproducible local demo",
+    "area": "delivery",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M1",
+    "dependencies": [],
+    "body": "## Outcome\nA contributor can clone the repository and run a credential-free Constellation demo with one documented command.\n\n## Scope\nCreate apps/web (React plus authenticated server routes/BFF), apps/worker, packages/contracts, packages/graph-core and packages/fixtures. Keep the HTTP API contract separate logically without adding a separate API deployment. Pin a supported Node.js LTS, package manager and lockfile after verifying current support. Add environment validation and an example file containing placeholders only. Keep server credentials out of browser bundles. Document package boundaries and local start/stop/reset commands.\n\n## Acceptance criteria\n- [ ] A fresh checkout installs with a frozen lockfile, typechecks, builds and starts the demo.\n- [ ] Demo mode never calls GitHub or a model provider and is visibly labeled.\n- [ ] BFF and worker health endpoints work; web displays configuration failures without a blank screen.\n- [ ] Shared contracts have a version and are validated across service boundaries.\n- [ ] Repository scripts and environment names are consistent across local and CI documentation.\n\n## Verification\nRun the documented commands on a clean environment, attach logs and a demo screenshot, and inspect the browser bundle for server-only modules or secret values. This issue creates infrastructure, not the completed renderer or real-data pipeline."
+  },
+  {
+    "key": "DEL-02",
+    "title": "Add PR quality checks and a safe contribution workflow",
+    "area": "delivery",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M1",
+    "dependencies": [
+      "DEL-01"
+    ],
+    "body": "## Outcome\nEvery change is checked reproducibly before it reaches the default branch.\n\n## Acceptance criteria\n- [ ] Pull-request CI runs formatting/lint, type checks, meaningful unit/contract tests and production builds with a frozen lockfile.\n- [ ] Browser smoke tests use deterministic demo data with no production secrets.\n- [ ] Workflow token permissions are minimal; external actions use verified full commit SHAs and readable version comments.\n- [ ] Fork/untrusted PR workflows cannot deploy, obtain provider credentials or run imported repository code with privileged credentials.\n- [ ] Dependency update configuration, issue/PR templates and contribution instructions explain the required checks and review evidence.\n- [ ] Failing checks upload bounded, redacted diagnostics; PR checks can be configured as required in repository rules.\n\n## Verification\nUse a test PR to demonstrate passing checks and a deliberate failing fixture/assertion to demonstrate that failure blocks the check. Review the workflow permission/event model against https://docs.github.com/en/actions/reference/security/secure-use. Do not claim branch protection is enabled unless the repository setting is read back.\n\nBefore accepting external contributions or releasing code, record the owner's license decision. Do not treat public visibility as an open-source license grant."
+  },
+  {
+    "key": "DATA-01",
+    "title": "Define versioned graph, source-selection, and coverage contracts",
+    "area": "data",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M1",
+    "dependencies": [
+      "DEL-01"
+    ],
+    "body": "## Outcome\nFrontend, ingestion, and AI can work against one typed, versioned contract without conflating repository facts with inferred impact.\n\n## Scope\nCreate shared schemas for Repository, Snapshot, ChangeSource, FileNode, ImportEdge, Group, FileChange, SelectionFootprint, AnalysisJob, and Coverage. Include repository ID, immutable ref SHAs, source membership, rename provenance, edge evidence, group origin, and schema version. IDs survive source toggling; unsupported analysis is explicit.\n\n## Acceptance criteria\n- [ ] Context snapshot defaults to the repository default-branch HEAD pinned at analysis start. Persist its display ref and SHA; explicit branch/commit context changes create a new snapshot, independent of selected source overlays.\n- [ ] Every source records its exact base/head or parent/commit pair and comparison kind.\n- [ ] File nodes have path, type, presence, source membership, direct-change status, and optional ancestry; edges have relation, direction, snapshot/source provenance, resolver, and evidence.\n- [ ] Coverage distinguishes complete, partial, unsupported, failed, and excluded with reasons/counts; absence of an edge does not imply absence of dependency.\n- [ ] Changed-file union, overlapping-source count, direct change, and dependency neighbor are distinct fields.\n- [ ] JSON schema/runtime validation and TypeScript types are generated or maintained from one source.\n- [ ] The 212-file Constellation fixture satisfies schemas, has deterministic IDs, and has 68 changed files across the three example PRs.\n\n## Verification\nContract tests reject dangling node references, duplicate IDs, unversioned payloads, impossible counts, and unsupported provenance; share fixture with graph/AI agents."
+  },
+  {
+    "key": "DEL-03",
+    "title": "Create deterministic repository fixtures and expected graph snapshots",
+    "area": "delivery",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M1",
+    "dependencies": [
+      "DEL-01",
+      "DATA-01"
+    ],
+    "body": "## Outcome\nAll lanes test the same authored evidence rather than relying on a changing live repository.\n\n## Acceptance criteria\n- [ ] Include the design fixture: 212 files, six labeled islands, 235 connections; selected PRs affect 68 files with 14 overlapping; the two-PR state affects 57 files with two overlapping; the two-commit state affects 24 files in five affected islands with four overlapping.\n- [ ] Add small synthetic Git histories covering add/modify/delete/rename, repeated edits across PRs, merge commits, binary/generated files, submodules and unresolved imports.\n- [ ] Add API recordings/stubs for pagination, quota/retry responses, truncated results, permission revocation and stale selections.\n- [ ] Produce seeded scale graphs with documented node/edge counts, density and expected invariants; fixtures contain no real private source or credentials.\n- [ ] Golden expected results are derived from declared fixture histories, not copied from the implementation under test.\n- [ ] Licensing/provenance and fixture regeneration instructions are recorded.\n\n## Verification\nRun fixture validation twice and confirm byte-stable outputs for a fixed seed. Review expected changed/overlap sets against hand-auditable histories. Domain teams may extend this corpus but should not silently change its canonical expectations."
+  },
+  {
+    "key": "UX-01",
+    "title": "Specify the Constellation interaction contract and semantic legend",
+    "area": "frontend",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M1",
+    "dependencies": [],
+    "body": "## Outcome\nMake the second Figma direction the sole product contract: one circle per file, labeled component/module/folder islands, real connections, and a graph occupying at least 80% of the application viewport in its default desktop state.\n\n## Scope\nTranslate [Constellation](https://www.figma.com/design/A7h1fCr1SbLPRwY4vstSup?node-id=17-2113) into tokens, responsive rules, interaction states, and representative fixtures. The first contribution-grid approach is out of scope.\n\n## Acceptance criteria\n- [ ] At 1280×720, 1440×900, and 1600×1000, the graph surface is ≥80% of viewport area; controls float above it, and an inspector is dismissible.\n- [ ] Default view has no timeline or permanent wide sidebar.\n- [ ] Filled green circle means directly changed file; hollow circle means unchanged context; an outer ring means touched by multiple selected sources; selection and keyboard focus have distinct non-color cues.\n- [ ] Connections explicitly identify their relation type. Imported/code-derived edges are distinct from optional AI-inferred relations. Connections do not imply proven runtime impact.\n- [ ] Deleted, added, renamed, unparsed, and external/unresolved files have documented representations. Rename aliases preserve one identity when evidence permits.\n- [ ] Component/module/folder grouping levels retain file-circle semantics; island boundaries and labels communicate group hierarchy without circles pretending to be groups.\n- [ ] Mobile/200% text zoom flow keeps source selection, search, details, and an accessible list usable even where simultaneous graph detail must reduce.\n\n## Validation\nDesign-contract review against all seven Constellation states, screenshot layout checks, and fixture review. This is a proposed contract, not evidence of implemented accessibility."
+  },
+  {
+    "key": "GRAPH-01",
+    "title": "Prove the circle renderer and island layers with a bounded technical spike",
+    "area": "graph",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M1",
+    "dependencies": [
+      "UX-01",
+      "DEL-01",
+      "DEL-03"
+    ],
+    "body": "## Outcome\nChoose a renderer based on measurable support for Constellation, before investing in custom graph code.\n\n## Scope\nPrototype Sigma.js with Graphology as the leading candidate: circle nodes, overlap/selection rings, curved typed edges, organic island backgrounds, camera transforms, and HTML controls. Keep the renderer behind a small adapter so domain data and layout are independent. Confirm actual package versions and licenses at implementation time.\n\n## Acceptance criteria\n- [ ] Render the 212-file / 6-island design fixture and 2,000-file / 8,000-edge synthetic fixture.\n- [ ] Demonstrate hit testing, camera pan/zoom, label suppression, selection rings, background island layers, and connection focus.\n- [ ] Evaluate whether island boundaries belong in a custom renderer layer or a synchronized Canvas layer; document coordinate transforms and clipping.\n- [ ] Record frame times, initial render time, memory, browser/hardware, tradeoffs, and fallback behavior.\n- [ ] Publish a decision record with the supported graph-size envelope and selected version. Do not assert that a library is fast enough without the measurement.\n- [ ] Keep application controls in semantic DOM; WebGL failure presents a usable file list and retry.\n\n## Validation\nReproducible benchmark script plus visual proof at three zoom levels. Official starting points: [Sigma quickstart](https://www.sigmajs.org/get-started/quickstart/) and [camera guide](https://www.sigmajs.org/how-to/interactivity/camera-viewport/). Check link/API versions during implementation."
+  },
+  {
+    "key": "DATA-02",
+    "title": "Connect repositories through a read-only GitHub App",
+    "area": "data",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "DATA-01"
+    ],
+    "body": "## Outcome\nA signed-in user can select only repositories they are authorized to analyze, using server-side credentials.\n\n## Scope\nGitHub App installation and user authorization/session flow; explicit repository selection; installation token broker; permission checks for every repository/job/result endpoint. Request repository Contents: read and Pull requests: read, plus GitHub's mandatory Metadata: read. No repository write permissions are required by the product.\n\n## Acceptance criteria\n- [ ] Repository discovery intersects user access with App installation access; a valid installation ID alone never authorizes a user.\n- [ ] Installation tokens are scoped to needed repository IDs, cached until shortly before expiry, refreshed server-side, and never sent to browser/logs.\n- [ ] Expired/revoked installation, removed repository, inaccessible fork, private repository denial, and disconnected account have explicit recoverable states.\n- [ ] Login state/CSRF and session cookies are secure; every analysis/snapshot/blob lookup enforces owner/repository authorization.\n- [ ] Configuration documents minimal permission/event settings and local test setup without committing secrets.\n\n## Verification\nIntegration fixtures test cross-user access denial, tampered installation IDs, token refresh, revocation, and repository removal.\n\n## References\n[GitHub App token scope and one-hour expiry](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)\n[GitHub App user token intersection](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app)"
+  },
+  {
+    "key": "DATA-03",
+    "title": "Build paginated GitHub ingestion with cache and coverage reporting",
+    "area": "data",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "DATA-01",
+      "DATA-02"
+    ],
+    "body": "## Outcome\nRepository trees, PRs, commit metadata, and changed files are fetched reliably without silently dropping data.\n\n## Scope\nA typed GitHub gateway with pagination, pinned refs, ETag/conditional response cache, per-installation request queue, rate-limit handling, and API-version pinning. Discover sources separately from expensive analysis.\n\n## Acceptance criteria\n- [ ] PR and commit lists paginate; source picker receives cursor, filters, and loading state.\n- [ ] Immutable tree/blob results are keyed by repository and SHA; mutable metadata uses conditional requests.\n- [ ] Recursive tree truncation triggers bounded subtree traversal or a visible partial-coverage result.\n- [ ] PR changed-file cap (3,000) and comparison changed-file cap (300) are detected; comparison pagination is never treated as fetching extra file pages.\n- [ ] Retries honor Retry-After and reset headers, use bounded exponential backoff, and distinguish auth/not-found/network/rate errors.\n- [ ] No request storm occurs when multiple viewers select the same refs; deduplicate in-flight work.\n- [ ] API quotas, request count, cache hits, truncation reasons, and retry timing appear in structured telemetry without source contents.\n\n## Verification\nReplay fixtures for 304, 401, 404, 403/429, multi-page PRs, 3,001-file changes, 301-file comparisons, truncated trees, and cancellation.\n\n## References\n[PR file limit](https://docs.github.com/en/rest/pulls/pulls)\n[Comparison file limit](https://docs.github.com/en/rest/commits/commits)\n[Tree truncation](https://docs.github.com/en/rest/git/trees)\n[Rate handling](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)"
+  },
+  {
+    "key": "DATA-04",
+    "title": "Implement exact multi-PR and multi-commit footprint semantics",
+    "area": "data",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "DATA-01",
+      "DATA-03"
+    ],
+    "body": "## Outcome\nSelecting several sources shows their union and overlap correctly, without claiming they form a merged or deployable code state.\n\n## Scope\nPR mode uses each PR's pinned merge-base-to-head change set. Commit mode uses the pinned first-parent-to-commit delta for each selected commit, with root commits compared to the empty tree and merge commits visibly marked first-parent. Modes are separate for MVP. Selections are within one repository.\n\n## Acceptance criteria\n- [ ] Every source exposes exact compared SHAs, comparison rule, timestamp, and direct file changes.\n- [ ] Union counts unique canonical file identities; overlap means changed by at least two selected sources, never an inferred merge conflict.\n- [ ] Add/remove selection is deterministic and updates source membership without relocating existing graph nodes.\n- [ ] Per-source additions/deletions are retained; no misleading combined line total is presented when sources overlap or have different bases.\n- [ ] A reverted file remains touched in commit-footprint mode; selection is an activity union, not first-to-last net diff.\n- [ ] Force-push/ref changes create a new source version and prompt explicit refresh rather than silently changing the current analysis.\n- [ ] When APIs truncate or exact semantics cannot be established, use an isolated resource-limited Git fetch/diff worker; no repository checkout hooks, builds, filters, or user scripts run. If bounded fallback fails, report partial coverage.\n- [ ] Cross-branch and fork PRs remain independent overlays; no synthetic merged tree is fabricated.\n\n## Verification\nGolden Git fixtures cover disjoint/overlapping PRs, differing base branches, a revert, merge/root commits, rename-then-delete, force-push, unavailable fork, and API-limit fallback. Compare results to pinned git diff outputs."
+  },
+  {
+    "key": "DATA-05",
+    "title": "Build repository inventory and static import graph with file lineage",
+    "area": "data",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "DATA-01",
+      "DATA-03",
+      "DATA-04"
+    ],
+    "body": "## Outcome\nEach circle is an actual file, and its connections have verifiable evidence rather than AI-invented relationships.\n\n## Scope\nInventory all files at a pinned context SHA. Start dependency extraction with TypeScript/JavaScript ASTs and workspace/tsconfig/package-export resolution. Preserve other languages as files with unsupported dependency coverage. Parse source only; never execute repository code.\n\n## Acceptance criteria\n- [ ] Imports, re-exports, type-only imports, resolvable dynamic imports, relative paths, aliases, and workspace packages have tested direction and evidence.\n- [ ] External packages are metadata in MVP, not misleading file circles; unresolved imports carry a reason.\n- [ ] Deleted and added files remain visible when selected, with presence/source provenance; baseline and selected-head edges remain distinguishable.\n- [ ] Reported renames use old/new paths and provenance; ambiguous lineage is not guessed. Same path in unrelated source trees cannot silently collapse conflicting identities.\n- [ ] Binary assets, symlinks, submodules, LFS pointers, generated/vendor files, and oversized blobs are represented or excluded by explicit policy; symlinks/submodules are not followed automatically.\n- [ ] Cache parsing by blob hash and resolver version; changed blobs/config invalidate only affected analysis.\n- [ ] Source-level unsupported/partial coverage appears in the graph payload and file inspector.\n\n## Verification\nFixture repositories cover circular dependencies, barrel files, path aliases, mixed languages, binary/large files, symlinks, submodules, renames, deletions, and branch-conflicting paths; AST extraction cannot launch processes."
+  },
+  {
+    "key": "DATA-06",
+    "title": "Derive deterministic component, module, folder, and file hierarchy",
+    "area": "data",
+    "priority": "P1",
+    "size": "M",
+    "milestone": "M2",
+    "dependencies": [
+      "DATA-01",
+      "DATA-05"
+    ],
+    "body": "## Outcome\nConstellation shows useful labeled islands before AI runs and remains usable if the AI provider is unavailable.\n\n## Scope\nCreate deterministic hierarchy from workspace manifests, package boundaries, path structure, and explicit user mappings. AI may propose semantic labels or memberships later through the same versioned contract.\n\n## Acceptance criteria\n- [ ] Every visible file belongs to a folder and one primary module/island; component-level groupings can span modules through explicit membership.\n- [ ] Group origin is rules, manifest, user override, or AI proposal; labels have supporting evidence.\n- [ ] Deep paths and tiny packages merge only through documented, reversible rules with an Ungrouped fallback.\n- [ ] Group IDs and memberships are stable for an unchanged snapshot; source selection alone cannot recluster islands.\n- [ ] Explicit repository mapping configuration is versioned and takes precedence over automatic suggestions. AI-04 owns the interactive durable correction and undo API.\n- [ ] Payload supports hierarchy expansion and aggregate counts without redefining aggregate nodes as files.\n- [ ] AI proposal acceptance can create a new grouping version without modifying observed dependency edges.\n\n## Verification\nGolden fixtures cover a monorepo, single package, deeply nested folders, cross-cutting shared code, ignored directories, and identical snapshots reordered on ingestion."
+  },
+  {
+    "key": "DATA-07",
+    "title": "Expose idempotent analysis jobs and progressive graph APIs",
+    "area": "data",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "DATA-01",
+      "DATA-04",
+      "DATA-05",
+      "DATA-06"
+    ],
+    "body": "## Outcome\nThe graph opens quickly and stays responsive while data analysis progresses or a selection changes.\n\n## Scope\nPersist jobs/snapshots in PostgreSQL; use a durable worker queue backed by PostgreSQL for MVP. Separate the web request lifecycle from Git, AST, and AI work. API returns graph metadata, groups, nodes/edges, source overlays, and file details with versions and coverage.\n\n## Acceptance criteria\n- [ ] Create analysis is idempotent on repo, pinned refs, analysis version, and grouping version; duplicate requests reuse work.\n- [ ] Job stages are queued/fetching/indexing/grouping/ready/partial/failed/cancelled, with retryable versus permanent error codes.\n- [ ] Graph metadata and group summaries arrive before detailed file/edge chunks; payload filters cannot produce dangling edges.\n- [ ] Source selection uses cached footprint overlays; an older response never replaces a newer selection.\n- [ ] Polling or SSE supports reconnect, monotonic progress, cancellation, and stale-version detection.\n- [ ] Resource limits bound files, bytes, CPU time, and concurrent jobs per installation; expensive jobs cannot exhaust web instances.\n- [ ] Graph result and file-detail endpoints enforce authorization independently of client state.\n- [ ] Query and payload budgets are measured on 1k/10k-file fixtures; contract includes explicit pagination/coverage for capped results.\n\n## Verification\nIntegration tests cover duplicate submissions, worker restart, cancellation, concurrent selection changes, partial graph paging, unauthorized snapshot IDs, and client reconnect."
+  },
+  {
+    "key": "GRAPH-02",
+    "title": "Implement deterministic island layout without movement on source selection",
+    "area": "graph",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "GRAPH-01",
+      "DATA-01",
+      "DATA-06"
+    ],
+    "body": "## Outcome\nPeople recognize the same repository map while changing the selected PRs or commits.\n\n## Scope\nPlace groups into separated labeled islands and file nodes within their assigned island. Compute layout from a repository snapshot and grouping revision, independent of which changes are highlighted. The backend supplies canonical identities, group membership, and typed edges.\n\n## Acceptance criteria\n- [ ] Identical snapshot + grouping revision + layout seed produces identical coordinates.\n- [ ] Adding/removing a PR or commit changes highlighting/counts without recomputing coordinates or resetting the camera.\n- [ ] Layout work runs in a worker, supports cancellation, settles, and does not continuously jiggle.\n- [ ] Stable IDs preserve surviving-node positions across an incremental refresh; added/deleted nodes update explicitly.\n- [ ] Island hulls include their files with legible labels; tiny/single-file groups, disconnected files, empty groups, and high-degree nodes are handled.\n- [ ] Manual regrouping previews movement and offers reset; camera and current file survive where still valid.\n- [ ] A giant-group fixture remains navigable and does not cover all other groups.\n\n## Validation\nDeterminism, bounds, cancellation, and unchanged-coordinates tests; visual review of sparse, dense, single-file, and disconnected fixtures. [D3 simulation guidance](https://d3js.org/d3-force/simulation) recommends workers for large static layouts; use a bounded simulation or another measured algorithm."
+  },
+  {
+    "key": "UX-02",
+    "title": "Build multi-PR and multi-commit selection with exact overlap feedback",
+    "area": "frontend",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "UX-01",
+      "GRAPH-02",
+      "DATA-04",
+      "DATA-07"
+    ],
+    "body": "## Outcome\nUsers select several changes and immediately see the union and overlap of affected files.\n\n## Scope\nOwn repository connect/switch/disconnect screens, authorized repository selection and initial analysis progress/recovery together with DATA-02 and DATA-07. Build the floating source bar and searchable selection overlay with separate PR and commit modes, selected chips, pagination, clear/apply actions, and a visible baseline. Consume canonical change-set results rather than deriving file identity from display labels.\n\n## Acceptance criteria\n- [ ] Default context is the repository default-branch HEAD resolved to an immutable SHA at analysis start; show the context branch/ref and SHA. Users may choose another authorized branch/commit; changing context creates a distinct snapshot, while selected PR overlays never change it implicitly.\n- [ ] Select/deselect multiple PRs or multiple commits with mouse and keyboard; mode switching preserves or explicitly resets incompatible selections.\n- [ ] Union counts deduplicate files. Overlap means a file occurs in ≥2 selected source change sets, not the sum of line counts.\n- [ ] Each circle can explain which selected sources changed it. Added/renamed/deleted files use the resolved identity rules.\n- [ ] Selecting zero sources shows repository context and an explicit prompt; no accidental zero-result/error ambiguity.\n- [ ] Loading, rate-limit, revoked access, missing/deleted source, partial file list, and stale analysis are visible with recovery actions.\n- [ ] Source updates are cancelable and latest-request-wins; incomplete results never appear as complete.\n- [ ] Changing selection preserves map geometry, zoom, and focus; only an explicit Fit command changes framing.\n- [ ] URL/share state contains stable repository/source IDs and camera state, with permission checks on reopening.\n\n## Validation\nIntegration fixtures cover duplicates, overlapping PRs, nonconsecutive commits, renames, rapid toggles, partial ingestion, and refresh. The sample design has 68 unique files for three PRs and 57 for two; those are demo fixtures, not production assumptions."
+  },
+  {
+    "key": "GRAPH-03",
+    "title": "Implement continuous pan, zoom, minimap, and semantic detail levels",
+    "area": "graph",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "GRAPH-02",
+      "UX-01"
+    ],
+    "body": "## Outcome\nThe prototype's stepped zoom becomes an actual continuous navigable graph.\n\n## Acceptance criteria\n- [ ] Pointer drag pans; wheel/trackpad and pinch zoom around a predictable anchor; +, −, Fit all, and Fit selected island are available without gestures.\n- [ ] Arrow pan controls and keyboard operations provide alternatives to dragging. Browser zoom and page navigation remain available.\n- [ ] Zoom has documented min/max values; Fit accounts for floating controls and the open inspector.\n- [ ] Minimap indicates the current viewport and can reposition it through click and keyboard controls.\n- [ ] Semantic zoom keeps island labels at overview, reveals priority filenames at medium zoom, and reveals local connection detail at close zoom. Collision checks prevent text piles.\n- [ ] Every rendered circle still identifies a single file; any hidden nodes/edges are reported as counts and can be explored. Aggregated group summaries do not masquerade as file circles.\n- [ ] Search, selection, and hovering bring relevant labels/connections forward without rendering every edge prominently.\n- [ ] Camera transitions honor reduced-motion preferences and can be interrupted by input.\n\n## Validation\nE2E pointer, touch, keyboard, resize, inspector-open, and browser-zoom scenarios. Verify that map location is retained when selection changes and that there are no stranded offscreen controls."
+  },
+  {
+    "key": "UX-03",
+    "title": "Build file search, neighbor focus, and an evidence-backed inspector",
+    "area": "frontend",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "UX-02",
+      "GRAPH-03"
+    ],
+    "body": "## Outcome\nA user can move from a high-level island to the exact files and connections needing review.\n\n## Acceptance criteria\n- [ ] Search matches basename and full path, supports duplicate basenames, and lists group/path context.\n- [ ] Selecting a result centers the file and opens a dismissible inspector; Escape closes it and returns focus.\n- [ ] Inspector exposes full path, change kind, source PR/commit links, additions/deletions when available, group breadcrumb, and direct GitHub diff links with correct ref/path.\n- [ ] Neighbor view distinguishes inbound and outbound typed connections and explains the direction. “Affected neighbors” is described as a review candidate, not verified breakage.\n- [ ] Selecting another file updates details and camera without losing the chosen change set.\n- [ ] No-results, absent diff, binary file, unsupported parser, removed file, and stale snapshot all have explicit messages.\n- [ ] Loading inspector details never blocks panning. Stale responses cannot overwrite a more recently selected file.\n- [ ] Closing the inspector preserves selection context; back to overview is explicit.\n\n## Validation\nE2E tests using duplicate names, renamed/deleted files, binary content, unsupported language, and cross-island relations. Verify deep links reopen the same repository snapshot and file or explain why unavailable."
+  },
+  {
+    "key": "UX-05",
+    "title": "Ship accessible graph alternatives and verify core review journeys",
+    "area": "accessibility",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "UX-03"
+    ],
+    "body": "## Outcome\nGraph review remains usable without precise pointer input, motion, color discrimination, or a WebGL canvas.\n\n## Acceptance criteria\n- [ ] A synchronized, virtualized file/island list exposes change kind, source overlap, group membership, connections, and inspector actions with semantic HTML.\n- [ ] Keyboard users can select sources, search, traverse results/islands, inspect files, pan/zoom by controls, and return focus; there are no traps.\n- [ ] Screen-reader announcements summarize completed updates and selected-file changes without announcing every animation/frame.\n- [ ] Status is not conveyed by green alone; visible focus, text labels, changed/overlap symbols, and high-contrast states are available.\n- [ ] Text, controls, labels, targets, focus visibility, and hover/focus content are evaluated against the applicable WCAG 2.2 AA criteria.\n- [ ] Reduced motion disables layout/camera animation, and mobile/narrow layouts expose the same core data and recovery actions.\n- [ ] Perform representative keyboard and screen-reader journeys plus automated accessibility checks; log failures and fix release-blocking defects.\n- [ ] Conduct a small task-based review: select three PRs, find an overlap file, explain one connection, and open its diff. Record observations without inventing success metrics.\n\n## Validation\nUse [WCAG 2.2](https://www.w3.org/TR/WCAG22/), documented browser/assistive-tech combinations, and manual evidence. Automated checks or Figma screenshots alone do not establish conformance.\n\n## Milestone boundary\nDeliver the accessible core review journey in M2 without depending on AI grouping. DEL-07 verifies the added AI grouping controls before the intelligence-enabled beta."
+  },
+  {
+    "key": "DEL-04",
+    "title": "Verify complete multi-source graph journeys in browsers",
+    "area": "delivery",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M2",
+    "dependencies": [
+      "DEL-02",
+      "DEL-03",
+      "DATA-07",
+      "UX-03",
+      "UX-05"
+    ],
+    "body": "## Outcome\nA user can complete the core Constellation workflow with correct data, useful recovery and keyboard access.\n\n## Dependency gate\nRun after DATA-07, UX-03 and UX-05 expose the working vertical slice. Link the final GitHub issue numbers for those dependencies before moving this issue to Ready.\n\n## Acceptance criteria\n- [ ] Browser journeys cover repository selection, multi-PR selection, multi-commit selection, overlap counts, island focus, file inspection and GitHub diff links.\n- [ ] Adding/removing sources updates highlights and counts while unchanged file layout positions stay stable.\n- [ ] Pan, pointer-centered zoom, fit, minimap, search and keyboard/list navigation complete without losing focus or trapping scroll.\n- [ ] The desktop graph region occupies at least 80% of viewport at 1600×1000, 1440×900 and 1280×720; overlays fit and can be dismissed.\n- [ ] Empty, loading, canceled, partial, rate-limited, stale and access-revoked states show explicit recoverable outcomes.\n- [ ] Chromium, Firefox and WebKit pass the core smoke journey; reduced motion and keyboard-only journeys are recorded.\n- [ ] Visual comparisons use the second Constellation Figma states only. The contribution-grid direction is absent.\n\n## Verification\nAttach automated reports, failure traces/screenshots and a short manual keyboard/screen-reader review. Use controlled auth stubs in PR CI; keep a separate authorized smoke test for actual GitHub access. Record browser versions and known unsupported behavior."
+  },
+  {
+    "key": "AI-01",
+    "title": "Define AI enrichment and evidence contracts over the canonical hierarchy",
+    "area": "ai",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M2",
+    "dependencies": [
+      "DATA-05",
+      "DATA-06"
+    ],
+    "body": "Consume DATA-06's deterministic hierarchy and DATA-05's repository evidence. Define the boundary where optional AI can propose semantic enrichment without changing canonical facts. Do not implement a second baseline grouping algorithm.\n\nAcceptance criteria:\n- [ ] Versioned GroupingRevision and MembershipDecision contracts extend the shared domain contract with snapshot/file/evidence IDs.\n- [ ] Baseline revisions wrap DATA-06 output without altering folder facts, file coverage or stable identifiers.\n- [ ] Semantic component/module names, primary memberships and optional secondary tags remain distinct from physical paths.\n- [ ] Proposed and accepted revisions have explicit states and provenance; every file has one primary island.\n- [ ] Selecting different PRs/commits leaves the grouping revision unchanged.\n- [ ] AI disabled, unavailable or unconfigured always returns the canonical baseline with honest source labels.\n\nVerification: contract tests against DATA-05/06 fixtures; all-files-once and foreign-evidence rejection assertions; selection invariance and no-provider fallback integration test."
+  },
+  {
+    "key": "DATA-08",
+    "title": "Refresh snapshots through verified, idempotent GitHub webhooks",
+    "area": "data",
+    "priority": "P1",
+    "size": "M",
+    "milestone": "M3",
+    "dependencies": [
+      "DATA-02",
+      "DATA-03",
+      "DATA-07"
+    ],
+    "body": "## Outcome\nNew commits and updated PRs are detected without aggressive polling or moving a user's current graph unexpectedly.\n\n## Scope\nSubscribe only to needed installation, installation_repositories, pull_request, and push events. Verify signature over raw body, deduplicate delivery ID, queue work, and invalidate affected mutable metadata.\n\n## Acceptance criteria\n- [ ] X-Hub-Signature-256 is validated with constant-time comparison before processing.\n- [ ] Duplicate and out-of-order delivery is safe; delivery IDs are persisted with bounded retention.\n- [ ] PR synchronize/base changes and relevant pushes mark existing analysis stale and enqueue incremental work.\n- [ ] UI receives a new-analysis-available event; apply-refresh preserves focus/pins when identities survive.\n- [ ] Installation deletion/repository removal invalidates authorization and purges or schedules purge of inaccessible cached data.\n- [ ] Missed delivery is recoverable by explicit refresh/reconciliation; webhook failure never corrupts immutable snapshots.\n- [ ] Webhook ingress responds promptly after durable enqueue rather than doing analysis inline.\n\n## Verification\nSignature fixtures, altered payloads, replay, out-of-order push/PR updates, force-push, removed installation, and redelivery after worker outage.\n\n## References\n[Signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)\n[Webhook delivery identifiers](https://docs.github.com/en/webhooks/webhook-events-and-payloads)"
+  },
+  {
+    "key": "AI-02",
+    "title": "Integrate a versioned Jev decision adapter and generative provider contract",
+    "area": "ai",
+    "priority": "P1",
+    "size": "M",
+    "milestone": "M3",
+    "dependencies": [
+      "AI-01"
+    ],
+    "body": "Use verified TypeSafe Jev for bounded decisions and a separate generative adapter for names/summaries. Do not implement Jev as a chat completion endpoint.\n\nAcceptance criteria:\n- [ ] Server-only typed DecisionProvider uses the official System One API or @typesafe-ai/sdk; Choice, Score and Noul responses have distinct validated shapes.\n- [ ] Discover account models via GET /v1/models, pin an evaluated version, and record the actual response model.\n- [ ] GenerativeProvider is independently configurable and uses schema-validated output; provider selection is recorded before intelligent release.\n- [ ] Contract tests cover success, absent optional confidence, unknown candidate IDs, invalid payload, auth failure, rate limits and timeout.\n- [ ] Missing credentials leaves the app in an honest deterministic mode, never a fake AI success.\n- [ ] Integration gate records configured credentials, account limits, reviewed data terms and an authorized redacted live smoke test; no key enters logs/client bundles.\n- [ ] Model/prompt/schema changes invalidate caches and require the evaluation gate.\n\nVerification: mocks in CI; opt-in smoke test outside normal CI with bounded budget. Primary references: https://api.typesafe.ai/redoc ; https://docs.typesafe.ai/sdk/javascript ; https://docs.typesafe.ai/models ."
+  },
+  {
+    "key": "AI-05",
+    "title": "Enforce AI data policy, cost budgets, caching and failure fallback",
+    "area": "ai",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M3",
+    "dependencies": [
+      "AI-02"
+    ],
+    "body": "Make external model analysis explicit, bounded and recoverable. Repository content is untrusted input and must not gain tool or policy authority.\n\nAcceptance criteria:\n- [ ] Provider calls are server-only; policy preview identifies fields/excerpts sent and disabled/local-only mode emits no provider traffic.\n- [ ] Exclusions and bounded retrieval remove configured sensitive paths, credentials, generated/vendor content before model submission; policy limitations are documented.\n- [ ] Repository instructions cannot alter prompt policy, trigger tools or choose arbitrary outbound destinations; model outputs are escaped and schema-validated.\n- [ ] Cache keys include tenant/repository, immutable snapshot, evidence digest, model version and prompt/schema/policy versions.\n- [ ] Budget reservation, deduplicated jobs, bounded concurrency/cancellation, retry limits and retry-header handling are implemented.\n- [ ] Timeout, invalid output, rate limit and budget exhaustion preserve a usable baseline and show a clear status.\n- [ ] Usage telemetry records tokens/latency/outcome without raw source/prompts/secrets by default.\n- [ ] Data retention/deletion rules are explicit; do not claim enterprise ZDR for an unverified account.\n\nVerification: malicious repository fixture, blocked path fixture, disabled-mode outbound assertion, cache invalidation, retry/budget/cancel tests, and telemetry leak scan. References: https://docs.typesafe.ai/api/errors ; https://docs.typesafe.ai/legal ."
+  },
+  {
+    "key": "AI-03",
+    "title": "Generate evidence-grounded island proposals and Jev membership decisions",
+    "area": "ai",
+    "priority": "P1",
+    "size": "L",
+    "milestone": "M3",
+    "dependencies": [
+      "AI-01",
+      "AI-02",
+      "AI-05"
+    ],
+    "body": "Build the optional intelligence pipeline: concise candidate names from a generative provider, followed by Jev decisions among valid island IDs plus uncertain/none. Keep proposals distinct from accepted graph state.\n\nAcceptance criteria:\n- [ ] Evidence bundles contain bounded file/package/import facts with resolvable source IDs, not an unrestricted repository dump.\n- [ ] Generated component/module names and short rationales cite evidence; every referenced file/evidence ID is validated against the snapshot.\n- [ ] Jev membership questions include candidate descriptions and an uncertain option; thresholding uses evaluated model version and evidence coverage.\n- [ ] Low confidence, conflicting or missing evidence retains the baseline and marks a review item.\n- [ ] Confidence UI distinguishes model uncertainty from observed accuracy and evidence coverage.\n- [ ] Accepted dependency edges and changed-file counts cannot be invented or modified by AI.\n- [ ] New proposed grouping does not reshuffle the active graph until applied; preview reports changed memberships.\n\nVerification: end-to-end fixture with ambiguous shared module, misleading filenames and unsupported rationale; inject unknown IDs and confirm rejection; inspect model provenance in the proposed revision. References: https://docs.typesafe.ai/primitives/choice ; https://docs.typesafe.ai/confidence ."
+  },
+  {
+    "key": "AI-04",
+    "title": "Persist grouping overrides, stable revisions and undo APIs",
+    "area": "ai",
+    "priority": "P1",
+    "size": "L",
+    "milestone": "M3",
+    "dependencies": [
+      "AI-01",
+      "AI-03"
+    ],
+    "body": "Implement the grouping service/API that supports correction of semantic islands. UX-04 owns review controls and rendering; this issue owns durable state, validations and mutation behavior.\n\nAcceptance criteria:\n- [ ] Typed APIs expose preview/diff, rename, move file, merge/split island, accept/reject and undo without allowing canonical repository facts to change.\n- [ ] Each mutation creates an atomic versioned revision with provenance and previous values; stale concurrent edits produce a reviewable conflict.\n- [ ] One primary membership per file and full file coverage remain invariant after every operation.\n- [ ] Manual decisions take precedence over later model refresh; changed files without manual overrides can be reconsidered.\n- [ ] Confirmed rename lineage migrates overrides; ambiguous delete/recreate or split cases appear in a review queue.\n- [ ] Selection changes never discard overrides or change stable island IDs.\n- [ ] Revision responses provide stable mappings and changed-membership deltas for the graph's transition/focus handling.\n\nVerification: persistence/undo/reload round trip, concurrent revision conflict, rename/delete fixtures and API contract integration with UX-04. The graph workstream owns transitions, review panel and camera/input."
+  },
+  {
+    "key": "UX-04",
+    "title": "Expose AI and Jev grouping with rationale, confidence, and reversible overrides",
+    "area": "frontend",
+    "priority": "P1",
+    "size": "M",
+    "milestone": "M3",
+    "dependencies": [
+      "UX-03",
+      "GRAPH-02",
+      "AI-03",
+      "AI-04"
+    ],
+    "body": "## Outcome\nAI helps simplify the map while users can inspect and correct its grouping decisions.\n\n## Scope\nIntegrate the intelligence service's versioned grouping proposal. Jev is the verified TypeSafe decision model. Consume the AI-02 adapter contract and its account/model validation gate; do not invent an SDK or unsupported capability.\n\n## Acceptance criteria\n- [ ] Show current grouping source: folders, deterministic code analysis, approved AI/Jev proposal, or manual override.\n- [ ] Each proposed island has a name, supporting file/path/import evidence, and confidence/uncertainty metadata.\n- [ ] Grouping review previews changed membership and movement before apply; rename/move/merge/split overrides are reversible and persisted separately from generated suggestions.\n- [ ] AI failure, absent provider, timeout, budget exhaustion, and invalid output retain a usable deterministic folder/module view.\n- [ ] AI-generated summaries are labeled; model output cannot change confirmed source facts or directly execute instructions.\n- [ ] Applying a grouping creates a revision; undo restores both membership and prior layout.\n- [ ] “Why this group?” works from the selected island and file inspector, with a readable explanation rather than raw model traces.\n\n## Validation\nContract fixtures cover conflicting grouping, low confidence, invalid IDs, unavailable Jev integration, and user overrides across refresh. Dependency: validated intelligence/provider contract from backend workstream."
+  },
+  {
+    "key": "AI-06",
+    "title": "Evaluate grouping quality and gate AI rollout against the baseline",
+    "area": "ai",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M3",
+    "dependencies": [
+      "AI-03",
+      "AI-04",
+      "AI-05",
+      "DEL-03"
+    ],
+    "body": "Establish evidence that AI + Jev improves navigation without corrupting the graph. A credible deterministic MVP can ship before this gate; enabled intelligence cannot.\n\nAcceptance criteria:\n- [ ] Frozen, human-reviewed holdout fixtures cover monorepos, feature/layered/shared architectures, ambiguous names, unsupported languages and malicious text.\n- [ ] Compare deterministic baseline, generative proposals and Jev-gated results on membership agreement, review rate, stability, evidence validity, abstention, latency and cost.\n- [ ] Tune thresholds on a separate set; record model/prompt/policy versions and quality targets before release.\n- [ ] Hard gates: no unknown IDs accepted, no hidden source transfer when disabled, manual overrides preserved, and all provider failures retain a usable baseline.\n- [ ] Confidence values are assessed with reliability/selective-accuracy measurements rather than presented as guaranteed correctness.\n- [ ] Feature flag, canary rollout, rollback and model-version upgrade checklist exist; failed gate leaves intelligence disabled with explicit product wording.\n- [ ] Publish a concise evaluation report with limitations and reproducible commands, using synthetic/authorized examples only.\n\nVerification: deterministic CI subset plus explicit bounded live evaluation run; independently review report before enabling intelligence. The delivery release task links this report and gate result."
+  },
+  {
+    "key": "GRAPH-04",
+    "title": "Enforce graph performance budgets and graceful large-repository degradation",
+    "area": "graph",
+    "priority": "P1",
+    "size": "M",
+    "milestone": "M4",
+    "dependencies": [
+      "GRAPH-03",
+      "UX-03",
+      "UX-05"
+    ],
+    "body": "## Outcome\nLarge repositories stay responsive and accurately communicate reduced detail.\n\n## Proposed release budgets\nMeasure and revise with explicit evidence on a documented reference laptop/browser: warm selection updates p95 ≤250ms for 2,000 files / 8,000 edges; pan/zoom p95 frame ≤33ms; no sustained main-thread stall >100ms during layout; first useful view after graph data is available ≤2s. These are targets, not current results.\n\n## Acceptance criteria\n- [ ] Benchmarks cover the 212-file design fixture, 2k/8k MVP envelope, and a 10k/40k stress fixture.\n- [ ] Record hardware, browser, fixture seed, cold/warm state, layout/render timings, frame percentiles, and memory.\n- [ ] Worker cancellation, viewport culling, edge/label detail suppression, and incremental updates are implemented where measured bottlenecks justify them.\n- [ ] Larger-than-supported graphs offer clearly labeled scope filters/group exploration rather than silently dropping files.\n- [ ] WebGL context loss and worker failure preserve the source selection and show list fallback plus retry.\n- [ ] Resize/dispose/reopen tests catch duplicate event handlers, leaked workers, and growing buffers.\n- [ ] Continuous integration catches material regressions with a stable benchmark; manual GPU testing covers behavior CI cannot represent.\n\n## Validation\nAttach benchmark artifacts and profiling captures to the issue. Do not substitute “supports thousands of nodes” marketing claims for measured acceptance."
+  },
+  {
+    "key": "DATA-09",
+    "title": "Gate beta on graph correctness, isolation, and large-repository evidence",
+    "area": "data",
+    "priority": "P0",
+    "size": "M",
+    "milestone": "M4",
+    "dependencies": [
+      "DATA-04",
+      "DATA-05",
+      "DATA-07",
+      "DATA-08",
+      "DEL-03"
+    ],
+    "body": "## Outcome\nBeta ships with evidence that file counts, imports, access control, and partial-coverage behavior are trustworthy.\n\n## Scope\nCreate deterministic fixture repos and backend end-to-end gates that compare analysis results to Git ground truth. Coordinate UX performance and AI evaluation suites rather than duplicating them.\n\n## Acceptance criteria\n- [ ] Golden snapshots prove unique-file/overlap counts for all source semantics and rename/delete cases.\n- [ ] At least one controlled repository exercises API pagination/truncation and at least one 10k-file fixture exercises budgets and progressive delivery.\n- [ ] Every edge has a resolvable evidence reference or an explicit unsupported status; no inference is presented as observed dependency.\n- [ ] Cross-tenant object IDs, revoked access, malicious paths, oversize source, malformed syntax, and archive traversal are denied or safely bounded.\n- [ ] Cache eviction, source retention, installation removal, and account disconnect are exercised.\n- [ ] An operational runbook documents job recovery, rate exhaustion, failed webhook replay, and analyzing partial results.\n- [ ] Release evidence records hardware/service conditions and actual timings, not unverified performance claims.\n\n## Verification\nCI gates contracts and Git golden fixtures; staging checks run resource/isolation scenarios and publish a concise correctness/coverage report. Beta is blocked by unexplained file-count discrepancies or missing authorization checks."
+  },
+  {
+    "key": "DEL-05",
+    "title": "Establish performance and failure-recovery release evidence",
+    "area": "delivery",
+    "priority": "P1",
+    "size": "L",
+    "milestone": "M4",
+    "dependencies": [
+      "DEL-04",
+      "GRAPH-04",
+      "DATA-09"
+    ],
+    "body": "## Outcome\nThe supported graph size and service behavior are based on repeatable measurements.\n\n## Acceptance criteria\n- [ ] Consume GRAPH-04 renderer evidence and DATA-09 backend correctness evidence, then run the integrated application against the design fixture plus seeded 2,000-file/8,000-edge and 10,000-file/40,000-edge graphs using a recorded hardware, browser, build and network profile. Avoid duplicating their implementation benchmarks.\n- [ ] Report cold/warm load, main-thread tasks, memory, pan frame time, selection response and analysis phase durations separately.\n- [ ] Initial targets for the 2,000-file graph: p95 warm selection feedback at most 250 ms and hover response below 100 ms, p95 pan frame time at most 33 ms, first useful cached graph within 2 seconds after authenticated response on the declared network.\n- [ ] Larger graphs degrade explicitly through culling/progressive detail and show complete counts; they never silently drop files.\n- [ ] Cancellation stops obsolete jobs/work; repeated selection does not leak workers, listeners, memory or queued provider requests.\n- [ ] Worker restart, API timeout, transient GitHub failure and model outage recover without corrupting stored results or reporting a partial graph as complete.\n- [ ] A regression report records achieved capacity and residual limits; failed targets have linked remediation before beta acceptance.\n\n## Verification\nRun repeated measurements with fixed seeds and publish percentile reports, profiler traces and failure-injection results. Treat the budgets as proposed targets until measured; align renderer-specific thresholds with the graph lane's benchmark issue."
+  },
+  {
+    "key": "DEL-06",
+    "title": "Review trust boundaries and resolve beta security findings",
+    "area": "delivery",
+    "priority": "P0",
+    "size": "L",
+    "milestone": "M4",
+    "dependencies": [
+      "DEL-04",
+      "DATA-08",
+      "AI-04",
+      "AI-05",
+      "UX-04"
+    ],
+    "body": "## Outcome\nPublic-beta code and deployment configuration have an evidenced review of the application's actual trust boundaries.\n\n## Acceptance criteria\n- [ ] Document data flows and boundaries for user sessions, GitHub installations, cached snapshots, jobs and AI providers.\n- [ ] Test cross-user/repository access, revoked access and cache isolation; cached data cannot bypass current authorization.\n- [ ] Validate webhook signatures/replays where webhooks are used and enforce bounded request/body/job limits.\n- [ ] Repository archives/paths, Markdown, diff text and model output are treated as untrusted data; analyze without running repository scripts or installing its dependencies.\n- [ ] Test path traversal, oversized inputs, injected HTML/links, source-to-model instruction attacks and unauthorized URL fetching against implemented boundaries.\n- [ ] Logs, traces, browser bundles and published artifacts contain no credentials or private source by default; retention/deletion paths are exercised.\n- [ ] Findings have severity, reproduction and resolution evidence; no unresolved critical/high finding ships.\n\n## Verification\nAttach the threat model, automated negative tests, manual review notes and dependency scan triage. A clean scanner is not proof of security. Coordinate with the data and AI owners for the implementation-specific controls rather than creating duplicate integration tasks."
+  },
+  {
+    "key": "DEL-07",
+    "title": "Prepare and rehearse the documented beta release",
+    "area": "delivery",
+    "priority": "P1",
+    "size": "M",
+    "milestone": "M4",
+    "dependencies": [
+      "DEL-05",
+      "DEL-06",
+      "AI-06",
+      "UX-04"
+    ],
+    "body": "## Outcome\nA reproducible beta release can be deployed, observed and rolled back by a maintainer.\n\n## Acceptance criteria\n- [ ] Document the owner-approved code license, selected hosting, environment variables, migrations, worker concurrency, quota/cost limits and explicit ownership of credentials.\n- [ ] CI builds versioned artifacts; a trusted release path separates preview/staging from production and uses least-privilege secrets.\n- [ ] Readiness checks and aggregate operational metrics cover job failures, queue age, analysis duration, GitHub rate limits and provider cost without logging source or tokens.\n- [ ] Rehearse deployment, database migration, backup/restore where persistence is used, rollback and provider-disable fallback in staging.\n- [ ] Publish a supported-capability matrix: language analysis, repository limits, partial-data behavior, available/verified providers and inaccessible Jev integration if unresolved.\n- [ ] Release notes and demo onboarding link the Constellation design and a working example; known issues are visible.\n- [ ] Repeat keyboard, screen-reader, reduced-motion and focus-return journeys for AI grouping controls added after M2.\n- [ ] Tag/release acceptance links browser, performance, security and AI evaluation evidence.\n\n## Verification\nRecord a staging smoke-test and rollback rehearsal with artifact identifiers. AI-06 gates intelligence-enabled beta; a clearly labeled deterministic-only preview may ship earlier under M2 without claiming the Jev integration is complete. This issue plans hosting/deployment work; creating the planning repository itself does not deploy the application."
+  }
+]
