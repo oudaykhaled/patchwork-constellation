@@ -31,7 +31,7 @@ describe('file review evidence', () => {
     expect(findFiles(live, 'missing')).toEqual([]);
   });
   it('exposes absent, binary, unsupported and stale states without treating no edge as no dependency', () => {
-    const file = { ...live.nodes[0]!, path: 'assets/banner.png', status: 'binary' as const, presence: 'deleted' as const, importCoverage: 'unsupported' };
+    const file = { ...live.nodes[0]!, path: 'assets/banner.png', status: 'binary' as const, presence: 'deleted' as const, importCoverage: 'unsupported' as const };
     const messages = fileAvailability({ ...live, stale: true }, file, []);
     expect(messages.join(' ')).toMatch(/Removed file/);
     expect(messages.join(' ')).toMatch(/Binary or asset/);

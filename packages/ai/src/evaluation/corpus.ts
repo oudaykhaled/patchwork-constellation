@@ -1,3 +1,4 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { createHash } from 'node:crypto';
 import type { GraphSnapshot } from '@patchwork/contracts';
 
@@ -45,7 +46,7 @@ export function snapshotForCase(item: EvaluationCase): GraphSnapshot {
     repository: { owner: 'synthetic', name: item.id, fullName: `synthetic/${item.id}`, defaultBranch: 'main', htmlUrl: `https://github.com/synthetic/${item.id}` },
     contextRef: 'main', contextSha: 'c'.repeat(40), createdAt: '2026-11-03T00:00:00.000Z',
     groups: item.groups.map(group => ({ ...group, origin: 'rules' })),
-    nodes: item.files.map(source => ({ id: source.id, path: source.path, groupId: source.baseline, presence: 'context', sourceIds: [] })),
+    nodes: item.files.map(source => ({ ...authoredFileFacts(source.path.endsWith('.rs') ? 'unsupported' : 'complete'), id: source.id, path: source.path, groupId: source.baseline, presence: 'context', sourceIds: [] })),
     edges: item.imports.map(([source, target], index) => ({ id: `${item.id}-e${index}`, source, target, kind: 'import', evidence: { path: item.files.find(file => file.id === source)!.path, specifier: target, resolver: 'authored-evaluation-golden', contextSha: 'c'.repeat(40) } })),
     sources: [], coverage: item.id === 'hold-unsupported' ? { status: 'partial', reasons: ['Rust imports are not supported by this fixture resolver.'] } : { status: 'complete', reasons: [] },
   };

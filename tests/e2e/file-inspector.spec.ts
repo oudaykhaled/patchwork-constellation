@@ -1,3 +1,4 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { createHash } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { demoSnapshot } from '../../packages/fixtures/src/index';
@@ -9,10 +10,10 @@ const fixture: GraphSnapshot = {
   repository: { owner: 'example', name: 'review', fullName: 'example/review', defaultBranch: 'main', htmlUrl: 'https://github.com/example/review' },
   groups: [{ id: 'alpha', label: 'Alpha module', origin: 'rules' }, { id: 'beta', label: 'Beta module', origin: 'rules' }],
   nodes: [
-    { id: 'a', path: 'alpha/index.ts', groupId: 'alpha', sourceIds: ['pr:1'], status: 'renamed', importCoverage: 'complete' },
-    { id: 'b', path: 'beta/index.ts', groupId: 'beta', sourceIds: ['pr:1'], importCoverage: 'complete' },
-    { id: 'c', path: 'assets/removed.png', groupId: 'beta', sourceIds: ['pr:1'], status: 'binary', presence: 'deleted', importCoverage: 'unsupported' },
-    { id: 'd', path: 'services/task.py', groupId: 'beta', sourceIds: [], importCoverage: 'unsupported' },
+    { ...authoredFileFacts('complete'), id: 'a', path: 'alpha/index.ts', groupId: 'alpha', sourceIds: ['pr:1'], status: 'renamed', importCoverage: 'complete' },
+    { ...authoredFileFacts('complete'), id: 'b', path: 'beta/index.ts', groupId: 'beta', sourceIds: ['pr:1'], importCoverage: 'complete' },
+    { ...authoredFileFacts('unsupported'), id: 'c', path: 'assets/removed.png', groupId: 'beta', fileKind: 'binary', sourceIds: ['pr:1'], status: 'binary', presence: 'deleted' },
+    { ...authoredFileFacts('unsupported'), id: 'd', path: 'services/task.py', groupId: 'beta', sourceIds: [] },
   ],
   edges: [{ id: 'a-b', source: 'a', target: 'b', kind: 'type-import', evidence: { path: 'alpha/index.ts', line: 3, specifier: '../beta', resolver: 'typescript-ast', snapshotSha: head } }],
   sources: [{ id: 'pr:1', kind: 'pr', number: 1, title: 'Pinned rename and asset deletion', label: '#1', baseSha: base, headSha: head, comparisonKind: 'merge-base', url: 'https://github.com/example/review/pull/1', files: [
@@ -60,7 +61,7 @@ test('context coverage and selected-head evidence remain separate, including sou
   const context = 'd'.repeat(40);
   const snapshot = structuredClone(fixture);
   snapshot.contextSha = context;
-  snapshot.nodes[0] = { ...snapshot.nodes[0]!, importCoverage: 'partial', importReasons: ['Context resolver budget reached.'], externalImports: [{ specifier: 'react', line: 2, reason: 'External package' }], unresolvedImports: [{ specifier: './missing', line: 4, reason: 'No inventoried target' }] };
+  snapshot.nodes[0] = { ...snapshot.nodes[0]!, importCoverage: 'partial', importReasons: ['Context resolver budget reached.'], externalImports: [{ specifier: 'react', line: 2, kind: 'import', reason: 'External package' }], unresolvedImports: [{ specifier: './missing', line: 4, kind: 'import', reason: 'No inventoried target' }] };
   snapshot.nodes[1] = { ...snapshot.nodes[1]!, presence: 'source-only', importCoverage: 'unsupported' };
   snapshot.edges[0]!.evidence = { path: 'alpha/index.ts', line: 3, resolver: 'context-resolver', snapshotSha: context };
   snapshot.sources[0] = { ...snapshot.sources[0]!, importHeadSha: head, importCoverage: { status: 'partial', reasons: ['Only outgoing changed-file imports are parsed.'] }, importFiles: [{ fileId: 'a', path: 'alpha/index.ts', status: 'partial', reasons: ['Head identity coverage is bounded.'] }, { fileId: 'b', path: 'beta/index.ts', status: 'unsupported', reasons: ['Source-head file was not parsed.'] }], importEdges: [{ id: 'head-a-b', source: 'a', target: 'b', kind: 'dynamic-import', sourceId: 'pr:1', provenance: 'selected-head', evidence: { sourceId: 'pr:1', path: 'alpha/index.ts', line: 6, resolver: 'head-resolver', snapshotSha: head } }] };

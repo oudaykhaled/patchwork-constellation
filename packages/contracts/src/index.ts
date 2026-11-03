@@ -33,18 +33,47 @@ export const RepositorySchema = z.object({
 }).passthrough().refine(repository => repository.fullName.toLowerCase() === `${repository.owner}/${repository.name}`.toLowerCase(), { path: ['fullName'], message: 'Repository identity does not match owner/name' });
 export type Repository = z.infer<typeof RepositorySchema>;
 
+export const ImportKindSchema = z.enum(['import', 'reexport', 'type-import', 'dynamic-import']);
+export const FileKindSchema = z.enum(['file', 'binary', 'generated', 'symlink', 'submodule', 'lfs-pointer', 'unknown']);
+export const FileModeSchema = z.enum(['100644', '100755', '120000', '160000']);
+export const FileImportReferenceSchema = z.object({
+  specifier: z.string(), line: z.number().int().positive(), kind: ImportKindSchema,
+  resolutionMode: z.enum(['import', 'require']).optional(), reason: z.string().min(1),
+}).strict();
 export const FileNodeSchema = z.object({
   id: z.string().min(1),
   path: RepositoryPathSchema,
   groupId: z.string().min(1),
   language: z.string().optional(),
+  /** Canonical inventory classification; unknown never means successfully parsed. */
+  fileKind: FileKindSchema,
+  /** Deprecated presentation alias; new producers use fileKind. */
   fileType: z.enum(['source', 'binary', 'generated', 'symlink', 'submodule', 'other']).optional(),
   ancestry: z.array(z.object({ previousPath: RepositoryPathSchema, previousFileId: IdSchema.optional(), commitSha: GitShaSchema.optional(), confidence: z.enum(['confirmed', 'ambiguous']) })).optional(),
-  status: ChangeStatusSchema.optional(),
-  presence: z.enum(['context', 'added', 'deleted', 'source-only']).optional(),
-  sourceIds: z.array(z.string()),
-}).passthrough();
+  /** Inventory/ghost presentation status; selected-source deltas live in FileChange. */
+  status: ChangeStatusSchema,
+  presence: z.enum(['context', 'added', 'deleted', 'source-only']),
+  sourceIds: z.array(IdSchema),
+  importCoverage: CoverageStatusSchema,
+  importReasons: z.array(z.string()),
+  externalImports: z.array(FileImportReferenceSchema),
+  unresolvedImports: z.array(FileImportReferenceSchema),
+  blobSha: z.string().min(1).optional(), fileMode: FileModeSchema.optional(), size: z.number().int().nonnegative().optional(),
+  folder: FolderPathSchema.optional(), folderId: IdSchema.optional(), componentIds: z.array(IdSchema).optional(),
+  lineageAliases: z.array(RepositoryPathSchema).optional(), ambiguousLineage: z.boolean().optional(), binary: z.boolean().optional(),
+}).passthrough().superRefine((node, ctx) => {
+  const fail = (message: string) => ctx.addIssue({ code: 'custom', message });
+  if (node.importCoverage !== 'complete' && !node.importReasons.some(reason => reason.trim())) fail('Incomplete file dependency extraction requires a reason');
+  if (node.fileKind !== 'file' && node.importCoverage === 'complete') fail('Unknown or excluded file classification cannot imply complete dependency extraction');
+  if (node.unresolvedImports.length && node.importCoverage === 'complete') fail('Unresolved imports cannot have complete dependency coverage');
+});
 export type FileNode = z.infer<typeof FileNodeSchema>;
+
+/** Explicit inventory/fixture construction aid; GraphSnapshot parsing never supplies missing facts. */
+export function unparsedFileFacts(reason: string): Pick<FileNode, 'fileKind' | 'presence' | 'status' | 'importCoverage' | 'importReasons' | 'externalImports' | 'unresolvedImports'> {
+  if (!reason.trim()) throw new Error('Unparsed file facts require an explicit reason');
+  return { fileKind: 'unknown', presence: 'context', status: 'unchanged', importCoverage: 'partial', importReasons: [reason], externalImports: [], unresolvedImports: [] };
+}
 
 const HierarchyEvidenceSchema = z.object({ kind: z.enum(['path-rule', 'manifest', 'repository-mapping']), path: FolderPathSchema, rule: z.string().min(1) }).strict();
 export const GroupSchema = z.object({
@@ -81,7 +110,7 @@ export const ImportEdgeSchema = z.object({
   id: z.string().min(1),
   source: z.string().min(1),
   target: z.string().min(1),
-  kind: z.enum(['import', 'reexport', 'type-import', 'dynamic-import']),
+  kind: ImportKindSchema,
   direction: z.literal('source-to-target').optional(),
   provenance: z.enum(['context', 'selected-head']).optional(),
   sourceId: IdSchema.optional(),
@@ -239,6 +268,7 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
     const evidence = edge.evidence;
     const fail = (message: string) => ctx.addIssue({ code: 'custom', path: ['edges', index, 'evidence'], message });
     if (edge.provenance === 'selected-head' || edge.sourceId || (typeof evidence === 'object' && evidence.sourceId)) fail('Selected-head imports must stay in their source layer');
+    if (snapshot.mode === 'github' && !['complete', 'partial'].includes(nodeById.get(edge.source)?.importCoverage ?? 'failed')) fail('Context imports require analyzed context-file coverage');
     if (snapshot.mode === 'github' && (!evidence || typeof evidence === 'string' || !evidence.snapshotSha || !evidence.resolver)) fail('Observed import requires pinned evidence and resolver');
     if (evidence && typeof evidence !== 'string') {
       if (evidence.snapshotId && evidence.snapshotId !== snapshot.id) fail('Foreign snapshot evidence');

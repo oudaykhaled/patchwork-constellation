@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 import ts from 'typescript';
-import type { Coverage, FileNode, ImportEdge } from '@patchwork/contracts';
+import { FileModeSchema, type Coverage, type FileNode, type ImportEdge } from '@patchwork/contracts';
 import { GitHubClient, type RepositoryAddress } from '@patchwork/github';
 import { applyHierarchy, deriveRepositoryHierarchy, nodeForPath, type ManifestBoundary } from './groups';
 import { importIsInternal, isSourceFile, languageFor, resolveImport, scanImports, RESOLVER_VERSION, type ResolverOptions, type WorkspacePackage } from './imports';
@@ -47,21 +47,22 @@ export async function buildStaticGraph(client: GitHubClient, address: Repository
   const inventory = allFiles.slice(0, maxFiles);
   if (allFiles.length > inventory.length) reasons.push(`Inventory is limited to ${maxFiles.toLocaleString()} of ${allFiles.length.toLocaleString()} files. No complete-repository claim is made.`);
   let nodes: FileNode[] = inventory.map(entry => {
-    let fileKind = 'file', importCoverage = 'pending'; const importReasons: string[] = [];
+    let fileKind: FileNode['fileKind'] = 'file', importCoverage: FileNode['importCoverage'] = 'partial'; const importReasons: string[] = [];
     if (entry.type === 'commit') { fileKind = 'submodule'; importCoverage = 'excluded'; importReasons.push('Git submodule is represented but its repository is not followed.'); }
     else if (entry.mode === '120000') { fileKind = 'symlink'; importCoverage = 'excluded'; importReasons.push('Symbolic-link target is not followed.'); }
     else if (generatedPath(entry.path)) { fileKind = 'generated'; importCoverage = 'excluded'; importReasons.push('Generated/vendor/build content is inventoried but excluded from dependency extraction.'); }
     else if (binaryPath(entry.path)) { fileKind = 'binary'; importCoverage = 'unsupported'; importReasons.push('Binary asset has no JavaScript/TypeScript import extraction.'); }
     else if (!isSourceFile(entry.path)) { importCoverage = 'unsupported'; importReasons.push('Dependency extraction supports JavaScript and TypeScript only.'); }
     else if ((entry.size ?? 0) > MAX_SOURCE_BYTES) { importCoverage = 'excluded'; importReasons.push('Source exceeds the 80KB parse limit.'); }
-    return { ...nodeForPath(address.fullName, entry.path), language: languageFor(entry.path), blobSha: entry.sha, fileMode: entry.mode, size: entry.size, fileKind, importCoverage, importReasons };
+    else importReasons.push('Dependency extraction has not yet run for this source blob.');
+    return { ...nodeForPath(address.fullName, entry.path), language: languageFor(entry.path), blobSha: entry.sha, fileMode: FileModeSchema.parse(entry.mode), size: entry.size, fileKind, importCoverage, importReasons };
   });
   const paths = new Set(nodes.map(node => node.path));
   const nodeByPath = new Map(nodes.map(node => [node.path, node]));
-  const eligible = inventory.filter(entry => nodeByPath.get(entry.path)?.importCoverage === 'pending' && (!options.parsePaths || options.parsePaths.has(entry.path)));
+  const eligible = inventory.filter(entry => nodeByPath.get(entry.path)?.importCoverage === 'partial' && (!options.parsePaths || options.parsePaths.has(entry.path)));
   const parseEntries = eligible.slice(0, maxSourceFiles);
   const parseSet = new Set(parseEntries.map(entry => entry.path));
-  for (const node of nodes) if (node.importCoverage === 'pending' && !parseSet.has(node.path)) {
+  for (const node of nodes) if (node.importCoverage === 'partial' && !parseSet.has(node.path)) {
     node.importCoverage = 'partial'; node.importReasons = [options.parsePaths && !options.parsePaths.has(node.path) ? 'Selected-head analysis is scoped to directly changed files.' : 'Source was not parsed because the configured file budget was reached.'];
   }
   if (eligible.length > parseEntries.length) reasons.push(`Import analysis covers ${parseEntries.length} of ${eligible.length} eligible JavaScript/TypeScript files; unparsed files remain visible.`);
@@ -138,7 +139,7 @@ export async function buildStaticGraph(client: GitHubClient, address: Repository
       if (text.startsWith('version https://git-lfs.github.com/spec/v1\n') || text.startsWith('version https://git-lfs.github.com/spec/v1\r\n')) { node.fileKind = 'lfs-pointer'; node.importCoverage = 'excluded'; node.importReasons = ['Git LFS pointer is inventoried without downloading its target.']; return; }
       if (text.includes('\0')) { node.fileKind = 'binary'; node.importCoverage = 'unsupported'; node.importReasons = ['Binary source blob is not parsed.']; return; }
       const resolver = resolverFor(entry.path); const scan = scanImports(text, entry.path, entry.sha);
-      const fileReasons = [...(resolver.coverageReasons ?? []), ...scan.reasons]; const externalImports: unknown[] = []; const unresolvedImports: unknown[] = [];
+      const fileReasons = [...(resolver.coverageReasons ?? []), ...scan.reasons]; const externalImports: FileNode['externalImports'] = []; const unresolvedImports: FileNode['unresolvedImports'] = [];
       for (const reference of scan.references) {
         const target = resolveImport(entry.path, reference.specifier, paths, { ...resolver, resolutionMode: reference.resolutionMode });
         if (!target) {

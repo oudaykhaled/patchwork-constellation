@@ -1,3 +1,4 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GraphSnapshot } from '@patchwork/contracts';
 import { GroupingService } from './index';
@@ -8,7 +9,7 @@ import { testEvaluationManifest } from './evaluation/test-support';
 const snapshot = (): GraphSnapshot => ({
   schemaVersion: '1', id: 'policy-snapshot', repository: { owner: 'example', name: 'repo', fullName: 'example/repo', defaultBranch: 'main', htmlUrl: 'https://github.com/example/repo' },
   contextRef: 'main', contextSha: 'a'.repeat(40), createdAt: '2026-11-03T00:00:00Z', mode: 'demo', coverage: { status: 'complete', reasons: [] }, sources: [],
-  groups: [{ id: 'group', label: 'Core', origin: 'rules' }], nodes: [{ id: 'safe', path: 'src/core.ts', groupId: 'group', sourceIds: [] }], edges: [],
+  groups: [{ id: 'group', label: 'Core', origin: 'rules' }], nodes: [{ ...authoredFileFacts('complete'), id: 'safe', path: 'src/core.ts', groupId: 'group', sourceIds: [] }], edges: [],
 });
 function mockProviders(holdDiscovery?: (signal: AbortSignal) => Promise<void>) {
   return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -28,7 +29,7 @@ describe('external metadata policy', () => {
   it('filters defaults, configured globs and known credential-like metadata before preview or provider submission', async () => {
     const value = snapshot();
     const blocked = ['.env.local', 'vendor/pkg.ts', 'src/generated/schema.ts', 'bundle.min.js', 'bundle.js.map', 'team/private/code.ts', 'src/ghp_abcdefghijklmnopqrstuvwxyz123456.ts'];
-    value.nodes.push(...blocked.map((path, index) => ({ id: `blocked-${index}`, path, groupId: 'group', sourceIds: [] })));
+    value.nodes.push(...blocked.map((path, index) => ({ ...authoredFileFacts('partial'), id: `blocked-${index}`, path, groupId: 'group', sourceIds: [] })));
     value.groups[0]!.label = 'api_key=server-secret-value';
     const transport = mockProviders(); const grouping = service(transport, { excludedPaths: ['team/private/**'] });
     const preview = grouping.previewPolicy(value);

@@ -1,5 +1,10 @@
 import type { ChangeSource, FileChange, FileNode, GraphSnapshot, Group, ImportEdge } from '@patchwork/contracts';
 
+/** Explicit synthetic declaration, never a default for an unanalyzed real repository. */
+export function authoredFileFacts(coverage: FileNode['importCoverage']): Pick<FileNode, 'fileKind' | 'presence' | 'status' | 'importCoverage' | 'importReasons' | 'externalImports' | 'unresolvedImports'> {
+  return { fileKind: 'file', presence: 'context', status: 'unchanged', importCoverage: coverage, importReasons: [coverage === 'complete' ? 'Complete within the author-declared synthetic dependency graph; no live parser result is claimed.' : 'Dependency analysis is intentionally incomplete in this authored fixture.'], externalImports: [], unresolvedImports: [] };
+}
+
 /** Authored, synthetic repository. None of these source links claims a real PR exists. */
 export const DEMO_REPOSITORY = {
   owner: 'patchwork-demo',
@@ -110,6 +115,7 @@ function changedFile(node: FileNode, index: number): FileChange {
 
 function buildDemo(): GraphSnapshot {
   const nodes: FileNode[] = Object.entries(inventory).flatMap(([groupId, group]) => group.names.map((name, index) => ({
+    ...authoredFileFacts('complete'),
     id: `${groupId}-${index}`,
     path: group.prefix + name,
     groupId,
@@ -167,7 +173,7 @@ export function createScaleFixture(nodeCount = 2_000, edgeCount = 8_000, seed = 
   const next = () => { randomState ^= randomState << 13; randomState ^= randomState >>> 17; randomState ^= randomState << 5; return randomState >>> 0; };
   const groupCount = Math.min(12, nodeCount);
   const groups: Group[] = Array.from({ length: groupCount }, (_, i) => ({ id: `scale-group-${i}`, label: `Module ${i + 1}`, color: DEMO_GROUPS[i % DEMO_GROUPS.length]!.color, origin: 'rules' }));
-  const nodes: FileNode[] = Array.from({ length: nodeCount }, (_, i) => ({ id: `scale-file-${i}`, path: `src/module-${i % groupCount + 1}/file-${String(i).padStart(6, '0')}.ts`, groupId: groups[i % groupCount]!.id, sourceIds: [], language: 'TypeScript', presence: 'context', status: 'unchanged' }));
+  const nodes: FileNode[] = Array.from({ length: nodeCount }, (_, i) => ({ ...authoredFileFacts('complete'), id: `scale-file-${i}`, path: `src/module-${i % groupCount + 1}/file-${String(i).padStart(6, '0')}.ts`, groupId: groups[i % groupCount]!.id, sourceIds: [], language: 'TypeScript', presence: 'context', status: 'unchanged' }));
   const edges: ImportEdge[] = [];
   const seen = new Set<string>();
   const append = (from: number, to: number) => {
