@@ -50,6 +50,7 @@ Copy `.env.example` to `.env` only when configuring optional services. Values st
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Generative adapter credentials and a pinned naming model. |
 | `DATABASE_URL` | Optional PostgreSQL storage; see [storage setup](docs/STORAGE.md). |
 | `PORT` | Local HTTP port; defaults to 4310. |
+| `API_REQUESTS_PER_MINUTE` | Bounded local API request quota, 1–2400; defaults to 240. Browser test servers explicitly use 2400 for independent journeys. |
 
 Without both configured model providers, the graph retains deterministic grouping. External AI uses bounded metadata, validated IDs, request budgets and failure fallback. Live provider quality and account configuration require evaluation before an AI-enabled release. Manual grouping history is process-local in the default app configuration.
 
