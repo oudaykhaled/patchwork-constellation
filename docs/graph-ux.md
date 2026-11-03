@@ -40,3 +40,5 @@ MVP target: 2,000 files / 8,000 edges. Stress fixture: 10,000 / 40,000. Proposed
 
 The seven design states cover overview, zoomed-out islands, Authentication zoom, file-neighbor focus, two-PR selection, source overlay, and commit footprint. Implementation adds real continuous camera behavior, loading/error/partial/stale states, keyboard access, WebGL fallback, and non-demo data contracts.
 
+
+The implemented UX-01 handoff is the [interaction and meaning contract](INTERACTION_CONTRACT.md), including all seven reference states, file lifecycle representations, grouping semantics and responsive validation boundaries.

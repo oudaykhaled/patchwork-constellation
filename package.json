@@ -1,6 +1,7 @@
 {
   "name": "patchwork-constellation",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
@@ -14,7 +15,12 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "check": "pnpm typecheck && pnpm test && pnpm build"
+    "format:check": "node scripts/source-quality.mjs --format",
+    "format": "node scripts/source-quality.mjs --format --fix",
+    "lint": "node scripts/source-quality.mjs",
+    "test:quality": "node --test scripts/source-quality.test.mjs scripts/run-checks.test.mjs",
+    "check": "node scripts/run-checks.mjs check",
+    "check:browser": "node scripts/run-checks.mjs browser"
   },
   "dependencies": {
     "@fontsource/geist": "5.3.0",

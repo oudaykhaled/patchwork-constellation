@@ -16,6 +16,7 @@ export interface Island extends LayoutGroup, Point {
   rx: number; ry: number; nodes: PositionedFile[]; color: string;
 }
 export interface GraphLayout { nodes: PositionedFile[]; nodeById: Map<string, PositionedFile>; islands: Island[]; bounds: Bounds }
+export interface LayoutOptions { seed?: number }
 
 const PALETTE = ['#66BFA0', '#9D8FD4', '#6A9EC7', '#B8A073', '#7796C3', '#839DA0'];
 const PRESETS: [RegExp, number, number, number, number][] = [
@@ -33,8 +34,8 @@ export function hashString(value: string): number {
   return hash >>> 0;
 }
 
-export function layoutGraph(graph: GraphData): GraphLayout {
-  const groups = [...graph.groups];
+export function layoutGraph(graph: GraphData, options: LayoutOptions = {}): GraphLayout {
+  const groups = [...graph.groups].sort((a, b) => a.id.localeCompare(b.id));
   const known = new Set(groups.map(group => group.id));
   if (!known.has('__ungrouped') && graph.nodes.some(node => !known.has(node.groupId))) groups.push({ id: '__ungrouped', label: 'Ungrouped' });
   const grouped = new Map<string, LayoutFile[]>();
@@ -60,7 +61,7 @@ export function layoutGraph(graph: GraphData): GraphLayout {
     const ry = (preset ? preset[4] : 145) * density;
     const entryRank = (path: string) => /(^|\/)refresh\.ts$/.test(path) ? 0 : /(^|\/)handler\.ts$/.test(path) ? 1 : /(^|\/)index\.[cm]?[jt]sx?$/.test(path) ? 2 : 3;
     const files = [...(grouped.get(group.id) ?? [])].sort((a, b) => entryRank(a.path) - entryRank(b.path) || a.path.localeCompare(b.path) || a.id.localeCompare(b.id));
-    const groupSeed = hashString(group.id) / 0xffffffff * Math.PI * 2;
+    const groupSeed = hashString(options.seed ? `${group.id}:${options.seed}` : group.id) / 0xffffffff * Math.PI * 2;
     const placed = files.map((node, i): PositionedFile => {
       const angle = i * 2.399963229728653 + groupSeed;
       const radius = i === 0 ? 0 : Math.sqrt(i / Math.max(1, files.length - 1));
@@ -70,6 +71,20 @@ export function layoutGraph(graph: GraphData): GraphLayout {
     });
     return { ...group, x, y, rx, ry, color: group.color ?? PALETTE[slot >= 0 ? slot : index % PALETTE.length], nodes: placed };
   });
+  // A dominant island receives enough space for its own files, rather than
+  // burying small islands inside a fixed-size cloud. Ordinary design/scale
+  // fixtures keep their established placement.
+  if (islands.some(island => island.nodes.length > 200 && island.nodes.length > graph.nodes.length * .8)) {
+    let right = 40;
+    for (const island of islands) {
+      const factor = Math.max(1, Math.sqrt(island.nodes.length / 80) / density);
+      const oldX = island.x, oldY = island.y;
+      island.rx *= factor; island.ry *= factor;
+      island.x = right + island.rx; island.y = 80 + island.ry;
+      for (const node of island.nodes) { node.x = island.x + (node.x - oldX) * factor; node.y = island.y + (node.y - oldY) * factor; }
+      right = island.x + island.rx + 120;
+    }
+  }
   const minX = Math.min(0, ...islands.map(island => island.x - island.rx - 50));
   const minY = Math.min(0, ...islands.map(island => island.y - island.ry - 60));
   const maxX = Math.max(1600 * density, ...islands.map(island => island.x + island.rx + 50));
@@ -94,9 +109,19 @@ export function selectedMembership(graph: GraphData, selectedSourceIds: readonly
 export function preserveLayout(previous: GraphLayout, next: GraphLayout): GraphLayout {
   const previousIslands = new Map(previous.islands.map(island => [island.id, island]));
   const nodes: PositionedFile[] = [];
+  const occupied = next.islands.flatMap(island => {
+    const prior = previousIslands.get(island.id); return prior ? [prior] : [];
+  });
   const islands = next.islands.map(island => {
     const prior = previousIslands.get(island.id);
-    if (!prior) { nodes.push(...island.nodes); return island; }
+    if (!prior) {
+      // New islands cannot occupy surviving islands' remembered space.
+      const overlaps = occupied.some(other => Math.abs(other.x - island.x) < other.rx + island.rx + 60 && Math.abs(other.y - island.y) < other.ry + island.ry + 60);
+      const x = overlaps ? Math.max(0, ...occupied.map(other => other.x + other.rx)) + island.rx + 100 : island.x;
+      const placed = island.nodes.map(node => ({ ...node, x: node.x + x - island.x }));
+      const added = { ...island, x, nodes: placed };
+      occupied.push(added); nodes.push(...placed); return added;
+    }
     const placed = island.nodes.map(node => {
       const old = previous.nodeById.get(node.id);
       if (old && old.groupId === node.groupId) return { ...node, x: old.x, y: old.y };
@@ -107,10 +132,12 @@ export function preserveLayout(previous: GraphLayout, next: GraphLayout): GraphL
     nodes.push(...placed); return { ...island, x: prior.x, y: prior.y, rx: prior.rx, ry: prior.ry, nodes: placed };
   });
   const newGroups = islands.some(island => !previousIslands.has(island.id));
+  const minX = Math.min(previous.bounds.x, ...islands.map(island => island.x - island.rx - 50));
+  const minY = Math.min(previous.bounds.y, ...islands.map(island => island.y - island.ry - 60));
   const bounds = newGroups ? {
-    x: Math.min(previous.bounds.x, next.bounds.x), y: Math.min(previous.bounds.y, next.bounds.y),
-    width: Math.max(previous.bounds.x + previous.bounds.width, next.bounds.x + next.bounds.width) - Math.min(previous.bounds.x, next.bounds.x),
-    height: Math.max(previous.bounds.y + previous.bounds.height, next.bounds.y + next.bounds.height) - Math.min(previous.bounds.y, next.bounds.y),
+    x: minX, y: minY,
+    width: Math.max(previous.bounds.x + previous.bounds.width, ...islands.map(island => island.x + island.rx + 50)) - minX,
+    height: Math.max(previous.bounds.y + previous.bounds.height, ...islands.map(island => island.y + island.ry + 60)) - minY,
   } : previous.bounds;
   return { nodes, nodeById: new Map(nodes.map(node => [node.id, node])), islands, bounds };
 }
