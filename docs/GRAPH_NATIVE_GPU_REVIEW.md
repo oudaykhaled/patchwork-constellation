@@ -27,9 +27,9 @@ For another native browser or hardware path, record a separate row instead of co
 | --- | --- |
 | Native machine/installed driver inventory | Recorded; active renderer not established by this record. |
 | Dedicated software-reference2k budgets | Passed, linked above; pan-only frame percentiles. |
-| Native active GPU/backend screenshot | Unverified: the browser review policy blocked the internal diagnostic scheme. No workaround attempted. Maintainer confirmation remains required. |
-| Native graph pan/zoom/resize/source/Files observations | Recorded in [the native review](NATIVE_ZOOM_REVIEW.md). These establish native platform behavior, with active hardware acceleration still unverified. |
+| Native active GPU/backend | Maintainer checked Chrome's GPU diagnostics and confirmed **Hardware accelerated** on 2026-11-03. This is owner-reported evidence; no automated diagnostic screenshot or exact adapter measurement is claimed. The automated policy block was respected. |
+| Native graph pan/zoom/resize/source/Files observations | Recorded in [the native review](NATIVE_ZOOM_REVIEW.md). These establish native platform behavior, alongside the separate maintainer acceleration confirmation. |
 | Native browser200% zoom | Actual Windows Chrome menu, dimensions/DPR and complete short-height review flow were observed. Safe application screenshots are linked in [the native review](NATIVE_ZOOM_REVIEW.md). |
 | Accessibility/usability review | Excluded at the owner's explicit request on 2026-11-03; no conformance claim is made. |
 
-Until the native inspection is recorded with its actual backend and observations, the last acceptance item of #27 remains partial. Root's actual200% menu observation is useful native-zoom evidence but does not establish the active GPU. This checklist is a runnable review artifact, not a completed GPU review or a reason to mark the issue Done.
+The native behavior observations plus the maintainer's acceleration confirmation supply the scoped manual-platform evidence for #27. No multi-GPU matrix, physical GPU reset, native GPU timing or GPU-memory certification is inferred. Final combined checks and merge remain required before issue closure.
