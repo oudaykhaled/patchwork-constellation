@@ -39,3 +39,6 @@ Reconciled dependencies are encoded in [planning/issues.json](../planning/issues
 MVP target: 2,000 files / 8,000 edges. Stress fixture: 10,000 / 40,000. Proposed warm interaction budgets are p95 selection feedback ≤250ms, p95 pan/zoom frame ≤33ms, and useful view ≤2s after graph data arrives, on a documented reference machine. These are planning targets that require measurement. Larger scopes must explain filtering or detail reduction rather than silently hiding facts.
 
 The seven design states cover overview, zoomed-out islands, Authentication zoom, file-neighbor focus, two-PR selection, source overlay, and commit footprint. Implementation adds real continuous camera behavior, loading/error/partial/stale states, keyboard access, WebGL fallback, and non-demo data contracts.
+
+
+The implemented UX-01 handoff is the [interaction and meaning contract](INTERACTION_CONTRACT.md), including all seven reference states, file lifecycle representations, grouping semantics and responsive validation boundaries.
