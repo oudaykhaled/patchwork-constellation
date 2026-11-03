@@ -14,6 +14,7 @@ export interface ConstellationGraphProps {
   onFocusGroup?: (id: string | null) => void;
   searchQuery?: string;
   showImports?: boolean;
+  onOpenFiles?: () => void;
   className?: string;
   layoutSeed?: number;
   layoutPins?: Record<string, Point>;
@@ -38,7 +39,7 @@ function islandPath(context: CanvasRenderingContext2D, island: Island) {
   context.closePath();
 }
 
-export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, className = '', layoutSeed = 0, layoutPins }: ConstellationGraphProps) {
+export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, onOpenFiles, className = '', layoutSeed = 0, layoutPins }: ConstellationGraphProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cameraRef = useRef<Camera>(DEFAULT_CAMERA);
@@ -53,6 +54,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const [hoverPosition, setHoverPosition] = useState<Point>({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const [canvasFailed, setCanvasFailed] = useState(false);
+  const [canvasAttempt, setCanvasAttempt] = useState(0);
   const [reducedMotion, setReducedMotion] = useState(false);
   const { layout, layoutState, layoutError, resetLayout } = useSettledLayout(snapshot, layoutSeed, layoutPins);
   const framedRepository = useRef<string | null>(null);
@@ -197,7 +199,14 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       if (first) setCamera(fitCamera(latest.current.layout.bounds, rect.width, rect.height, 12)); else requestDraw();
     });
     observer.observe(host); return () => observer.disconnect();
-  }, [requestDraw, setCamera]);
+  }, [requestDraw, setCamera, canvasAttempt]);
+  useEffect(() => {
+    const canvas = canvasRef.current; if (!canvas) return;
+    const lost = (event: Event) => { event.preventDefault(); setCanvasFailed(true); };
+    const restored = () => { setCanvasFailed(false); setCanvasAttempt(value => value + 1); requestDraw(); };
+    canvas.addEventListener('contextlost', lost); canvas.addEventListener('contextrestored', restored);
+    return () => { canvas.removeEventListener('contextlost', lost); canvas.removeEventListener('contextrestored', restored); };
+  }, [requestDraw]);
   // A source response can replace arrays while retaining the same context snapshot.
   // Only a new snapshot/grouping key resets framing; source toggles never do.
   useEffect(() => {
@@ -301,7 +310,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     </div>
     {hovered && !dragging && <div className="graph-tooltip" role="tooltip" style={{ left: Math.min(hoverPosition.x + 20, size.width - 285), top: Math.max(8, hoverPosition.y - 48) }}><strong>{basename(hovered.path)}</strong><span>{hovered.path}</span><small>{membership.get(hovered.id) ? `${membership.get(hovered.id)} selected source${membership.get(hovered.id) === 1 ? '' : 's'}` : 'Unchanged context'} · Click to inspect</small></div>}
     {layoutState === 'pending' && <div className="graph-layout-status" role="status">Settling repository islands…</div>}
-    {(canvasFailed || layoutState === 'failed') && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>{layoutError || 'Use Files to explore the complete repository and its connections.'}</p>{layoutState === 'failed' && <button type="button" onClick={resetLayout}>Retry layout</button>}</div>}
+    {(canvasFailed || layoutState === 'failed') && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>{layoutError || 'Use Files to explore the complete repository and its connections.'}</p>{onOpenFiles && <button type="button" onClick={onOpenFiles}>Open file list</button>} {layoutState === 'failed' && <button type="button" onClick={resetLayout}>Retry layout</button>} {canvasFailed && <button type="button" onClick={() => { const available = !!canvasRef.current?.getContext('2d'); setCanvasFailed(!available); if (available) { setCanvasAttempt(value => value + 1); requestDraw(); } }}>Retry graph</button>}</div>}
     {snapshot.edges.length > 10000 && camera.zoom < .6 && <div className="graph-detail-notice">Overview detail: one third of import lines shown. All {snapshot.nodes.length.toLocaleString()} files are retained. Zoom in for connections.</div>}
     <div className="graph-navigation" aria-label="Graph navigation">
       <button type="button" className="graph-reset-layout" onClick={resetLayout} disabled={layoutState === 'pending'}>Reset island layout</button>

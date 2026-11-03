@@ -215,7 +215,7 @@ export default function App() {
       <button className="avatar" onClick={() => setDialog('help')} aria-label="Help and keyboard shortcuts"><CircleHelp size={16} /></button>
     </header>
     <main id="graph-workspace" className={`graph-workspace ${selectedFile ? 'has-inspector' : ''}`} data-testid="graph-viewport">
-      {presentationSnapshot && <ConstellationGraph snapshot={presentationSnapshot} selectedSourceIds={selectedIds} selectedFileId={selectedFileId} onSelectFile={chooseFile} focusGroupId={focusGroupId} onFocusGroup={focusIsland} searchQuery={query} showImports={showImports} />}
+      {presentationSnapshot && <ConstellationGraph snapshot={presentationSnapshot} selectedSourceIds={selectedIds} selectedFileId={selectedFileId} onSelectFile={chooseFile} focusGroupId={focusGroupId} onFocusGroup={focusIsland} searchQuery={query} showImports={showImports} onOpenFiles={() => setDialog('list')} />}
       {!snapshot && <div className="empty-workspace"><LoaderCircle className="spinning" size={24} /><h1>Opening your constellation</h1><p>Finding the shape of your repository.</p>{error && <><p className="error-text">{error}</p><button className="button" onClick={() => void loadDemo()}>Try again</button></>}</div>}
       {snapshot && <>
         <div className="source-bar panel" data-node-id="17:3072">
