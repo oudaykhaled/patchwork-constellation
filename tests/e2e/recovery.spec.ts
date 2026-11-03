@@ -52,7 +52,7 @@ test('controlled repository loading, partial coverage and file diff remain revie
   await page.getByRole('option', { name: /refresh\.ts/ }).first().click();
   const inspector = page.getByTestId('file-inspector');
   await expect(inspector).toContainText('src/auth/session/refresh.ts');
-  const diff = inspector.getByRole('link', { name: /Open GitHub diff/ }).first();
+  const diff = inspector.getByRole('link', { name: /Open .* file diff/ }).first();
   await expect(diff).toHaveAttribute('href', /https:\/\/github\.com\/example\/controlled-repository\/(pull|compare)\//);
   await testInfo.attach('controlled-partial-review', { body: await page.screenshot(), contentType: 'image/png' });
 });
