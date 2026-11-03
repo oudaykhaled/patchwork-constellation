@@ -38,6 +38,7 @@ export class AnalysisJobs {
   private tasks = new Set<Promise<void>>();
   private closing = false;
   private recovering = false;
+  private failuresSinceStart = 0;
   private readonly workerId = `bff:${randomUUID()}`;
   private timer?: ReturnType<typeof setInterval>;
   private recoveryOwners = new Set<string>();
@@ -106,6 +107,16 @@ export class AnalysisJobs {
     this.controllers.get(id)?.abort(); await this.store.cancelJob(selected, id);
     return this.get(id, selected);
   }
+  /** Aggregate operational counters, without repository IDs, source paths or credentials. */
+  async operationalStatus(ownerId = 'local-public') {
+    const pending = await this.store.listJobs(ownerId, 100), now = Date.now();
+    const queued = pending.filter(entry => entry.job.status === 'queued');
+    return { storage: this.store.kind, pendingJobs: pending.length, queuedJobs: queued.length,
+      leasedJobs: pending.filter(entry => entry.job.leaseExpiresAt && Date.parse(entry.job.leaseExpiresAt) > now).length,
+      oldestQueuedAgeMs: queued.length ? Math.max(...queued.map(entry => Math.max(0, now - Date.parse(entry.job.createdAt)))) : 0,
+      activeWorkersInProcess: this.controllers.size, pendingEnqueueWrites: this.pending.size, failuresSinceProcessStart: this.failuresSinceStart,
+      discoveryLimit: 100, stopping: this.closing };
+  }
   private async recover(ownerId: string) {
     if (this.closing || this.recovering) return; this.recovering = true;
     try {
@@ -151,7 +162,7 @@ export class AnalysisJobs {
       const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 500;
       const retryable = this.closing || (!controller.signal.aborted && (status >= 500 || status === 429));
       if (retryable && job.attempts < job.maxAttempts) await this.store.retryJob(scope, id, this.workerId, this.closing ? 'Server restarted; analysis will resume from its pinned context.' : errorMessage(error), this.closing ? 0 : Math.min(30_000, 1_000 * 2 ** job.attempts));
-      else await this.store.completeJob(scope, id, this.workerId, { status: 'failed', error: controller.signal.aborted ? 'Analysis exceeded its resource budget. Retry a smaller repository.' : errorMessage(error), errorCode: controller.signal.aborted ? 'ANALYSIS_TIMEOUT' : typeof error === 'object' && error && 'code' in error ? String(error.code) : status >= 500 ? 'ANALYSIS_FAILED' : 'PERMANENT_ANALYSIS', retryable });
+      else if (await this.store.completeJob(scope, id, this.workerId, { status: 'failed', error: controller.signal.aborted ? 'Analysis exceeded its resource budget. Retry a smaller repository.' : errorMessage(error), errorCode: controller.signal.aborted ? 'ANALYSIS_TIMEOUT' : typeof error === 'object' && error && 'code' in error ? String(error.code) : status >= 500 ? 'ANALYSIS_FAILED' : 'PERMANENT_ANALYSIS', retryable })) this.failuresSinceStart++;
     } finally { clearTimeout(timeout); clearInterval(heartbeat); }
   }
   async close() { this.closing = true; clearInterval(this.timer); for (const controller of this.controllers.values()) controller.abort(); await Promise.allSettled([...this.tasks]); }

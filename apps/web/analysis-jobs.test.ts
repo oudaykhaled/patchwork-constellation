@@ -78,6 +78,9 @@ describe('durable analysis coordination', () => {
     await vi.waitFor(async () => expect((await jobs.get(jobId, scope))?.status).toBe('failed'));
     expect(await jobs.get(jobId, scope)).toMatchObject({ code: 'NOT_FOUND', retryable: false });
     expect((await store.getJob(scope, jobId))?.attempts).toBe(1);
+    const operations = await jobs.operationalStatus(scope.ownerId);
+    expect(operations.failuresSinceProcessStart).toBe(1); expect(operations.pendingJobs).toBe(0);
+    expect(JSON.stringify(operations)).not.toContain(scope.repository);
     await jobs.submit(scope, input); await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
     await jobs.close(); await store.close();
   });
