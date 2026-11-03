@@ -21,6 +21,8 @@ Stop either server with **Ctrl+C** in its terminal. To reset the default in-memo
 
 `GET /api/health` checks the BFF; `GET /api/health/worker` starts the real analysis worker entry point without GitHub or provider calls. The worker probe is shared and cached for ten seconds. Invalid environment settings and unavailable configured startup services produce a readable configuration page and HTTP 503, with no credential values in diagnostics. Correct the configuration and restart the server.
 
+`GET /api/readiness` additionally checks the real worker, storage, queue and production assets. Optional owner-scoped aggregate metrics and the verified local artifact/database rollback procedures are documented in [release operations](docs/RELEASE.md).
+
 To serve the production frontend locally:
 
 ```sh
@@ -44,15 +46,16 @@ Copy `.env.example` to `.env` only when configuring optional services. Values st
 
 | Setting | Purpose |
 | --- | --- |
-| `GITHUB_TOKEN` | Optional token to increase public API quota. Private repository analysis remains disabled. |
+| `GITHUB_TOKEN` | Optional public API quota token. Private access requires the separately configured read-only GitHub App and live user/repository authorization. |
 | `AI_ENABLED` | Defaults to false. External grouping must be explicitly enabled. |
 | `TYPESAFE_API_KEY`, `JEV_MODEL` | TypeSafe Jev credentials and a pinned decision model. |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Generative adapter credentials and a pinned naming model. |
 | `DATABASE_URL` | Optional PostgreSQL storage; see [storage setup](docs/STORAGE.md). |
 | `PORT` | Local HTTP port; defaults to 4310. |
 | `API_REQUESTS_PER_MINUTE` | Bounded local API request quota, 1–2400; defaults to 240. Browser test servers explicitly use 2400 for independent journeys. |
+| `OPS_METRICS_ENABLED` | Defaults to false. Enables source-free operational aggregates; App mode requires a valid session and returns that owner's observations only. |
 
-Without both configured model providers, the graph retains deterministic grouping. External AI uses bounded metadata, validated IDs, request budgets and failure fallback. Live provider quality and account configuration require evaluation before an AI-enabled release. Manual grouping history is process-local in the default app configuration.
+Without both configured providers and a passing version-matched evaluation, the graph retains deterministic grouping. External AI uses bounded metadata, validated IDs, request budgets and failure fallback. Live provider quality and account configuration require review before an AI-enabled release. Manual grouping history is durable in the default local `.cache/grouping.json`; `GROUPING_STORAGE_PATH` can choose another private path or explicitly disable persistence with an empty value. Test mode keeps memory-only history.
 
 ## Analysis boundaries
 
@@ -60,7 +63,7 @@ Public repository inventory defaults to 2,000 files and parses at most 120 JavaS
 
 Each PR uses its own pinned comparison; each commit uses its first-parent delta. Their union highlights touched files and overlapping sources without creating a merged code state.
 
-GitHub App sign-in/private access, isolated Git fallback for API caps, selected-head dependency graphs, automatic webhook refresh, durable job restart/resume and a hosted multi-user release remain open work. PostgreSQL and live AI have separate verification gates. See the [status matrix](docs/IMPLEMENTATION_STATUS.md).
+The opt-in code paths now include read-only GitHub App authorization, bounded Git fallback, separate selected-head dependency evidence, verified webhook refresh and durable PostgreSQL job recovery. Local PostgreSQL migration/restore and controlled authorization/webhook tests have evidence; actual private App installation, live-model evaluation, human accessibility review and a hosted multi-user release remain gated. See the [status matrix](docs/IMPLEMENTATION_STATUS.md) and [supported capabilities](docs/CAPABILITIES.md).
 
 ## Checks
 

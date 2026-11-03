@@ -15,7 +15,7 @@ else {
   let running;
   try {
     const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/(?:TOKEN|SECRET|API_KEY|PASSWORD|DATABASE_URL|GROUPING_STORAGE|GITHUB_APP|AI_EVALUATION)/i.test(name)));
-    Object.assign(env, { AI_ENABLED: 'false', DATABASE_URL: '', GROUPING_STORAGE_PATH: '', GITHUB_TOKEN: '', TYPESAFE_API_KEY: '', OPENAI_API_KEY: '', JEV_MODEL: '', OPENAI_MODEL: '', NODE_OPTIONS: '', OPS_METRICS_ENABLED: 'true' });
+    Object.assign(env, { AI_ENABLED: 'false', DATABASE_URL: '', GROUPING_STORAGE_PATH: '', GITHUB_TOKEN: '', TYPESAFE_API_KEY: '', OPENAI_API_KEY: '', JEV_MODEL: '', OPENAI_MODEL: '', NODE_OPTIONS: '', OPS_METRICS_ENABLED: 'true', APP_ORIGIN: '', GITHUB_APP_ID: '', GITHUB_APP_CLIENT_ID: '', GITHUB_APP_CLIENT_SECRET: '', GITHUB_APP_PRIVATE_KEY: '', GITHUB_WEBHOOK_SECRET: '', AI_EVALUATION_MANIFEST: '' });
     const base = resolve('.cache'); await (await import('node:fs/promises')).mkdir(base, { recursive: true }); const directory = await mkdtemp(join(base, 'release-rehearsal-'));
     const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
     const install = async cwd => process.platform === 'win32' ? execute(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'pnpm install --offline --frozen-lockfile'], cwd, env) : execute(pnpm, ['install', '--offline', '--frozen-lockfile'], cwd, env);
