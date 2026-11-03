@@ -8,6 +8,8 @@ export interface RefreshTask {
   scope: StoreScope;
   installationId: number;
   repositoryId: number;
+  contextRef?: string;
+  refreshVersion?: string;
   kind: 'refresh' | 'revoke';
   reason: 'push' | 'pull_request' | 'installation_deleted' | 'repository_removed' | 'reconcile';
 }

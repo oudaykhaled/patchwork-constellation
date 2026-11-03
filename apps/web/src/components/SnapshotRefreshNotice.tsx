@@ -24,7 +24,7 @@ export function SnapshotRefreshNotice({ snapshot, request, onApply }: { snapshot
   const pending = state?.stale && state.revision > appliedRevision.current && Date.parse(state.updatedAt) > Date.parse(snapshot.createdAt);
   async function reconcile() {
     action.current?.abort(); const controller = new AbortController(); action.current = controller; setBusy(true); setError('');
-    try { const result = await request<{ state: RefreshState }>('/api/refresh/reconcile', { repository: snapshot.repository.fullName }, controller.signal); if (!controller.signal.aborted) setState(result.state); }
+    try { const result = await request<{ state: RefreshState }>('/api/refresh/reconcile', { repository: snapshot.repository.fullName, contextRef: snapshot.contextRef }, controller.signal); if (!controller.signal.aborted) setState(result.state); }
     catch (reason) { if (!controller.signal.aborted) setError((reason as Error).message); }
     finally { if (!controller.signal.aborted) setBusy(false); }
   }

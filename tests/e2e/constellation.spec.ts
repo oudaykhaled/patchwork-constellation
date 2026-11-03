@@ -23,6 +23,11 @@ test('selecting PRs changes the footprint and keeps the graph mounted', async ({
   const initialScale = await canvas.getAttribute('data-camera-scale');
   const initialX = await canvas.getAttribute('data-camera-x');
   const initialY = await canvas.getAttribute('data-camera-y');
+  const islandPositions = await page.locator('.island-label').evaluateAll(elements => elements.map(element => ({
+    label: element.querySelector('.island-title')?.textContent,
+    left: (element as HTMLElement).style.left,
+    top: (element as HTMLElement).style.top,
+  })));
   await expect(page.getByTestId('overlap-count')).toContainText('14');
   await page.getByTestId('source-selector').click();
   await page.getByTestId('source-pr-256').click();
@@ -33,6 +38,11 @@ test('selecting PRs changes the footprint and keeps the graph mounted', async ({
   await expect(canvas).toHaveAttribute('data-camera-scale', initialScale!);
   await expect(canvas).toHaveAttribute('data-camera-x', initialX!);
   await expect(canvas).toHaveAttribute('data-camera-y', initialY!);
+  expect(await page.locator('.island-label').evaluateAll(elements => elements.map(element => ({
+    label: element.querySelector('.island-title')?.textContent,
+    left: (element as HTMLElement).style.left,
+    top: (element as HTMLElement).style.top,
+  })))).toEqual(islandPositions);
 });
 
 test('zoom and keyboard pan update the actual graph camera', async ({ page }) => {
@@ -73,6 +83,7 @@ test('search opens the matching file inspector with honest demo provenance', asy
 test('accessible file list exposes file-level review without canvas hit testing', async ({ page }) => {
   await openDemo(page);
   await page.getByTestId('accessible-list-toggle').click();
+  await page.getByLabel('Filter file list').fill('refresh.ts');
   await expect(page.getByRole('button', { name: /refresh\.ts/ }).first()).toBeVisible();
   await page.getByRole('button', { name: /refresh\.ts/ }).first().click();
   await expect(page.getByTestId('file-inspector')).toContainText('refresh.ts');
@@ -175,5 +186,6 @@ test('core controls remain usable with reduced motion and a narrow viewport', as
   await expect(page.getByTestId('source-pr-248')).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByTestId('accessible-list-toggle').click();
+  await page.getByLabel('Filter file list').fill('refresh.ts');
   await expect(page.getByRole('button', { name: /refresh\.ts/ }).first()).toBeVisible();
 });

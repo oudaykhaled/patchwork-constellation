@@ -1,0 +1,74 @@
+{
+  "measuredAt": "2026-11-03T17:11:21.619Z",
+  "runtime": "v24.22.1",
+  "hardware": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "totalMemoryBytes": 33752997888
+  },
+  "fixtures": [
+    {
+      "files": 1000,
+      "edges": 4000,
+      "seed": 42,
+      "state": "cold fixture, sequential in-process calls; no database or network",
+      "metadataMs": 1.91,
+      "metadataBytes": 1946,
+      "kinds": [
+        {
+          "kind": "nodes",
+          "count": 1000,
+          "pages": 2,
+          "maxBytes": 86525,
+          "totalMs": 2.63,
+          "p95PageMs": 1.47
+        },
+        {
+          "kind": "edges",
+          "count": 4000,
+          "pages": 4,
+          "maxBytes": 183556,
+          "totalMs": 10.19,
+          "p95PageMs": 3.29
+        }
+      ],
+      "heapDeltaBytes": 3351976
+    },
+    {
+      "files": 10000,
+      "edges": 40000,
+      "seed": 42,
+      "state": "cold fixture, sequential in-process calls; no database or network",
+      "metadataMs": 14.11,
+      "metadataBytes": 1970,
+      "kinds": [
+        {
+          "kind": "nodes",
+          "count": 10000,
+          "pages": 20,
+          "maxBytes": 87147,
+          "totalMs": 305.43,
+          "p95PageMs": 23.74
+        },
+        {
+          "kind": "edges",
+          "count": 40000,
+          "pages": 40,
+          "maxBytes": 186593,
+          "totalMs": 576.99,
+          "p95PageMs": 24.18
+        }
+      ],
+      "heapDeltaBytes": 29363592
+    }
+  ],
+  "limits": {
+    "responseBytes": 512000,
+    "nodesPerPage": 500,
+    "edgesPerPage": 1000,
+    "fileDetailEdges": 200
+  },
+  "note": "Single sample under concurrent agent load; heap deltas include allocations and garbage collection. Not a PostgreSQL, HTTP, browser, or release capacity claim."
+}
