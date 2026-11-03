@@ -132,7 +132,7 @@ describe('baseline and provider boundary', () => {
     const metadata = await configured(transport, { maxInputCharacters: 10 }).propose(snapshot(), { enabled: true });
     expect(metadata.status).toBe('baseline'); expect(transport).not.toHaveBeenCalled();
     const quota = await configured(transport, { maxRequestsPerTenant: 1 }).propose(snapshot(), { enabled: true });
-    expect(quota.status).toBe('baseline'); expect(transport).toHaveBeenCalledTimes(1);
+    expect(quota.status).toBe('baseline'); expect(transport).not.toHaveBeenCalled();
   });
   it('handles cancellation without submitting any metadata', async () => {
     const transport = providerMock(); const controller = new AbortController(); controller.abort();

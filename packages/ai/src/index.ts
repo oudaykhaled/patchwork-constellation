@@ -4,16 +4,17 @@ import { dirname } from 'node:path';
 import type { GraphSnapshot, Group } from '@patchwork/contracts';
 import { decideMembership, discoverJevModel, generateLabels, plainText, type EvidenceBundle, type RequestBudget } from './providers';
 import { GroupingError, type GroupingConfig, type GroupingOperation, type GroupingProposal, type GroupingResult, type GroupingRevision, type RequestContext } from './types';
+import { AI_FIELDS_SENT, AI_POLICY_VERSION, createExternalDataPolicy, externalGroupingCacheKey } from './policy';
+import { ProviderBudgetLedger } from './budget';
 
 export * from './types';
 export * from './contracts';
 import { GroupingRevisionSchema, validateGroupingProposal, validateGroupingRevision } from './contracts';
 export { validateCandidateLabels, TypeSafeDecisionProvider, OpenAIGenerativeProvider, PROVIDER_CONTRACT_VERSION, LABEL_PROMPT_VERSION, MEMBERSHIP_PROMPT_VERSION, type DecisionProvider, type GenerativeProvider, type ChoiceQuestion, type ScoreQuestion, type NoulQuestion, type ChoiceAnswer, type ScoreAnswer, type NoulAnswer, type DecisionResponse, type DiscoveredModel } from './providers';
+export { createExternalDataPolicy, externalGroupingCacheKey } from './policy';
 
-const POLICY_VERSION = 'metadata-only-v1';
 const MAX_CONTEXTS = 100;
 const MAX_REVISIONS = 20;
-const EXCLUDED_PATH = /(^|\/)(?:\.env(?:\.[^/]*)?|\.git|node_modules|vendor|dist|build|coverage|secrets?|credentials?|private[-_]?keys?)(\/|$)|\.(?:pem|key|p12|pfx|keystore)$/i;
 const copy = <T>(value: T): T => structuredClone(value);
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const ownRecord = (): Record<string, string> => Object.create(null) as Record<string, string>;
@@ -37,14 +38,14 @@ function assertMembership(snapshot: GraphSnapshot, groups: Group[], membership: 
   if (ids.size !== groups.length || Object.keys(membership).length !== snapshot.nodes.length || snapshot.nodes.some(node => !Object.hasOwn(membership, node.id) || !ids.has(membership[node.id]!))) throw new GroupingError('INVALID_MEMBERSHIP', 'Every file must belong to exactly one existing island.');
 }
 
-function makeEvidence(snapshot: GraphSnapshot, revision: GroupingRevision, maxFiles: number): { evidence: EvidenceBundle; excludedFiles: number } {
-  const eligible = snapshot.nodes.filter(node => !EXCLUDED_PATH.test(node.path));
+function makeEvidence(snapshot: GraphSnapshot, revision: GroupingRevision, maxFiles: number, policy: ReturnType<typeof createExternalDataPolicy>): { evidence: EvidenceBundle; excludedFiles: number } {
+  const eligible = snapshot.nodes.filter(node => !policy.excludeFile(node));
   const unlocked = eligible.filter(node => !revision.lockedFileIds.includes(node.id));
   const files = unlocked.slice().sort((a, b) => a.id.localeCompare(b.id)).slice(0, maxFiles);
   // A bounded subset is explicit in dataPolicy; omitted files retain their existing membership.
   const selectedIds = new Set(files.map(file => file.id));
   const relevantGroups = revision.groups.filter(group => files.some(file => revision.membership[file.id] === group.id));
-  const groups = relevantGroups.slice(0, 64).map(group => ({ id: group.id, label: group.label, paths: eligible.filter(node => revision.membership[node.id] === group.id).slice(0, 8).map(node => node.path.slice(0, 300)) }));
+  const groups = relevantGroups.slice(0, 64).map((group, index) => ({ id: group.id, label: policy.sanitizeLabel(group.label, `Island ${index + 1}`), paths: eligible.filter(node => revision.membership[node.id] === group.id).slice(0, 8).map(node => node.path.slice(0, 300)) }));
   const groupIds = new Set(groups.map(group => group.id));
   const evidenceFiles = files.filter(file => groupIds.has(revision.membership[file.id]!)).map(file => ({
     id: file.id, path: file.path.slice(0, 300), groupId: revision.membership[file.id]!, evidenceId: `file:${file.id}`,
@@ -55,15 +56,18 @@ function makeEvidence(snapshot: GraphSnapshot, revision: GroupingRevision, maxFi
 
 interface ProposalEntry { tenantId: string; repository: string; proposal: GroupingProposal; expires: number }
 interface HistoryEntry { key: string; revisions: GroupingRevision[] }
+interface SharedProposal { promise: Promise<GroupingProposal>; controller: AbortController; subscribers: number; settled: boolean; tenantId: string; repository: string }
+interface CachedProposal { proposal: GroupingProposal; expires: number; tenantId: string; repository: string }
 
 /** Server-only, bounded grouping registry. A configured storagePath persists manual history locally. */
 export class GroupingService {
   private readonly config: Required<Pick<GroupingConfig, 'maxFiles' | 'maxRequestsPerAnalysis' | 'maxRequestsPerTenant' | 'maxInputCharacters' | 'minimumConfidence' | 'timeoutMs'>> & GroupingConfig;
   private readonly histories = new Map<string, GroupingRevision[]>();
   private readonly proposals = new Map<string, ProposalEntry>();
-  private readonly cached = new Map<string, GroupingProposal>();
-  private readonly inflight = new Map<string, Promise<GroupingProposal>>();
-  private readonly tenantRequests = new Map<string, { count: number; reset: number }>();
+  private readonly cached = new Map<string, CachedProposal>();
+  private readonly inflight = new Map<string, SharedProposal>();
+  private readonly policy: ReturnType<typeof createExternalDataPolicy>;
+  private readonly ledger: ProviderBudgetLedger;
   private active = 0;
 
   constructor(config: GroupingConfig = {}) {
@@ -71,7 +75,10 @@ export class GroupingService {
       maxFiles: 32, maxRequestsPerAnalysis: 5, maxRequestsPerTenant: 100, maxInputCharacters: 40_000, minimumConfidence: 0.8, timeoutMs: 15_000,
       ...config,
     };
-    if (this.config.maxFiles < 1 || this.config.maxFiles > 64 || this.config.maxRequestsPerAnalysis < 3 || this.config.maxRequestsPerAnalysis > 10 || this.config.minimumConfidence < 0 || this.config.minimumConfidence > 1) throw new GroupingError('INVALID_CONFIG', 'AI limits are outside the supported bounds.');
+    if (!Number.isSafeInteger(this.config.maxFiles) || this.config.maxFiles < 1 || this.config.maxFiles > 64 || !Number.isSafeInteger(this.config.maxRequestsPerAnalysis) || this.config.maxRequestsPerAnalysis < 3 || this.config.maxRequestsPerAnalysis > 10 || !Number.isFinite(this.config.minimumConfidence) || this.config.minimumConfidence < 0 || this.config.minimumConfidence > 1) throw new GroupingError('INVALID_CONFIG', 'AI limits are outside the supported bounds.');
+    if (!Number.isSafeInteger(this.config.maxRequestsPerTenant) || this.config.maxRequestsPerTenant < 1 || !Number.isSafeInteger(this.config.maxInputCharacters) || this.config.maxInputCharacters < 1 || this.config.maxInputCharacters > 100_000 || !Number.isFinite(this.config.timeoutMs) || this.config.timeoutMs < 1 || this.config.timeoutMs > 60_000 || this.config.proposalTtlMs !== undefined && (!Number.isSafeInteger(this.config.proposalTtlMs) || this.config.proposalTtlMs < 1 || this.config.proposalTtlMs > 900_000) || this.config.maxReservedTokensPerTenant !== undefined && (!Number.isSafeInteger(this.config.maxReservedTokensPerTenant) || this.config.maxReservedTokensPerTenant < 1)) throw new GroupingError('INVALID_CONFIG', 'AI budget or retention settings are outside the supported bounds.');
+    this.policy = createExternalDataPolicy(this.config.excludedPaths);
+    this.ledger = new ProviderBudgetLedger(this.config.maxRequestsPerTenant, this.config.maxReservedTokensPerTenant ?? 1_000_000);
     this.restore();
   }
 
@@ -82,7 +89,7 @@ export class GroupingService {
       jevConfigured: Boolean(this.config.jevApiKey && this.config.jevModel),
       generativeConfigured: Boolean(this.config.generativeApiKey && this.config.generativeModel),
       models: { jev: this.config.jevModel ?? null, generative: this.config.generativeModel ?? null },
-      policy: { version: POLICY_VERSION, fieldsSent: ['file IDs and paths', 'existing island names', 'bounded import target IDs'], sourceExcerpts: false, maxFiles: this.config.maxFiles, maxRequests: this.config.maxRequestsPerAnalysis, maxOutputTokens: 3000 },
+      policy: { version: AI_POLICY_VERSION, fieldsSent: AI_FIELDS_SENT, sourceExcerpts: false, maxFiles: this.config.maxFiles, maxRequests: this.config.maxRequestsPerAnalysis, maxOutputTokens: 3000, proposalRetentionMs: this.config.proposalTtlMs ?? 900_000, currencyBudgetVerified: false },
       persistence: this.config.storagePath ? 'local-file' : 'process-memory',
       message: !this.config.enabled ? 'External AI is disabled. Folder grouping and manual corrections remain available.' : !configured ? 'Configure both model providers and pinned model names on the server to enable AI + Jev.' : 'External AI sends only the disclosed metadata when explicitly requested.',
     };
@@ -141,8 +148,9 @@ export class GroupingService {
   }
 
   async propose(snapshot: GraphSnapshot, options: RequestContext & { enabled?: boolean } = {}): Promise<GroupingProposal> {
+    this.pruneExternalData();
     const revision = this.current(snapshot, options);
-    const { evidence, excludedFiles } = makeEvidence(snapshot, revision, this.config.maxFiles);
+    const { evidence, excludedFiles } = makeEvidence(snapshot, revision, this.config.maxFiles, this.policy);
     const baseline = (message: string): GroupingProposal => validateGroupingProposal({
       schemaVersion: '1', provenance: copy(revision.provenance),
       id: `baseline-${randomUUID()}`, snapshotId: snapshot.id, parentRevisionId: revision.id, status: 'baseline', origin: revision.origin, groups: copy(revision.groups), membership: copy(revision.membership), decisions: [], message, createdAt: new Date().toISOString(),
@@ -152,23 +160,72 @@ export class GroupingService {
     if (options.signal?.aborted) return baseline('Grouping analysis was cancelled. The current grouping is retained.');
     if (!evidence.files.length) return baseline('No eligible unlocked files are available for external grouping.');
     if (JSON.stringify(evidence).length > this.config.maxInputCharacters) return baseline('The metadata budget was exceeded. Narrow the repository scope before requesting AI grouping.');
-    const cacheKey = digest({ tenant: options.tenantId ?? 'local', repository: repositoryKey(snapshot), snapshot: snapshot.id, revision: revision.id, evidence, jev: this.config.jevModel, generative: this.config.generativeModel, policy: POLICY_VERSION, confidence: this.config.minimumConfidence });
+    const tenantId = options.tenantId ?? 'local';
+    const repository = repositoryKey(snapshot);
+    const cacheKey = externalGroupingCacheKey({ tenantId, snapshot, revisionId: revision.id, evidence, jevModel: this.config.jevModel, generativeModel: this.config.generativeModel, policyDigest: this.policy.digest, minimumConfidence: this.config.minimumConfidence });
     const cached = this.cached.get(cacheKey);
-    if (cached) { this.registerProposal(snapshot, cached, options); return copy(cached); }
+    if (cached) { this.registerProposal(snapshot, cached.proposal, options); this.telemetry(cached.proposal, 0, true); return copy(cached.proposal); }
     const running = this.inflight.get(cacheKey);
-    if (running) return copy(await running);
+    if (running) return this.subscribe(running, options.signal, baseline);
     if (this.active >= 2) return baseline('Grouping capacity is busy. The current grouping is retained; try again shortly.');
     this.active++;
-    const work = this.runProviders(snapshot, revision, evidence, excludedFiles, options).then(proposal => {
-      this.cached.set(cacheKey, copy(proposal));
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const metrics = { requests: 0 };
+    const entry: SharedProposal = { promise: Promise.resolve(null as unknown as GroupingProposal), controller, subscribers: 0, settled: false, tenantId, repository };
+    const work = this.runProviders(snapshot, revision, evidence, excludedFiles, { ...options, signal: controller.signal }, metrics).then(proposal => {
+      if (controller.signal.aborted) return baseline('Grouping analysis was cancelled. The current grouping is retained.');
+      this.cached.set(cacheKey, { proposal: copy(proposal), expires: Date.now() + (this.config.proposalTtlMs ?? 900_000), tenantId, repository });
       if (this.cached.size > 64) this.cached.delete(this.cached.keys().next().value!);
       this.registerProposal(snapshot, proposal, options);
       return proposal;
-    }).catch((error: unknown) => baseline(error instanceof GroupingError ? `${error.message} The current grouping is retained.` : 'Grouping analysis failed. The current grouping is retained.')).finally(() => {
-      this.active--; this.inflight.delete(cacheKey);
+    }).catch((error: unknown) => baseline(error instanceof GroupingError ? `${error.message} The current grouping is retained.` : 'Grouping analysis failed. The current grouping is retained.')).then(proposal => {
+      this.telemetry(proposal, Date.now() - startedAt, false, metrics.requests);
+      return proposal;
+    }).finally(() => {
+      entry.settled = true; this.active--; this.inflight.delete(cacheKey);
     });
-    this.inflight.set(cacheKey, work);
-    return copy(await work);
+    entry.promise = work;
+    this.inflight.set(cacheKey, entry);
+    return this.subscribe(entry, options.signal, baseline);
+  }
+
+  /** Preview only the metadata that passes policy; excluded names are never echoed. */
+  previewPolicy(snapshot: GraphSnapshot, context: RequestContext = {}) {
+    const { evidence, excludedFiles } = makeEvidence(snapshot, this.current(snapshot, context), this.config.maxFiles, this.policy);
+    return { version: AI_POLICY_VERSION, fieldsSent: AI_FIELDS_SENT.slice(), sourceExcerpts: false, excludedFiles, analyzedFiles: evidence.files.length, metadata: evidence, externalEnabled: this.capabilities().available };
+  }
+
+  /** Purge ephemeral provider data for disconnect/revocation; accepted manual history is separate. */
+  clearExternalData(context: { tenantId?: string; repository?: string } = {}): void {
+    const tenant = context.tenantId ?? 'local';
+    const matches = (entry: { tenantId: string; repository: string }) => entry.tenantId === tenant && (!context.repository || entry.repository.toLowerCase() === context.repository.toLowerCase());
+    for (const [key, entry] of this.cached) if (matches(entry)) this.cached.delete(key);
+    for (const [key, entry] of this.proposals) if (matches(entry)) this.proposals.delete(key);
+    for (const entry of this.inflight.values()) if (matches(entry)) entry.controller.abort();
+  }
+
+  private pruneExternalData() {
+    const now = Date.now();
+    for (const [key, entry] of this.cached) if (entry.expires <= now) this.cached.delete(key);
+    for (const [key, entry] of this.proposals) if (entry.expires <= now) this.proposals.delete(key);
+  }
+  private async subscribe(entry: SharedProposal, signal: AbortSignal | undefined, baseline: (message: string) => GroupingProposal): Promise<GroupingProposal> {
+    entry.subscribers++;
+    const cancelled = () => baseline('Grouping analysis was cancelled. The current grouping is retained.');
+    if (signal?.aborted) { entry.subscribers--; if (!entry.subscribers && !entry.settled) entry.controller.abort(); return cancelled(); }
+    let listener: (() => void) | undefined;
+    try {
+      const proposal = signal ? await Promise.race([entry.promise, new Promise<GroupingProposal>(resolve => { listener = () => resolve(cancelled()); signal.addEventListener('abort', listener, { once: true }); })]) : await entry.promise;
+      return copy(proposal);
+    } finally {
+      if (listener) signal?.removeEventListener('abort', listener);
+      entry.subscribers--; if (!entry.subscribers && !entry.settled) entry.controller.abort();
+    }
+  }
+  private telemetry(proposal: GroupingProposal, durationMs: number, cacheHit: boolean, requests = 0) {
+    // Explicit allowlist: no tenant/repo identifiers, prompts, paths, provider messages or secrets.
+    try { this.config.onTelemetry?.({ event: 'grouping', outcome: proposal.status, durationMs, requests: cacheHit ? 0 : requests, inputTokens: cacheHit ? 0 : proposal.usage?.inputTokens ?? null, outputTokens: cacheHit ? 0 : proposal.usage?.outputTokens ?? null, cacheHit }); } catch { /* A metrics sink cannot interrupt the review flow. */ }
   }
 
   apply(snapshot: GraphSnapshot, proposalId: string, context: RequestContext = {}): GroupingResult {
@@ -241,20 +298,21 @@ export class GroupingService {
     return { snapshot: this.snapshotWith(snapshot, previous), revision: copy(previous) };
   }
 
-  private async runProviders(snapshot: GraphSnapshot, revision: GroupingRevision, evidence: EvidenceBundle, excludedFiles: number, context: RequestContext): Promise<GroupingProposal> {
+  private async runProviders(snapshot: GraphSnapshot, revision: GroupingRevision, evidence: EvidenceBundle, excludedFiles: number, context: RequestContext, metrics: { requests: number }): Promise<GroupingProposal> {
     const tenant = context.tenantId ?? 'local';
+    // Reserve the complete retry envelope atomically before even model discovery.
+    // Character count is a deliberately conservative token upper estimate, not pricing.
+    const reservation = this.ledger.reserve(tenant, this.config.maxRequestsPerAnalysis, this.config.maxRequestsPerAnalysis * (this.config.maxInputCharacters + 3000));
+    let actualTokens: number | undefined;
     const budget: RequestBudget = {
       requests: 0, maxRequests: this.config.maxRequestsPerAnalysis, maxInputCharacters: this.config.maxInputCharacters, fetch: this.config.fetch ?? fetch, signal: context.signal, timeoutMs: this.config.timeoutMs,
-      reserveRequest: () => {
-        let record = this.tenantRequests.get(tenant);
-        if (!record || record.reset < Date.now()) { record = { count: 0, reset: Date.now() + 60 * 60 * 1000 }; this.tenantRequests.set(tenant, record); }
-        if (record.count >= this.config.maxRequestsPerTenant) throw new GroupingError('BUDGET_EXHAUSTED', 'The hourly provider request budget was reached.');
-        record.count++;
-      },
+      reserveRequest: () => { metrics.requests++; },
     };
+    try {
     await discoverJevModel(this.config.jevApiKey!, this.config.jevModel!, budget);
     const generated = await generateLabels({ apiKey: this.config.generativeApiKey!, model: this.config.generativeModel! }, evidence, budget);
     const decisions = await decideMembership({ apiKey: this.config.jevApiKey!, model: this.config.jevModel! }, evidence, generated.labels, budget);
+    actualTokens = generated.usage.inputTokens + generated.usage.outputTokens + decisions.usage.inputTokens + decisions.usage.outputTokens;
     const groups = revision.groups.map(group => {
       const proposed = generated.labels.find(label => label.groupId === group.id);
       return proposed && !revision.lockedGroupIds.includes(group.id) ? { ...group, label: proposed.label, origin: 'ai' as const } : copy(group);
@@ -274,14 +332,16 @@ export class GroupingService {
       message: `AI + Jev reviewed ${evidence.files.length} eligible files. Review this bounded proposal before applying; other files keep their current membership.`, createdAt: new Date().toISOString(),
       models: { generative: generated.model, jev: decisions.model },
       usage: { inputTokens: generated.usage.inputTokens + decisions.usage.inputTokens, outputTokens: generated.usage.outputTokens + decisions.usage.outputTokens, requests: budget.requests },
-      dataPolicy: { fieldsSent: ['file IDs and paths', 'existing island names', 'bounded import target IDs'], excludedFiles, analyzedFiles: evidence.files.length },
+      dataPolicy: { fieldsSent: AI_FIELDS_SENT.slice(), excludedFiles, analyzedFiles: evidence.files.length },
     };
+    } finally { reservation.settle(budget.requests, actualTokens); }
   }
 
   private contextKey(snapshot: GraphSnapshot, tenant = 'local') { return digest({ tenant, repository: repositoryKey(snapshot), snapshot: snapshot.id }); }
   private registerProposal(snapshot: GraphSnapshot, proposal: GroupingProposal, context: RequestContext) {
     validateGroupingProposal(proposal, snapshot, this.current(snapshot, context).groups.map(group => group.id));
-    this.proposals.set(proposal.id, { tenantId: context.tenantId ?? 'local', repository: repositoryKey(snapshot), proposal: copy(proposal), expires: Date.now() + 15 * 60 * 1000 });
+    this.pruneExternalData();
+    this.proposals.set(proposal.id, { tenantId: context.tenantId ?? 'local', repository: repositoryKey(snapshot), proposal: copy(proposal), expires: Date.now() + (this.config.proposalTtlMs ?? 900_000) });
     if (this.proposals.size > 100) this.proposals.delete(this.proposals.keys().next().value!);
   }
   private snapshotWith(snapshot: GraphSnapshot, revision: GroupingRevision): GraphSnapshot {

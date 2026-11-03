@@ -87,6 +87,13 @@ export interface GroupingConfig {
   maxInputCharacters?: number;
   minimumConfidence?: number;
   timeoutMs?: number;
+  /** Additional repository-relative glob exclusions, applied before metadata leaves the server. */
+  excludedPaths?: string[];
+  /** Conservative hourly token reservation, not a provider currency-price guarantee. */
+  maxReservedTokensPerTenant?: number;
+  /** Ephemeral external proposal retention; manual revisions have a separate persistence policy. */
+  proposalTtlMs?: number;
+  onTelemetry?: (event: { event: 'grouping'; outcome: string; durationMs: number; requests: number; inputTokens: number | null; outputTokens: number | null; cacheHit: boolean }) => void;
 }
 
 export class GroupingError extends Error {
