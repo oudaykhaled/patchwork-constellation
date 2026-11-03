@@ -5,23 +5,16 @@ import type { AnalyzeInput } from '@patchwork/analysis';
 import type { GraphSnapshot } from '@patchwork/contracts';
 import type { runAnalysisInWorker } from '../worker/src/index';
 import { WorkerAdmission } from './worker-admission';
+import { publicErrorCode, publicErrorMessage } from './public-errors';
 
 export const ANALYSIS_VERSION = 'static-v2';
 export const GROUPING_VERSION = 'baseline-v1';
 export interface PinnedAnalysisInput extends AnalyzeInput { displayContextRef?: string }
 export type AnalysisJobView = { id: string; status: 'queued' | 'running' | 'ready' | 'failed' | 'cancelled'; stage: StoredJob['status']; progress: number; message: string; createdAt: string; updatedAt: string; version: string; snapshotId?: string; graphUrl?: string; snapshot?: GraphSnapshot; error?: string; code?: string; retryable?: boolean };
 const terminal = (job: StoredJob) => ['ready', 'partial', 'failed', 'cancelled'].includes(job.status);
-// Exceptions may contain private source, URLs or credentials. Persist static descriptions only.
-const errorMessage = (error: unknown) => {
-  const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 500;
-  if (status === 401 || status === 403) return 'Repository access is unavailable. Reconnect the account and retry.';
-  if (status === 404) return 'The repository or revision is unavailable. Check access and retry.';
-  if (status === 429) return 'The upstream request quota is exhausted. Retry after the limit resets.';
-  if (status === 413) return 'The analysis exceeds its configured resource scope. Try a smaller repository.';
-  return 'Analysis could not complete. Retry, or narrow the repository scope.';
-};
-const publicErrorCodes = new Set(['NOT_FOUND', 'AUTH_FAILED', 'RATE_LIMITED', 'NETWORK_ERROR', 'INVALID_RESPONSE', 'SOURCE_UNAVAILABLE', 'INVALID_REF', 'PRIVATE_UNSUPPORTED', 'RESPONSE_LIMIT', 'ANALYSIS_TIMEOUT', 'ANALYSIS_FAILED', 'STORAGE_FAILED', 'BUSY', 'INVALID_SOURCE', 'UNKNOWN_SOURCE', 'STALE_SOURCE', 'ACCESS_DENIED', 'SESSION_REQUIRED']);
-const failureCode = (error: unknown, status: number) => typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' && publicErrorCodes.has(error.code) ? error.code : status >= 500 ? 'ANALYSIS_FAILED' : 'PERMANENT_ANALYSIS';
+const errorMessage = publicErrorMessage;
+const failureCode = (error: unknown, status: number) => { const code = publicErrorCode(error); return code !== 'REQUEST_FAILED' ? code : status >= 500 ? 'ANALYSIS_FAILED' : 'PERMANENT_ANALYSIS'; };
+
 export function analysisJobId(scope: StoreScope, input: PinnedAnalysisInput) {
   return createHash('sha256').update(JSON.stringify([scope.ownerId, scope.repository.toLowerCase(), input.contextRef, input.mode ?? 'pr', ANALYSIS_VERSION, GROUPING_VERSION])).digest('hex');
 }

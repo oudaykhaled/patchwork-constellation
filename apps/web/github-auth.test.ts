@@ -55,6 +55,7 @@ describe('GitHub App authorization boundary', () => {
     expect((headers['Set-Cookie'] as string[])[1]).toContain('; Secure');
     expect(f.auth.session(req(cookie))?.ownerId).toBe('github:9');
     expect(() => f.auth.disconnect(req(cookie), res().response)).toThrow();
+    expect(() => f.auth.csrf(req(cookie, { origin: config.origin, 'x-csrf-token': 'é'.repeat(session.csrf.length) }), session)).toThrow('Refresh the page');
     f.auth.disconnect(req(cookie, { origin: config.origin, 'x-csrf-token': session.csrf }), res().response);
     expect(f.auth.session(req(cookie))).toBeUndefined();
     const next = await login(f.auth); f.advance(28_800_001); expect(f.auth.session(req(next.cookie))).toBeUndefined();

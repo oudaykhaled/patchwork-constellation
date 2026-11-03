@@ -18,6 +18,7 @@ import { RepositoryFences } from './repository-fences';
 import { checkWorkerHealth } from '../worker/src/health';
 import { ConfigurationError, validateEnvironment } from './environment';
 import { GitHubAppAuth, githubAuthConfig, AuthError, type GitHubSession } from './github-auth';
+import { publicErrorCode, publicErrorMessage, PRODUCTION_CONTENT_SECURITY_POLICY } from './public-errors';
 
 let environmentLoadFailure = false;
 try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') environmentLoadFailure = true; }
@@ -132,6 +133,7 @@ export async function createApplicationServer(options: { production?: boolean; s
   const vite = useProduction ? null : await (await import('vite')).createServer({ configFile: resolve(root, 'apps/web/vite.config.ts'), server: { middlewareMode: true }, appType: 'spa' });
   const server = createServer((req, res) => requestScope.run({ ownerId: 'local-public', epochs: new Map() }, async () => {
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    if (useProduction) res.setHeader('Content-Security-Policy', PRODUCTION_CONTENT_SECURITY_POLICY);
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
       if (url.pathname.startsWith('/api/')) {
@@ -284,14 +286,14 @@ export async function createApplicationServer(options: { production?: boolean; s
     } catch (error) {
       const status = error instanceof z.ZodError ? 400 : typeof error === 'object' && error && 'status' in error ? Number(error.status) || 500 : 500;
       if (error instanceof BusyError) res.setHeader('Retry-After', String(error.retryAfter));
-      const code = error instanceof z.ZodError ? 'VALIDATION' : typeof error === 'object' && error && 'code' in error ? String(error.code) : 'REQUEST_FAILED';
+      const code = publicErrorCode(error);
       if (!res.headersSent) json(res, status >= 400 && status < 600 ? status : 500, { error: safeError(error), code }); else res.end();
     }
   }));
   server.on('close', () => { for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void Promise.allSettled([...runningTasks, analysisJobs.close()]).then(() => store.close()); });
   return server;
 }
-function safeError(error: unknown) { const message = error instanceof Error ? error.message : 'Request failed.'; return message.replace(/(?:gh[pousr]_[a-zA-Z0-9]+|sk-[a-zA-Z0-9_-]+)/g, '[redacted]').slice(0, 500); }
+function safeError(error: unknown) { return publicErrorMessage(error); }
 
 /** Startup failures remain visible in the browser, without silently falling back from a configured database. */
 export function createStartupFailureServer(error: unknown) {
