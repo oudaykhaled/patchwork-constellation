@@ -26,7 +26,7 @@ The compact legend remains available at every width. Its `?` disclosure explains
 | AI grouping | A separately labeled proposed or accepted semantic membership revision | It cannot create observed dependency edges or change source footprint counts. No AI-inferred connection lines are implemented; future inferred relations require a separate toggle and different line pattern with explicit provenance. |
 | Coverage | Snapshot analysis status and reasons/counts | Missing or unresolved edges never establish absence of a dependency. |
 
-Hover, neighbor emphasis and selection must not masquerade as persistent overlap. The existing renderer also uses temporary rings for those states; GRAPH-03/UX-05 must distinguish them by shape/pattern and descriptive text before claiming complete implementation of this mark contract.
+Hover, neighbor emphasis and selection must not masquerade as persistent overlap. The integrated renderer draws corner brackets for the selected file, a dashed ring for hover, and separate overlap rings. Canvas instructions name the selection cue, while Files and details expose status and source membership in text. Keyboard focus remains the outline of the active DOM control and is independent of the inspected file.
 
 ## File lifecycle and incomplete analysis
 
@@ -38,11 +38,11 @@ Every discoverable repository file stays a file circle, including unsupported la
 | Modified | Direct-change circle when selected; text `Modified`; per-source statistics | Do not sum different sources into a fictitious merged diff. |
 | Deleted/removed | Retained discoverable ghost file; text `Deleted`/`Removed`; deletion comparison evidence | No current-context blob is promised. The present canvas does not yet add a distinct ghost pattern. |
 | Renamed | One canonical identity when confirmed evidence connects old and new path; text `Renamed`, previous path and comparison provenance | Keep ambiguous rename/delete/recreate as separate reviewable identities; never merge on basename similarity. |
-| Unparsed/unsupported | File circle remains inventoried; explicit status/coverage reason; no invented imports | A language label alone does not establish parse coverage. Current analysis can report snapshot reasons without per-file parse status. |
+| Unparsed/unsupported | File circle remains inventoried; explicit status/coverage reason; no invented imports | A language label alone does not establish parse coverage. Details show per-file pinned-context import coverage and reasons. Selected-head evidence is a separate explicitly bounded layer. |
 | Binary/generated/excluded content | File remains in inventory if known; content/edge analysis exclusion is named | Do not imply a readable diff or provider submission. Truly un-inventoried files are covered by counts/reasons, not fabricated circles. |
 | External package/unresolved import | A coverage/evidence entry associated with the importer, including specifier where available | An unresolved external target is not a repository file circle. The current graph draws only resolved file-to-file edges. |
 
-The current inspector displays the selected source's change status and per-source entries. A full presence/parse/rename presentation belongs to UX-03 and DATA-05. This contract does not claim those fields are all currently rendered.
+The integrated inspector displays selected-source change status, previous path for an evidenced rename, removed/source-only availability, per-file pinned-context parse coverage and external/unresolved imports. Selected-head provenance and outgoing changed-file imports are labeled separately. Demo diff content remains explicitly illustrative; real source comparisons use immutable links when available. A separate deleted-file canvas pattern is not currently drawn, so presence is communicated in details and Files rather than assigned another implicit circle-fill meaning.
 
 ## Group hierarchy
 
@@ -72,7 +72,7 @@ At narrow widths, source controls and search form separate rows; the graph stays
 
 At 200% text/browser zoom, preserve source selection, search, open/close details, Files, graph controls and recovery. Reflow controls or use the narrow flow rather than clipping text or hiding the only action. A smaller simultaneous graph region is acceptable when text expansion requires it; the ≥80% default-desktop metric is measured at default zoom. Reduced motion removes camera/layout animation while keeping direct controls responsive.
 
-The current styles use several pixel font sizes and absolute positions. Existing 390px reduced-motion and desktop-area tests are useful evidence, but do not establish 200% text-only zoom or screen-reader conformance. UX-05 must run browser zoom and text-only zoom, keyboard and assistive-technology journeys, record browser/AT versions and fix observed clipping/traps. No invented user-test success rates are permitted.
+The styles use pixel font sizes and absolute positions. At short heights the shell must not force a document taller than the viewport: a narrow 640×360 review regression reproduced focus-driven page scrolling that clipped the legend, and the short-height shell rule removes that artificial minimum. `compact-review.spec.ts` exercises source changes, search, inspector close, Files filtering and legend bounds at 640×360 and 800×450; these are CSS-viewport reflow checks, not native browser-zoom evidence. Existing 390px reduced-motion and desktop-area checks also retain their own scope. Native browser/text zoom and assistive-technology review must record their actual browser/AT conditions; automated layout success does not establish screen-reader conformance or human task-study results.
 
 ## Review handoff
 
