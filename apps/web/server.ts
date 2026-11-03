@@ -12,8 +12,11 @@ import { GroupingService } from '@patchwork/ai';
 import { parseRepository } from '@patchwork/github';
 import { createStore, newJob, type SnapshotStore, type StoreScope } from '@patchwork/storage';
 import { BusyError, WorkerAdmission } from './worker-admission';
+import { checkWorkerHealth } from '../worker/src/health';
+import { ConfigurationError, validateEnvironment } from './environment';
 
-try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+let environmentLoadFailure = false;
+try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') environmentLoadFailure = true; }
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const dist = resolve(root, 'dist');
 const production = process.argv.includes('--production');
@@ -48,6 +51,8 @@ const idRequest = z.object({ snapshotId: z.string().max(500) });
 const rateWindows = new Map<string, { start: number; requests: number }>();
 
 export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker } = {}) {
+  if (environmentLoadFailure) throw new ConfigurationError(['The .env file could not be read. Check its format and file permissions.']);
+  validateEnvironment();
   const useProduction = options.production ?? production;
   const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100 });
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
@@ -59,6 +64,7 @@ export async function createApplicationServer(options: { production?: boolean; s
   const inFlightAnalyses = new Map<string, string>();
   const snapshotWrites = new Map<string, Promise<unknown>>();
   const snapshotPending = new Map<string, number>();
+  let workerHealth: { checkedAt: number; result: Promise<{ status: 'ok'; schemaVersion: '1' }> } | undefined;
   const scopeFor = (repository: string): StoreScope => ({ ownerId: 'local-public', repository: parseRepository(repository).fullName.toLowerCase() });
   async function saveSnapshot(snapshot: GraphSnapshot) {
     validateGraphSnapshot(snapshot);
@@ -102,6 +108,11 @@ export async function createApplicationServer(options: { production?: boolean; s
         if (!window || now - window.start > 60_000) { window = { start: now, requests: 0 }; rateWindows.set(key, window); }
         if (++window.requests > 240) { res.setHeader('Retry-After', '60'); return json(res, 429, { error: 'Too many requests. Try again shortly.', code: 'RATE_LIMITED', retryAfter: 60 }); }
         if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.1.0', mode: 'local-public' });
+        if (req.method === 'GET' && url.pathname === '/api/health/worker') {
+          if (!workerHealth || Date.now() - workerHealth.checkedAt > 10_000) workerHealth = { checkedAt: Date.now(), result: checkWorkerHealth() };
+          try { return json(res, 200, await workerHealth.result); }
+          catch { return json(res, 503, { status: 'unavailable', code: 'WORKER_UNAVAILABLE', error: 'The analysis worker could not start. Restart the server and check the Node.js installation.' }); }
+        }
         if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: 'local-public', github: { publicRepositories: true, privateRepositories: false, configuredToken: Boolean(process.env.GITHUB_TOKEN) }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: false } });
         if (req.method === 'GET' && url.pathname === '/api/demo') return json(res, 200, await saveSnapshot(grouping.view(structuredClone(demoSnapshot)).snapshot));
         if (req.method === 'GET' && url.pathname.startsWith('/api/snapshots/')) return json(res, 200, await lookupSnapshot(decodeURIComponent(url.pathname.slice(15)), url.searchParams.get('repository')));
@@ -254,7 +265,22 @@ export async function createApplicationServer(options: { production?: boolean; s
   return server;
 }
 function safeError(error: unknown) { const message = error instanceof Error ? error.message : 'Request failed.'; return message.replace(/(?:gh[pousr]_[a-zA-Z0-9]+|sk-[a-zA-Z0-9_-]+)/g, '[redacted]').slice(0, 500); }
+
+/** Startup failures remain visible in the browser, without silently falling back from a configured database. */
+export function createStartupFailureServer(error: unknown) {
+  const message = error instanceof ConfigurationError ? error.message : 'The configured server services could not start. Check the database connection and local configuration, then restart the server.';
+  const escapedMessage = message.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
+  return createServer((req, res) => {
+    if ((req.url ?? '/').startsWith('/api/')) return json(res, 503, { status: 'unavailable', code: 'CONFIGURATION_ERROR', error: message });
+    res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'" });
+    res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Constellation configuration</title><body style="background:#0c1013;color:#eaf2ed;font:18px system-ui;max-width:44rem;margin:12vh auto;padding:24px"><main><h1>Constellation needs configuration</h1><p role="alert">${escapedMessage}</p><p>Update your server environment or <code>.env</code>, then stop and restart the app. The credential-free demo uses no external services when <code>DATABASE_URL</code> is empty.</p></main></body></html>`);
+  });
+}
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const server = await createApplicationServer(); const port = Number(process.env.PORT ?? 4310);
-  server.listen(port, '127.0.0.1', () => console.log(`Constellation ready at http://127.0.0.1:${port}`));
+  let server;
+  let port = 4310;
+  let configured = true;
+  try { port = validateEnvironment().port; server = await createApplicationServer(); }
+  catch (error) { configured = false; server = createStartupFailureServer(error); console.error(error instanceof ConfigurationError ? error.message : 'Constellation startup failed. Check server configuration.'); }
+  server.listen(port, '127.0.0.1', () => console.log(`Constellation ${configured ? 'ready' : 'configuration error'} at http://127.0.0.1:${port}`));
 }
