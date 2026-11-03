@@ -8,7 +8,7 @@ import { validateGraphSnapshot, type GraphSnapshot } from '@patchwork/contracts'
 import { demoSnapshot } from '@patchwork/fixtures';
 import { listRepositorySources } from '@patchwork/analysis';
 import { runAnalysisInWorker, runSourceAnalysisInWorker } from '../worker/src/index';
-import { GroupingService } from '@patchwork/ai';
+import { GroupingService, ownerGroupingStoragePath } from '@patchwork/ai';
 import { parseRepository } from '@patchwork/github';
 import { createStore, type SnapshotStore, type StoreScope } from '@patchwork/storage';
 import { BusyError, WorkerAdmission } from './worker-admission';
@@ -43,15 +43,20 @@ async function body(req: IncomingMessage) {
 const sourceRequest = z.object({ snapshotId: z.string(), kind: z.enum(['pr', 'commit']), ids: z.array(z.string().max(100)).max(20) });
 const analyzeRequest = z.object({ repository: z.string().trim().min(3).max(250), contextRef: z.string().max(200).optional(), mode: z.enum(['pr', 'commit']).optional() });
 const idRequest = z.object({ snapshotId: z.string().max(500) });
+const revisionRequest = idRequest.extend({ expectedRevisionId: z.string().min(1).max(500) });
 
-export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput>; auth?: GitHubAppAuth | null } = {}) {
+export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput>; auth?: GitHubAppAuth | null; grouping?: GroupingService } = {}) {
   if (environmentLoadFailure) throw new ConfigurationError(['The .env file could not be read. Check its format and file permissions.']);
   validateEnvironment();
   const requestScope = new AsyncLocalStorage<{ ownerId: string; epochs: Map<string, number> }>();
   const ownerId = () => requestScope.getStore()?.ownerId ?? 'local-public';
   const snapshotKey = (id: string) => `${ownerId()}:${id}`;
   const snapshots = new Map<string, GraphSnapshot>();
-  const grouping = new GroupingService({ enabled: process.env.AI_ENABLED === 'true', jevApiKey: process.env.TYPESAFE_API_KEY, jevModel: process.env.JEV_MODEL, generativeApiKey: process.env.OPENAI_API_KEY, generativeModel: process.env.OPENAI_MODEL, storagePath: process.env.GROUPING_STORAGE_PATH });
+  const groupingStorageBase = process.env.GROUPING_STORAGE_PATH ?? (process.env.NODE_ENV === 'test' ? undefined : resolve(root, '.cache/grouping.json'));
+  const comparablePath = (path: string) => process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+  if (groupingStorageBase && (comparablePath(groupingStorageBase) === comparablePath(dist) || comparablePath(groupingStorageBase).startsWith(comparablePath(dist) + sep))) throw new ConfigurationError(['GROUPING_STORAGE_PATH must be outside the served build directory.']);
+  const createGrouping = (owner: string) => new GroupingService({ enabled: process.env.AI_ENABLED === 'true', jevApiKey: process.env.TYPESAFE_API_KEY, jevModel: process.env.JEV_MODEL, generativeApiKey: process.env.OPENAI_API_KEY, generativeModel: process.env.OPENAI_MODEL, storagePath: ownerGroupingStoragePath(groupingStorageBase, owner), excludedPaths: process.env.AI_EXCLUDED_PATHS?.split(/[,\r\n]+/).map(path => path.trim()).filter(Boolean) });
+  const grouping = options.grouping ?? createGrouping('local-public');
   function remember(snapshot: GraphSnapshot) {
     validateGraphSnapshot(snapshot);
     snapshots.set(snapshotKey(snapshot.id), snapshot);
@@ -59,7 +64,7 @@ export async function createApplicationServer(options: { production?: boolean; s
     return snapshot;
   }
   remember(demoSnapshot);
-  
+
   function getSnapshot(id: string) { const snapshot = snapshots.get(snapshotKey(id)); if (!snapshot) throw Object.assign(new Error('This snapshot expired. Analyze the repository again.'), { status: 404 }); const scope = scopeFor(snapshot.repository.fullName); repositoryFences.assert(scope, expectedEpoch(scope)); return snapshot; }
   const rateWindows = new Map<string, { start: number; requests: number }>();
   const repositoryFences = new RepositoryFences();
@@ -74,7 +79,7 @@ export async function createApplicationServer(options: { production?: boolean; s
   const groupingForOwner = () => {
     if (!auth) return grouping;
     const id = ownerId(); let service = ownerGroupings.get(id);
-    if (!service) { if (ownerGroupings.size >= 128) ownerGroupings.delete(ownerGroupings.keys().next().value!); service = new GroupingService({ enabled: process.env.AI_ENABLED === 'true', jevApiKey: process.env.TYPESAFE_API_KEY, jevModel: process.env.JEV_MODEL, generativeApiKey: process.env.OPENAI_API_KEY, generativeModel: process.env.OPENAI_MODEL }); ownerGroupings.set(id, service); }
+    if (!service) { if (ownerGroupings.size >= 128) ownerGroupings.delete(ownerGroupings.keys().next().value!); service = createGrouping(id); ownerGroupings.set(id, service); }
     return service;
   };
   const sourceRequests = new Map<string, { controller: AbortController; scope: StoreScope }>();
@@ -126,7 +131,14 @@ export async function createApplicationServer(options: { production?: boolean; s
     }
   }
   const analysisJobs = new AnalysisJobs(store, admission, analyze,
-    (snapshot, scope, isCurrent) => requestScope.run({ ownerId: scope.ownerId, epochs: new Map() }, () => saveSnapshot(groupingForOwner().view(snapshot, { tenantId: scope.ownerId }).snapshot, isCurrent)),
+    (snapshot, scope, isCurrent) => requestScope.run({ ownerId: scope.ownerId, epochs: new Map() }, async () => {
+      const epoch = expectedEpoch(scope);
+      return repositoryFences.write(scope, epoch, async () => {
+        if (auth) await auth.credentialsForOwner(scope.ownerId, scope.repository);
+        repositoryFences.assert(scope, epoch); if (!isCurrent()) throw new AuthError('Analysis was invalidated.', 409, 'REPOSITORY_INVALIDATED');
+        return saveSnapshot(groupingForOwner().view(snapshot, { tenantId: scope.ownerId }).snapshot, isCurrent, true);
+      });
+    }),
     auth ? scope => auth.credentialsForOwner(scope.ownerId, scope.repository) : undefined);
   const resolveAnalysisInput = options.resolveAnalysisInput ?? (options.runAnalysis ? async (input: Parameters<typeof runAnalysisInWorker>[0]) => input : pinAnalysisInput);
   if (!auth) analysisJobs.startRecovery();
@@ -155,8 +167,8 @@ export async function createApplicationServer(options: { production?: boolean; s
     await repositoryFences.purge(scope, async () => {
       await invalidation;
       for (const [key, snapshot] of snapshots) if (key.startsWith(`${scope.ownerId}:`) && snapshot.repository.fullName.toLowerCase() === scope.repository) snapshots.delete(key);
-      // Owner services are isolated. The revision-store integration supplies scoped durable deletion.
-      if (auth) ownerGroupings.delete(scope.ownerId);
+      const service = scope.ownerId === 'local-public' ? grouping : ownerGroupings.get(scope.ownerId) ?? createGrouping(scope.ownerId);
+      service.purgeRepository(scope.repository, scope.ownerId);
       await store.deleteRepository(scope);
     });
     analysisJobs.finishInvalidation(scope);
@@ -294,17 +306,33 @@ export async function createApplicationServer(options: { production?: boolean; s
           void task.finally(() => runningTasks.delete(task)).catch(() => {});
           return json(res, 200, await task);
         }
+        if (req.method === 'GET' && url.pathname === '/api/grouping/current') {
+          const input = idRequest.parse({ snapshotId: url.searchParams.get('snapshotId') });
+          return json(res, 200, grouping.view(await lookupSnapshot(input.snapshotId, url.searchParams.get('repository')), { tenantId: ownerId() }));
+        }
+        if (req.method === 'POST' && url.pathname === '/api/grouping/policy') {
+          const input = idRequest.parse(await body(req));
+          return json(res, 200, grouping.previewPolicy(getSnapshot(input.snapshotId), { tenantId: ownerId() }));
+        }
+        if (req.method === 'POST' && url.pathname === '/api/grouping/diff') {
+          const input = idRequest.extend({ proposalId: z.string().max(500).optional() }).parse(await body(req));
+          return json(res, 200, grouping.diff(getSnapshot(input.snapshotId), input.proposalId, { tenantId: ownerId() }));
+        }
+        if (req.method === 'POST' && url.pathname === '/api/grouping/reject') {
+          const input = revisionRequest.extend({ proposalId: z.string().max(500) }).parse(await body(req));
+          const result = await serialSnapshot(input.snapshotId, () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.reject(snapshot, input.proposalId, { tenantId: ownerId(), expectedRevisionId: input.expectedRevisionId })); }); return json(res, 200, result);
+        }
         if (req.method === 'POST' && url.pathname === '/api/grouping') {
           const input = idRequest.extend({ enabled: z.boolean().default(false) }).parse(await body(req));
           return json(res, 200, await proposeGrouping(getSnapshot(input.snapshotId), input.enabled));
         }
         if (req.method === 'POST' && url.pathname === '/api/grouping/apply') {
-          const input = idRequest.extend({ proposalId: z.string().max(500) }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.apply(snapshot, input.proposalId, { tenantId: ownerId() })); }); return json(res, 200, result);
+          const input = revisionRequest.extend({ proposalId: z.string().max(500) }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.apply(snapshot, input.proposalId, { tenantId: ownerId(), expectedRevisionId: input.expectedRevisionId })); }); return json(res, 200, result);
         }
         if (req.method === 'POST' && url.pathname === '/api/grouping/mutate') {
-          const input = idRequest.extend({ operation: z.unknown() }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.mutate(snapshot, input.operation as Parameters<typeof grouping.mutate>[1], { tenantId: ownerId() })); }); return json(res, 200, result);
+          const input = revisionRequest.extend({ operation: z.unknown() }).parse(await body(req)); const result = await serialSnapshot(input.snapshotId, () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.mutate(snapshot, input.operation as Parameters<typeof grouping.mutate>[1], { tenantId: ownerId(), expectedRevisionId: input.expectedRevisionId })); }); return json(res, 200, result);
         }
-        if (req.method === 'POST' && url.pathname === '/api/grouping/undo') { const input = idRequest.parse(await body(req)); const result = await serialSnapshot(input.snapshotId, async () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.undo(snapshot, { tenantId: ownerId() })); }); return json(res, 200, result); }
+        if (req.method === 'POST' && url.pathname === '/api/grouping/undo') { const input = revisionRequest.parse(await body(req)); const result = await serialSnapshot(input.snapshotId, () => { const snapshot = getSnapshot(input.snapshotId); return mutateGrouping(snapshot, () => grouping.undo(snapshot, { tenantId: ownerId(), expectedRevisionId: input.expectedRevisionId })); }); return json(res, 200, result); }
         return json(res, 404, { error: 'API route not found.' });
       }
       if (!useProduction && vite) return vite.middlewares(req, res, () => json(res, 404, { error: 'Not found' }));

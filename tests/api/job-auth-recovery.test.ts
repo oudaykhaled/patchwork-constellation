@@ -125,8 +125,9 @@ describe('authenticated durable queue boundaries', () => {
     await store.putSnapshot(owner, value);
     const app = await start(auth, { store, runAnalysis: async () => value });
     expect((await app.get('/api/snapshots/same-snapshot-id?repository=acme/private')).status).toBe(200);
+    const current = await app.get('/api/grouping/current?snapshotId=same-snapshot-id').then(response => response.json());
     delay = true;
-    const changing = app.post('/api/grouping/mutate', { snapshotId: value.id, operation: { type: 'rename', groupId: value.groups[0]!.id, label: 'Late private override' } });
+    const changing = app.post('/api/grouping/mutate', { snapshotId: value.id, expectedRevisionId: current.revision.id, operation: { type: 'rename', groupId: value.groups[0]!.id, label: 'Late private override' } });
     await began;
     auth.removed.add(owner.ownerId); let purged = false;
     const purging = app.server.purgeRepository(owner).then(() => { purged = true; });
@@ -137,5 +138,23 @@ describe('authenticated durable queue boundaries', () => {
     const { jobId } = await (await app.post('/api/analyze', { repository: 'acme/private' })).json();
     await vi.waitFor(async () => expect((await app.get(`/api/jobs/${jobId}`).then(r => r.json())).status).toBe('ready'));
     expect((await app.get('/api/graphs/same-snapshot-id').then(r => r.json())).groups[0].label).toBe('Alice evidence');
+  });
+
+  test('policy preview enforces live owner access and configured exclusions without provider analysis', async () => {
+    vi.stubEnv('AI_EXCLUDED_PATHS', `${demoSnapshot.nodes[0]!.path}\ncustom/private/**, generated/**`);
+    try {
+      const auth = new QueueAuth(), run: typeof runAnalysisInWorker = vi.fn(async (_input, options) => snapshot(options?.token));
+      const app = await start(auth, { runAnalysis: run });
+      const { jobId } = await (await app.post('/api/analyze', { repository: 'acme/private' })).json();
+      await vi.waitFor(async () => expect((await app.get(`/api/jobs/${jobId}`).then(r => r.json())).status).toBe('ready'));
+      const preview = await app.post('/api/grouping/policy', { snapshotId: 'same-snapshot-id' });
+      expect(preview.status).toBe(200); const policy = await preview.json();
+      expect(policy.excludedFiles).toBeGreaterThanOrEqual(1); expect(policy.sourceExcerpts).toBe(false);
+      expect(policy.metadata.files.some((file: { id: string }) => file.id === demoSnapshot.nodes[0]!.id)).toBe(false);
+      expect(JSON.stringify(policy)).not.toContain(demoSnapshot.nodes[0]!.path);
+      expect((await app.post('/api/grouping/policy', { snapshotId: 'same-snapshot-id' }, 'bob')).status).toBe(404);
+      auth.removed.add('github:alice'); expect((await app.post('/api/grouping/policy', { snapshotId: 'same-snapshot-id' })).status).toBe(403);
+      expect(run).toHaveBeenCalledTimes(1);
+    } finally { vi.unstubAllEnvs(); }
   });
 });

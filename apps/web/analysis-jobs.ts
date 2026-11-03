@@ -1,16 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { GitHubClient, parseRepository, type GitHubOptions } from '@patchwork/github';
 import { newJob, type SnapshotStore, type StoreScope, type StoredJob } from '@patchwork/storage';
-import { ANALYZER_VERSION, type AnalyzeInput } from '@patchwork/analysis';
-import type { GraphSnapshot } from '@patchwork/contracts';
+import { ANALYZER_VERSION, GROUPING_RULES_VERSION, type AnalyzeInput } from '@patchwork/analysis';
+import { AnalysisJobSchema, type AnalysisJob, type GraphSnapshot } from '@patchwork/contracts';
 import type { runAnalysisInWorker } from '../worker/src/index';
 import { WorkerAdmission } from './worker-admission';
 import { publicErrorCode, publicErrorMessage } from './public-errors';
 
 export const ANALYSIS_VERSION = ANALYZER_VERSION;
-export const GROUPING_VERSION = 'baseline-v1';
+export const GROUPING_VERSION = GROUPING_RULES_VERSION;
 export interface PinnedAnalysisInput extends AnalyzeInput { displayContextRef?: string }
-export type AnalysisJobView = { id: string; status: 'queued' | 'running' | 'ready' | 'failed' | 'cancelled'; stage: StoredJob['status']; progress: number; message: string; createdAt: string; updatedAt: string; version: string; snapshotId?: string; graphUrl?: string; snapshot?: GraphSnapshot; error?: string; code?: string; retryable?: boolean };
+export type AnalysisJobView = AnalysisJob & { stage: StoredJob['status']; version: string; graphUrl?: string; snapshot?: GraphSnapshot; code?: string; retryable?: boolean };
 const terminal = (job: StoredJob) => ['ready', 'partial', 'failed', 'cancelled'].includes(job.status);
 const errorMessage = publicErrorMessage;
 const failureCode = (error: unknown, status: number) => { const code = publicErrorCode(error); return code !== 'REQUEST_FAILED' ? code : status >= 500 ? 'ANALYSIS_FAILED' : 'PERMANENT_ANALYSIS'; };
@@ -60,7 +60,8 @@ export class AnalysisJobs {
   }
   private view(job: StoredJob): AnalysisJobView {
     const status = job.status === 'ready' || job.status === 'partial' ? 'ready' : job.status === 'failed' || job.status === 'cancelled' || job.status === 'queued' ? job.status : 'running';
-    return { id: job.id, status, stage: job.status, progress: job.progress, message: job.error ?? String(job.input.progressMessage ?? (status === 'queued' ? 'Preparing analysis…' : 'Analyzing repository…')), createdAt: job.createdAt, updatedAt: job.updatedAt, version: `${ANALYSIS_VERSION}:${GROUPING_VERSION}`, snapshotId: job.snapshotId, graphUrl: job.snapshotId ? `/api/graphs/${encodeURIComponent(job.snapshotId)}?repository=${encodeURIComponent(String(job.input.repository))}` : undefined, error: job.error, code: job.errorCode, retryable: job.retryable };
+    const inputRef = typeof job.input.contextRef === 'string' ? job.input.contextRef : undefined;
+    return { ...AnalysisJobSchema.parse({ schemaVersion: '1', id: job.id, repository: String(job.input.repository), contextRef: job.input.displayContextRef ?? inputRef, contextSha: inputRef && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(inputRef) ? inputRef : undefined, status, progress: job.progress, message: job.error ?? String(job.input.progressMessage ?? (status === 'queued' ? 'Preparing analysis…' : 'Analyzing repository…')), createdAt: job.createdAt, updatedAt: job.updatedAt, snapshotId: job.snapshotId, error: job.error }), stage: job.status, version: `${ANALYSIS_VERSION}:${GROUPING_VERSION}`, graphUrl: job.snapshotId ? `/api/graphs/${encodeURIComponent(job.snapshotId)}?repository=${encodeURIComponent(String(job.input.repository))}` : undefined, code: job.errorCode, retryable: job.retryable };
   }
   private cache(scope: StoreScope, job: StoredJob) {
     const prior = this.views.get(job.id), view = this.view(job); if (prior?.snapshot) view.snapshot = prior.snapshot;

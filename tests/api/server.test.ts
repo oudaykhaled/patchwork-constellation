@@ -96,14 +96,17 @@ describe('local HTTP trust boundaries', () => {
     const snapshot = await (await fetch(base + '/api/demo')).json();
     const original = snapshot.groups[0];
     const label = `Quality review ${Date.now()}`;
+    const current = await fetch(`${base}/api/grouping/current?snapshotId=${encodeURIComponent(snapshot.id)}`).then(response => response.json());
     const rename = await post('/api/grouping/mutate', {
       snapshotId: snapshot.id,
+      expectedRevisionId: current.revision.id,
       operation: { type: 'rename', groupId: original.id, label },
     });
     expect(rename.status).toBe(200);
     const reloaded = await (await fetch(base + '/api/demo')).json();
     expect(reloaded.groups.find((group: { id: string }) => group.id === original.id).label).toBe(label);
-    const undo = await post('/api/grouping/undo', { snapshotId: reloaded.id });
+    const accepted = await rename.json();
+    const undo = await post('/api/grouping/undo', { snapshotId: reloaded.id, expectedRevisionId: accepted.revision.id });
     expect(undo.status).toBe(200);
     const restored = await (await fetch(base + '/api/demo')).json();
     expect(restored.groups.find((group: { id: string }) => group.id === original.id).label).toBe(original.label);
