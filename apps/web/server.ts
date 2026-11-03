@@ -47,7 +47,7 @@ const revisionRequest = idRequest.extend({ expectedRevisionId: z.string().min(1)
 
 export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput>; auth?: GitHubAppAuth | null; grouping?: GroupingService } = {}) {
   if (environmentLoadFailure) throw new ConfigurationError(['The .env file could not be read. Check its format and file permissions.']);
-  validateEnvironment();
+  const { apiRequestsPerMinute } = validateEnvironment();
   const requestScope = new AsyncLocalStorage<{ ownerId: string; epochs: Map<string, number> }>();
   const ownerId = () => requestScope.getStore()?.ownerId ?? 'local-public';
   const snapshotKey = (id: string) => `${ownerId()}:${id}`;
@@ -187,7 +187,7 @@ export async function createApplicationServer(options: { production?: boolean; s
         if (req.headers.origin && req.headers.origin !== `http://${host}` && req.headers.origin !== `https://${host}`) return json(res, 403, { error: 'Cross-origin requests are not allowed.', code: 'ORIGIN_DENIED' });
         const key = req.socket.remoteAddress ?? 'local'; const now = Date.now(); let window = rateWindows.get(key);
         if (!window || now - window.start > 60_000) { window = { start: now, requests: 0 }; rateWindows.set(key, window); }
-        if (++window.requests > 240) { res.setHeader('Retry-After', '60'); return json(res, 429, { error: 'Too many requests. Try again shortly.', code: 'RATE_LIMITED', retryAfter: 60 }); }
+        if (++window.requests > apiRequestsPerMinute) { const retryAfter = Math.max(1, Math.ceil((window.start + 60_000 - now) / 1000)); res.setHeader('Retry-After', String(retryAfter)); return json(res, 429, { error: 'Too many requests. Try again shortly.', code: 'RATE_LIMITED', retryAfter }); }
         if (url.pathname.startsWith('/api/auth/')) {
           if (!auth) return json(res, 200, { configured: false, authenticated: false, code: 'AUTH_UNCONFIGURED' });
           if (req.method === 'GET' && url.pathname === '/api/auth/login') { res.writeHead(302, { Location: auth.begin(res), 'Cache-Control': 'no-store' }); return res.end(); }
