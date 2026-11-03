@@ -119,4 +119,3 @@ test('canceling an in-flight selection restores the confirmed footprint', async 
     await expect(page.getByText('Analysis canceled. Your current map is preserved.')).toBeVisible();
   } finally { release(); }
 });
-

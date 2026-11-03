@@ -45,7 +45,7 @@ describe('independent source footprint semantics', () => {
   });
 
   it('represents a root delta against the empty tree', async () => {
-    const result = await loadSourceChanges(snapshot([commit(B, EMPTY_GIT_TREE)]), 'commit', [`commit:${B}`], { fetch: fetcher(() => ({ sha: B, commit: { message: 'root' }, parents: [], files: [{ ...modified, status: 'added' }] })) });
+    const result = await loadSourceChanges(snapshot([commit(B, EMPTY_GIT_TREE)]), 'commit', [`commit:${B}`], { fetch: fetcher(() => ({ sha: B, commit: { message: 'root' }, parents: [], files: [{ ...modified, status: 'added', deletions: 0 }] })) });
     expect(result.sources[0]).toMatchObject({ comparisonKind: 'empty-tree', baseSha: EMPTY_GIT_TREE, headSha: B });
   });
 
