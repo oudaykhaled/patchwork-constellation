@@ -22,9 +22,9 @@ const fixture: GraphSnapshot = {
   ] }],
   coverage: { status: 'partial', reasons: ['Stale snapshot: newer analysis available.', 'Python and binary imports unsupported.'] },
 };
-async function openFixture(page: Page) {
-  await page.route('**/api/demo', route => route.fulfill({ json: fixture }));
-  await page.route('**/api/sources', route => route.fulfill({ json: { snapshot: fixture } }));
+async function openFixture(page: Page, snapshot = fixture) {
+  await page.route('**/api/demo', route => route.fulfill({ json: snapshot }));
+  await page.route('**/api/sources', route => route.fulfill({ json: { snapshot } }));
   await page.goto('/');
   await expect(page.getByTestId('changed-count')).toHaveText('3');
 }
@@ -54,6 +54,37 @@ test('duplicate basenames retain path/group context and show pinned per-file dif
   await expect(page.getByTestId('changed-count')).toHaveText('3');
   await inspector.getByRole('button', { name: 'Inbound (1)', exact: true }).click();
   await expect(inspector.getByRole('button', { name: /^index.ts alpha/ })).toBeVisible();
+});
+
+test('context coverage and selected-head evidence remain separate, including source-only limitations', async ({ page }) => {
+  const context = 'd'.repeat(40);
+  const snapshot = structuredClone(fixture);
+  snapshot.contextSha = context;
+  snapshot.nodes[0] = { ...snapshot.nodes[0]!, importCoverage: 'partial', importReasons: ['Context resolver budget reached.'], externalImports: [{ specifier: 'react', line: 2, reason: 'External package' }], unresolvedImports: [{ specifier: './missing', line: 4, reason: 'No inventoried target' }] };
+  snapshot.nodes[1] = { ...snapshot.nodes[1]!, presence: 'source-only', importCoverage: 'unsupported' };
+  snapshot.edges[0]!.evidence = { path: 'alpha/index.ts', line: 3, resolver: 'context-resolver', snapshotSha: context };
+  snapshot.sources[0] = { ...snapshot.sources[0]!, importHeadSha: head, importCoverage: { status: 'partial', reasons: ['Only outgoing changed-file imports are parsed.'] }, importFiles: [{ fileId: 'a', path: 'alpha/index.ts', status: 'partial', reasons: ['Head identity coverage is bounded.'] }, { fileId: 'b', path: 'beta/index.ts', status: 'unsupported', reasons: ['Source-head file was not parsed.'] }], importEdges: [{ id: 'head-a-b', source: 'a', target: 'b', kind: 'dynamic-import', sourceId: 'pr:1', provenance: 'selected-head', evidence: { sourceId: 'pr:1', path: 'alpha/index.ts', line: 6, resolver: 'head-resolver', snapshotSha: head } }] };
+  await openFixture(page, snapshot);
+  const inspector = await inspect(page, 'alpha/index.ts', /alpha\/index.ts/);
+  const contextDetails = inspector.getByTestId('context-import-coverage');
+  await contextDetails.locator('summary').click();
+  await expect(contextDetails).toContainText('Context resolver budget reached.');
+  await expect(contextDetails).toContainText('react');
+  await expect(contextDetails).toContainText('./missing');
+  await expect(contextDetails).toContainText(context.slice(0, 12));
+  const sourceDetails = inspector.getByTestId('source-head-pr:1');
+  await sourceDetails.locator('summary').click();
+  await expect(sourceDetails).toContainText('file coverage: partial');
+  await expect(sourceDetails).toContainText('1 verified head connections');
+  await expect(sourceDetails).toContainText('not a merged code state');
+  await expect(sourceDetails.getByRole('link', { name: /head-resolver/ })).toHaveAttribute('href', `https://github.com/example/review/blob/${head}/alpha/index.ts#L6`);
+  await expect(inspector.getByRole('heading', { name: 'Pinned context connections 1' })).toBeVisible();
+  await expect(page.getByTestId('changed-count')).toHaveText('3');
+  await sourceDetails.getByRole('button', { name: /beta\/index.ts/ }).click();
+  await expect(inspector).toContainText('Source-only file');
+  await expect(inspector.getByTestId('context-import-coverage')).toContainText('not in context');
+  await inspector.getByTestId('source-head-pr:1').locator('summary').click();
+  await expect(inspector.getByTestId('source-head-pr:1')).toContainText('Source-head file was not parsed.');
 });
 test('removed binary and unsupported files explain absent data, and no-results recovers', async ({ page }) => {
   await openFixture(page);

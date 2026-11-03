@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from '@patchwork/fixtures';
 import type { ChangeSource, GraphSnapshot } from '@patchwork/contracts';
-import { connectionEvidence, diffLink, fileAvailability, findFiles, groupBreadcrumb, sourceFileLink, sourceLink } from './file-evidence';
+import { connectionEvidence, diffLink, fileAvailability, findFiles, groupBreadcrumb, importReferences, selectedHeadEvidence, sourceFileLink, sourceLink, textReasons } from './file-evidence';
 
 const head = 'a'.repeat(40), base = 'b'.repeat(40);
 const live: GraphSnapshot = { ...demoSnapshot, mode: 'github', contextSha: head, repository: { ...demoSnapshot.repository, owner: 'example', name: 'repo', fullName: 'example/repo' } };
@@ -44,5 +44,23 @@ describe('file review evidence', () => {
     expect(evidence.url).toBe(`https://github.com/example/repo/blob/${base}/src/a.ts#L9`);
     expect(connectionEvidence(live, { id: 'e', source: 'a', target: 'b', kind: 'import' }).text).toContain('unavailable');
     expect(groupBreadcrumb([{ id: 'a', label: 'Component', parentId: 'b' }, { id: 'b', label: 'Package', parentId: 'a' }], 'a')).toBe('Package / Component');
+  });
+  it('keeps verified selected-head edges independent of context and rejects foreign or stale evidence', () => {
+    const file = live.nodes[0]!, target = live.nodes[1]!;
+    const edge = { id: 'head-edge', source: file.id, target: target.id, kind: 'type-import', provenance: 'selected-head', sourceId: source.id, evidence: { path: file.path, line: 7, resolver: 'typescript-ast', sourceId: source.id, snapshotSha: head } };
+    const enriched = { ...source, importHeadSha: head, importCoverage: { status: 'partial', reasons: ['Outgoing changed-file imports only.'] }, importFiles: [{ fileId: file.id, path: file.path, status: 'partial', reasons: ['Missing target identity.'] }], importEdges: [edge, { ...edge, id: 'foreign', sourceId: 'other-pr' }, { ...edge, id: 'dangling', target: 'unknown-file' }] };
+    const contextEdges = live.edges.length;
+    const result = selectedHeadEvidence(live, enriched, file);
+    expect(result).toMatchObject({ status: 'partial', pinned: true, fileStatus: 'partial', fileReasons: ['Missing target identity.'], rejectedEdges: 2 });
+    expect(result.edges.map(item => item.id)).toEqual(['head-edge']);
+    expect(live.edges).toHaveLength(contextEdges);
+    const stale = selectedHeadEvidence(live, { ...enriched, importHeadSha: base }, file);
+    expect(stale.edges).toEqual([]);
+    expect(stale.fileStatus).toBe('unavailable');
+    expect(stale.fileReasons.join(' ')).toContain('different source revision');
+  });
+  it('retains external/unresolved metadata as text and ignores malformed optional values', () => {
+    expect(importReferences([{ specifier: 'react', line: 4, reason: 'External package' }, { specifier: '../missing', line: -1 }, { specifier: { injected: true } }, null])).toEqual([{ specifier: 'react', line: 4, reason: 'External package' }, { specifier: '../missing' }]);
+    expect(textReasons(['Source budget reached.', { invalid: true }])).toEqual(['Source budget reached.']);
   });
 });
