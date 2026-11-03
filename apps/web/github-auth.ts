@@ -147,7 +147,7 @@ export class GitHubAppAuth {
   async credentialsForOwner(ownerId: string, repository: string) {
     this.sweep();
     const session = [...this.sessions.values()].find(value => value.ownerId === ownerId);
-    if (!session) throw new AuthError('Reconnect GitHub before retrying this stored analysis.', 401, 'SIGN_IN_REQUIRED');
+    if (!session) throw new AuthError('Reconnect GitHub before retrying this stored analysis.', 403, 'AUTH_SESSION_REQUIRED');
     return { token: await this.repositoryToken(this.publicSession(session), repository), allowPrivate: true as const };
   }
   /** Webhook revocation can immediately expire tokens. Every read also checks live user access. */

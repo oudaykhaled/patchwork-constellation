@@ -86,6 +86,7 @@ describe('GitHub App authorization boundary', () => {
   test('sessions cannot be forged from another service and revoked installation cache can be invalidated', async () => {
     const f = fixture(), g = fixture(); const { session } = await login(f.auth);
     await expect(g.auth.repositories(session)).rejects.toMatchObject({ code: 'SIGN_IN_REQUIRED' });
+    await expect(g.auth.credentialsForOwner(session.ownerId, repo.full_name)).rejects.toMatchObject({ status: 403, code: 'AUTH_SESSION_REQUIRED' });
     expect(f.auth.knownRepositoryScopes(18)).toEqual([]);
     await f.auth.repositoryToken(session, repo.full_name);
     expect(f.auth.knownRepositoryScopes(18, 80)).toEqual([{ ownerId: 'github:9', repository: 'acme/private' }]);
