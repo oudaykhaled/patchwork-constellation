@@ -27,6 +27,7 @@ export default defineConfig({
     timeout: 60_000,
     env: {
       HOST: '127.0.0.1', PORT: serverURL.port || (serverURL.protocol === 'https:' ? '443' : '80'),
+      API_REQUESTS_PER_MINUTE: '2400',
       GITHUB_TOKEN: '', AI_ENABLED: 'false', TYPESAFE_API_KEY: '', JEV_MODEL: '',
       OPENAI_API_KEY: '', OPENAI_MODEL: '', DATABASE_URL: '', GROUPING_STORAGE_PATH: '',
     },
