@@ -48,6 +48,7 @@ function islandPath(context: CanvasRenderingContext2D, island: Island) {
 export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, onOpenFiles, initialCamera, onCameraChange, overviewRequest = 0, className = '', layoutSeed = 0, layoutPins, onLayoutReady }: ConstellationGraphProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<Camera>(DEFAULT_CAMERA);
   const sizeRef = useRef(EMPTY_SIZE);
   const animationRef = useRef<number | null>(null);
@@ -63,6 +64,26 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const [camera, setCameraState] = useState(DEFAULT_CAMERA);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoverPosition, setHoverPosition] = useState<Point>({ x: 0, y: 0 });
+  const hoveredIdRef = useRef(hoveredId);
+  hoveredIdRef.current = hoveredId;
+  const hoverTriggerId = useRef<string | null>(null);
+  const tooltipHovered = useRef(false);
+  const dismissedHoverId = useRef<string | null>(null);
+  const hoverLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelHoverLeave = useCallback(() => {
+    if (hoverLeaveTimer.current !== null) clearTimeout(hoverLeaveTimer.current);
+    hoverLeaveTimer.current = null;
+  }, []);
+  const clearTooltip = useCallback(() => { cancelHoverLeave(); setHoveredId(null); }, [cancelHoverLeave]);
+  const leaveHover = useCallback(() => {
+    if (hoverLeaveTimer.current !== null || tooltipHovered.current) return;
+    // A short bridge lets the pointer cross the gap between its circle and the
+    // tooltip. Content stays visible indefinitely while either is hovered.
+    hoverLeaveTimer.current = setTimeout(() => {
+      hoverLeaveTimer.current = null;
+      if (!hoverTriggerId.current && !tooltipHovered.current) setHoveredId(null);
+    }, 220);
+  }, []);
   const [dragging, setDragging] = useState(false);
   const [canvasFailed, setCanvasFailed] = useState(false);
   const [canvasAttempt, setCanvasAttempt] = useState(0);
@@ -78,6 +99,24 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const selectedPosition = selectedFileId ? layout.nodeById.get(selectedFileId) : undefined;
   const focusedIsland = focusGroupId ? layout.islands.find(island => island.id === focusGroupId) : undefined;
   const hovered = hoveredId ? layout.nodeById.get(hoveredId) : undefined;
+  useEffect(() => {
+    clearTooltip(); hoverTriggerId.current = null; tooltipHovered.current = false; dismissedHoverId.current = null;
+  }, [layout, scopeGroupId, clearTooltip]);
+  useEffect(() => {
+    const dismiss = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || !hoveredIdRef.current) return;
+      // Hover can coexist with focus in another control. Dismiss it without
+      // moving that focus, changing source selection or closing file details.
+      dismissedHoverId.current = hoveredIdRef.current;
+      tooltipHovered.current = false; clearTooltip();
+      // A native modal makes the underlying graph inert. Its own Escape
+      // handling takes priority over hover content behind the backdrop.
+      if (document.querySelector('dialog[open]')) return;
+      event.preventDefault(); event.stopPropagation();
+    };
+    window.addEventListener('keydown', dismiss, true);
+    return () => { window.removeEventListener('keydown', dismiss, true); cancelHoverLeave(); };
+  }, [clearTooltip, cancelHoverLeave]);
   const scope = useMemo(() => scopeSummary(snapshot, scopeGroupId), [snapshot.nodes, snapshot.edges, scopeGroupId]);
   const insets = useMemo(() => navigationInsets(size.width, inspectorWidth), [size.width, inspectorWidth]);
   const fit = useMemo(() => fitVisibleCamera(layout.bounds, size.width, size.height, insets), [layout.bounds, size, insets]);
@@ -320,7 +359,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     stopAnimation(); const point = eventPoint(event); pointers.current.set(event.pointerId, point);
     event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus();
     const points = [...pointers.current.values()];
-    gesture.current = { start: point, last: point, moved: points.length > 1, pinchDistance: points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : null, pinchMidpoint: points.length > 1 ? { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 } : null }; setDragging(true); setHoveredId(null);
+    gesture.current = { start: point, last: point, moved: points.length > 1, pinchDistance: points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : null, pinchMidpoint: points.length > 1 ? { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 } : null }; setDragging(true); clearTooltip(); hoverTriggerId.current = null;
   };
   const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const point = eventPoint(event);
@@ -343,7 +382,26 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       }
       gesture.current.last = point; return;
     }
-    const node = hitNode(point); setHoveredId(node?.id ?? null); if (node) setHoverPosition(point);
+    let node = hitNode(point);
+    const active = hoveredIdRef.current ? layout.nodeById.get(hoveredIdRef.current) : undefined;
+    const activePoint = active ? worldToScreen(active, cameraRef.current, sizeRef.current.width, sizeRef.current.height) : undefined;
+    // Retain the active hit target through its radius instead of flickering
+    // between nearby files while crossing toward content.
+    if (active && activePoint && Math.hypot(point.x - activePoint.x, point.y - activePoint.y) < 16) node = active;
+    const tooltipBox = tooltipRef.current?.getBoundingClientRect(), canvasBox = canvasRef.current?.getBoundingClientRect();
+    if (active && activePoint && node?.id !== active.id && tooltipBox && canvasBox) {
+      const left = tooltipBox.left - canvasBox.left, top = tooltipBox.top - canvasBox.top;
+      const inBridge = point.x >= Math.min(activePoint.x, left) - 4 && point.x <= Math.max(activePoint.x, left + tooltipBox.width) + 4 && point.y >= Math.min(activePoint.y, top) - 4 && point.y <= Math.max(activePoint.y, top + tooltipBox.height) + 4;
+      if (inBridge) { hoverTriggerId.current = null; leaveHover(); return; }
+    }
+    hoverTriggerId.current = node?.id ?? null;
+    if (node) {
+      if (dismissedHoverId.current === node.id) return;
+      dismissedHoverId.current = null; cancelHoverLeave();
+      // Anchor to the trigger entry point instead of chasing a pointer that is
+      // crossing toward the tooltip content.
+      if (hoveredIdRef.current !== node.id) { hoveredIdRef.current = node.id; setHoveredId(node.id); setHoverPosition(point); }
+    } else { dismissedHoverId.current = null; leaveHover(); }
   };
   const pointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const point = eventPoint(event); const hadPointers = pointers.current.has(event.pointerId); pointers.current.delete(event.pointerId);
@@ -401,7 +459,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
 
   const viewport = { x: camera.x - size.width / camera.zoom / 2, y: camera.y - size.height / camera.zoom / 2, width: size.width / camera.zoom, height: size.height / camera.zoom };
   return <div ref={hostRef} className={`constellation-graph ${dragging ? 'is-dragging' : ''} ${className}`} style={{ '--graph-inspector-width': `${inspectorWidth}px` } as CSSProperties} data-testid="graph-surface" data-layout-state={layoutState}>
-    <canvas ref={canvasRef} data-testid="graph-canvas" data-camera-x={camera.x} data-camera-y={camera.y} data-camera-scale={camera.zoom} data-visible-file-count={visibleFiles} data-selection-cue={selectedFileId ? 'corner-brackets' : 'none'} className="constellation-canvas" tabIndex={0} aria-label={`Repository file graph. ${snapshot.nodes.length} files in ${layout.islands.length} islands. Arrow keys pan. Plus and minus zoom. Zero fits all islands. Use the Files view for accessible file details.`} aria-describedby="graph-instructions" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={pointerUp} onPointerLeave={() => !pointers.current.size && setHoveredId(null)} onKeyDown={keyDown} />
+    <canvas ref={canvasRef} data-testid="graph-canvas" data-camera-x={camera.x} data-camera-y={camera.y} data-camera-scale={camera.zoom} data-visible-file-count={visibleFiles} data-selection-cue={selectedFileId ? 'corner-brackets' : 'none'} className="constellation-canvas" tabIndex={0} aria-label={`Repository file graph. ${snapshot.nodes.length} files in ${layout.islands.length} islands. Arrow keys pan. Plus and minus zoom. Zero fits all islands. Use the Files view for accessible file details.`} aria-describedby="graph-instructions" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={pointerUp} onPointerLeave={() => { if (!pointers.current.size) { hoverTriggerId.current = null; dismissedHoverId.current = null; leaveHover(); } }} onKeyDown={keyDown} />
     <p id="graph-instructions" className="graph-sr-only">One circle is one file. Green circles changed in the selected sources; an outer ring means multiple sources. Corner brackets identify the selected file. Lines are directed imports. Drag to pan, scroll or pinch to zoom. Control or Command modified wheel and keyboard shortcuts retain browser zoom. Select a labeled island to focus it. Filename labels are prioritized to avoid collisions; the synchronized Files view retains every file.</p>
     <div role="group" className="island-controls" aria-label="Repository islands">
       {islandLabels.map(({ island, point, hidden }) => {
@@ -421,7 +479,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       <span role="status">Showing {scope.files.toLocaleString()} of {scope.totalFiles.toLocaleString()} files · {scope.edges.toLocaleString()} of {scope.totalEdges.toLocaleString()} connections</span>
       <small>Above the 2,000-file / 8,000-connection target. Scope filters affect drawing; Files retains all repository evidence.</small>
     </div>}
-    {hovered && !dragging && <div className="graph-tooltip" role="tooltip" style={{ left: clamp(hoverPosition.x + 20, 8, Math.max(8, size.width - 285)), top: clamp(hoverPosition.y - 48, 8, Math.max(8, size.height - 130)) }}><strong>{basename(hovered.path)}</strong><span>{hovered.path}</span><small>{membership.get(hovered.id) ? `${membership.get(hovered.id)} selected source${membership.get(hovered.id) === 1 ? '' : 's'}` : 'Unchanged context'} · Click to inspect</small></div>}
+    {hovered && !dragging && <div ref={tooltipRef} className="graph-tooltip" role="tooltip" onPointerEnter={() => { tooltipHovered.current = true; cancelHoverLeave(); }} onPointerLeave={() => { tooltipHovered.current = false; leaveHover(); }} style={{ left: clamp(hoverPosition.x + 20, 8, Math.max(8, size.width - 285)), top: clamp(hoverPosition.y - 48, 8, Math.max(8, size.height - 130)) }}><strong>{basename(hovered.path)}</strong><span>{hovered.path}</span><small>{membership.get(hovered.id) ? `${membership.get(hovered.id)} selected source${membership.get(hovered.id) === 1 ? '' : 's'}` : 'Unchanged context'} · Select circle to inspect</small></div>}
     {layoutState === 'pending' && <div className="graph-layout-status" role="status">Settling repository islands…</div>}
     {(canvasFailed || layoutState === 'failed') && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>{layoutError || 'Use Files to explore the complete repository and its connections.'}</p>{onOpenFiles && <button type="button" onClick={onOpenFiles}>Open file list</button>} {layoutState === 'failed' && <button type="button" onClick={resetLayout}>Retry layout</button>} {canvasFailed && <button type="button" onClick={() => { const available = !!canvasRef.current?.getContext('2d'); setCanvasFailed(!available); if (available) { setCanvasAttempt(value => value + 1); requestDraw(); } }}>Retry graph</button>}</div>}
     {showImports && suppressedEdges > 0 && <div className="graph-detail-notice">Overview detail: {suppressedEdges.toLocaleString()} of {snapshot.edges.length.toLocaleString()} background import lines suppressed. All {snapshot.nodes.length.toLocaleString()} files are retained. Zoom in or inspect a file for its connections.</div>}
