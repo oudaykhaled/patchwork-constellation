@@ -2,7 +2,7 @@ import { authoredFileFacts } from '@patchwork/fixtures';
 import { createHash } from 'node:crypto';
 import { expect, test, type Page } from '@playwright/test';
 import { demoSnapshot } from '../../packages/fixtures/src/index';
-import type { GraphSnapshot } from '../../packages/contracts/src/index';
+import { GraphSnapshotSchema, type GraphSnapshot } from '../../packages/contracts/src/index';
 
 const head = 'a'.repeat(40), base = 'b'.repeat(40);
 const fixture: GraphSnapshot = {
@@ -24,6 +24,7 @@ const fixture: GraphSnapshot = {
   coverage: { status: 'partial', reasons: ['Stale snapshot: newer analysis available.', 'Python and binary imports unsupported.'] },
 };
 async function openFixture(page: Page, snapshot = fixture) {
+  GraphSnapshotSchema.parse(snapshot);
   await page.route('**/api/demo', route => route.fulfill({ json: snapshot }));
   await page.route('**/api/sources', route => route.fulfill({ json: { snapshot } }));
   await page.goto('/');
@@ -62,9 +63,9 @@ test('context coverage and selected-head evidence remain separate, including sou
   const snapshot = structuredClone(fixture);
   snapshot.contextSha = context;
   snapshot.nodes[0] = { ...snapshot.nodes[0]!, importCoverage: 'partial', importReasons: ['Context resolver budget reached.'], externalImports: [{ specifier: 'react', line: 2, kind: 'import', reason: 'External package' }], unresolvedImports: [{ specifier: './missing', line: 4, kind: 'import', reason: 'No inventoried target' }] };
-  snapshot.nodes[1] = { ...snapshot.nodes[1]!, presence: 'source-only', importCoverage: 'unsupported' };
+  snapshot.nodes[1] = { ...snapshot.nodes[1]!, fileKind: 'unknown', presence: 'source-only', importCoverage: 'excluded', importReasons: ['The source-only file has no pinned context blob.'] };
   snapshot.edges[0]!.evidence = { path: 'alpha/index.ts', line: 3, resolver: 'context-resolver', snapshotSha: context };
-  snapshot.sources[0] = { ...snapshot.sources[0]!, importHeadSha: head, importCoverage: { status: 'partial', reasons: ['Only outgoing changed-file imports are parsed.'] }, importFiles: [{ fileId: 'a', path: 'alpha/index.ts', status: 'partial', reasons: ['Head identity coverage is bounded.'] }, { fileId: 'b', path: 'beta/index.ts', status: 'unsupported', reasons: ['Source-head file was not parsed.'] }], importEdges: [{ id: 'head-a-b', source: 'a', target: 'b', kind: 'dynamic-import', sourceId: 'pr:1', provenance: 'selected-head', evidence: { sourceId: 'pr:1', path: 'alpha/index.ts', line: 6, resolver: 'head-resolver', snapshotSha: head } }] };
+  snapshot.sources[0] = { ...snapshot.sources[0]!, importHeadSha: head, importCoverage: { status: 'partial', reasons: ['Only outgoing changed-file imports are parsed.'] }, importFiles: [{ fileId: 'a', path: 'alpha/index.ts', status: 'partial', reasons: ['Head identity coverage is bounded.'] }, { fileId: 'b', path: 'beta/index.ts', status: 'unsupported', reasons: ['Source-head file was not parsed.'] }, { fileId: 'c', path: 'assets/removed.png', status: 'excluded', reasons: ['Deleted file has no source-head blob.'] }], importEdges: [{ id: 'head-a-b', source: 'a', target: 'b', kind: 'dynamic-import', sourceId: 'pr:1', provenance: 'selected-head', evidence: { sourceId: 'pr:1', path: 'alpha/index.ts', line: 6, specifier: '../beta', resolver: 'head-resolver', snapshotSha: head, headSha: head, contextSha: context } }] };
   await openFixture(page, snapshot);
   const inspector = await inspect(page, 'alpha/index.ts', /alpha\/index.ts/);
   const contextDetails = inspector.getByTestId('context-import-coverage');
