@@ -12,7 +12,7 @@ async function expectReachable(control: Locator) {
 
 // Compact CSS viewports protect reflow after browser zoom. They deliberately do
 // not claim to operate the native browser zoom setting or replace that review.
-for (const viewport of [{ width: 640, height: 360 }, { width: 800, height: 450 }]) {
+for (const viewport of [{ width: 640, height: 360 }, { width: 800, height: 450 }, { width: 853, height: 421 }]) {
   test(`core review actions remain reachable at ${viewport.width}×${viewport.height}`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     await page.goto('/');
