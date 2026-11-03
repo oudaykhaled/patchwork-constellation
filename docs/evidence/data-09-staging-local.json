@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "1",
+  "status": "passed",
+  "measuredAt": "2026-11-03T21:36:09.614Z",
+  "commit": "829bd06c09af46cbcb3f9862fa9a067fd93978cb",
+  "workingTreeDirty": false,
+  "conditions": {
+    "platform": "win32",
+    "osRelease": "10.0.26200",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "totalMemoryBytes": 33752997888,
+    "runtime": "v24.22.1",
+    "database": "real isolated loopback PostgreSQL",
+    "deployment": "local isolated staging rehearsal",
+    "concurrency": "Other agents or hosted jobs may be active; this is correctness/resource-bound verification, not a capacity benchmark",
+    "upstream": "controlled OAuth/GitHub transport; real session issuer, CSRF, RSA token mint, HTTP, PostgreSQL and signed webhook logic; no external account/provider calls"
+  },
+  "checks": [
+    {
+      "id": "real-session-csrf-and-owner-isolation",
+      "status": "passed",
+      "durationMs": 1282.13
+    },
+    {
+      "id": "cached-token-and-snapshot-revocation",
+      "status": "passed",
+      "durationMs": 11.71
+    },
+    {
+      "id": "10k-postgres-bounded-progressive-delivery",
+      "status": "passed",
+      "durationMs": 742.11
+    },
+    {
+      "id": "request-body-and-source-count-bounds",
+      "status": "passed",
+      "durationMs": 4.15
+    },
+    {
+      "id": "disconnect-purges-retained-data-and-all-owner-sessions",
+      "status": "passed",
+      "durationMs": 424.91
+    },
+    {
+      "id": "signed-installation-removal-and-replay",
+      "status": "passed",
+      "durationMs": 137.56
+    },
+    {
+      "id": "per-server-rate-resource-bound",
+      "status": "passed",
+      "durationMs": 103.01
+    }
+  ],
+  "progressive": [
+    {
+      "kind": "nodes",
+      "pages": 20,
+      "count": 10000,
+      "maxBytes": 191197,
+      "totalMs": 220.32
+    },
+    {
+      "kind": "edges",
+      "pages": 40,
+      "count": 40000,
+      "maxBytes": 246642,
+      "totalMs": 515.69
+    }
+  ],
+  "totalMs": 3038.52,
+  "resources": {
+    "requestBodyMaxBytes": 128000,
+    "responsePageMaxBytes": 512000,
+    "rateRequestsPerMinute": 4,
+    "observedRssBeforeBytes": 114327552,
+    "observedRssAfterBytes": 454258688,
+    "osContainmentClaimed": false
+  },
+  "limitations": [
+    "Synthetic identities/upstream transport do not establish a live GitHub App registration or external webhook delivery.",
+    "Memory observations are not a leak or production-capacity certificate; no kernel sandbox is claimed.",
+    "AI providers remain disabled; browser, GPU and human accessibility/evaluation gates belong to their own issues."
+  ]
+}
