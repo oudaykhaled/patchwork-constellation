@@ -2,7 +2,7 @@
 
 See which parts of a repository a collection of pull requests or commits touches. Files are connected circles, and labeled islands reveal modules, folders and components.
 
-This local-first web tool includes an interactive sample, public GitHub analysis, and optional read-only GitHub App authorization. It implements the second [Constellation Figma direction](https://www.figma.com/design/A7h1fCr1SbLPRwY4vstSup?node-id=17-2113). The [31-issue acceptance audit](docs/ISSUE_REMEDIATION.md) records implementation evidence and remaining release gates.
+This local-first web tool includes an interactive sample, public GitHub analysis, and optional read-only GitHub App authorization. It implements the second [Constellation Figma direction](https://www.figma.com/design/A7h1fCr1SbLPRwY4vstSup?node-id=17-2113). See [current completion decisions](docs/COMPLETION_STATUS.md) for verified scope and external AI gates; the [31-issue acceptance audit](docs/ISSUE_REMEDIATION.md) preserves earlier implementation evidence.
 
 [Kanban board](https://github.com/users/oudaykhaled/projects/5) · [Issue index](planning/ISSUES.md) · [Verification](docs/VERIFICATION.md) · [Product requirements](docs/PRODUCT.md)
 

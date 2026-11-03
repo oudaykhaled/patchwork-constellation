@@ -28,8 +28,8 @@ For another native browser or hardware path, record a separate row instead of co
 | Native machine/installed driver inventory | Recorded; active renderer not established by this record. |
 | Dedicated software-reference2k budgets | Passed, linked above; pan-only frame percentiles. |
 | Native active GPU/backend screenshot | Unverified: the browser review policy blocked the internal diagnostic scheme. No workaround attempted. Maintainer confirmation remains required. |
-| Native graph pan/zoom/resize/source/Files observations | Awaiting root's exclusive CUA inspection. |
-| Native browser200% zoom | Root observed actual200% in the Windows Chrome menu; screenshots retained outside the repository. Full short-height interaction readback is owned jointly by issues #5/#15. |
-| Human accessibility/usability review | Separate issues #17/#18; automated interaction is not human evidence. |
+| Native graph pan/zoom/resize/source/Files observations | Recorded in [the native review](NATIVE_ZOOM_REVIEW.md). These establish native platform behavior, with active hardware acceleration still unverified. |
+| Native browser200% zoom | Actual Windows Chrome menu, dimensions/DPR and complete short-height review flow were observed. Safe application screenshots are linked in [the native review](NATIVE_ZOOM_REVIEW.md). |
+| Accessibility/usability review | Excluded at the owner's explicit request on 2026-11-03; no conformance claim is made. |
 
 Until the native inspection is recorded with its actual backend and observations, the last acceptance item of #27 remains partial. Root's actual200% menu observation is useful native-zoom evidence but does not establish the active GPU. This checklist is a runnable review artifact, not a completed GPU review or a reason to mark the issue Done.
