@@ -20,6 +20,8 @@ const errorMessage = (error: unknown) => {
   if (status === 413) return 'The analysis exceeds its configured resource scope. Try a smaller repository.';
   return 'Analysis could not complete. Retry, or narrow the repository scope.';
 };
+const publicErrorCodes = new Set(['NOT_FOUND', 'AUTH_FAILED', 'RATE_LIMITED', 'NETWORK_ERROR', 'INVALID_RESPONSE', 'SOURCE_UNAVAILABLE', 'INVALID_REF', 'PRIVATE_UNSUPPORTED', 'RESPONSE_LIMIT', 'ANALYSIS_TIMEOUT', 'ANALYSIS_FAILED', 'STORAGE_FAILED', 'BUSY', 'INVALID_SOURCE', 'UNKNOWN_SOURCE', 'STALE_SOURCE', 'ACCESS_DENIED', 'SESSION_REQUIRED']);
+const failureCode = (error: unknown, status: number) => typeof error === 'object' && error && 'code' in error && typeof error.code === 'string' && publicErrorCodes.has(error.code) ? error.code : status >= 500 ? 'ANALYSIS_FAILED' : 'PERMANENT_ANALYSIS';
 export function analysisJobId(scope: StoreScope, input: PinnedAnalysisInput) {
   return createHash('sha256').update(JSON.stringify([scope.ownerId, scope.repository.toLowerCase(), input.contextRef, input.mode ?? 'pr', ANALYSIS_VERSION, GROUPING_VERSION])).digest('hex');
 }
@@ -170,7 +172,7 @@ export class AnalysisJobs {
       const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 500;
       const retryable = this.closing || (!controller.signal.aborted && (status >= 500 || status === 429));
       if (retryable && job.attempts < job.maxAttempts) await this.store.retryJob(scope, id, this.workerId, this.closing ? 'Server restarted; analysis will resume from its pinned context.' : errorMessage(error), this.closing ? 0 : Math.min(30_000, 1_000 * 2 ** job.attempts));
-      else if (await this.store.completeJob(scope, id, this.workerId, { status: 'failed', error: controller.signal.aborted ? 'Analysis exceeded its resource budget. Retry a smaller repository.' : errorMessage(error), errorCode: controller.signal.aborted ? 'ANALYSIS_TIMEOUT' : typeof error === 'object' && error && 'code' in error ? String(error.code) : status >= 500 ? 'ANALYSIS_FAILED' : 'PERMANENT_ANALYSIS', retryable })) this.failuresSinceStart++;
+      else if (await this.store.completeJob(scope, id, this.workerId, { status: 'failed', error: controller.signal.aborted ? 'Analysis exceeded its resource budget. Retry a smaller repository.' : errorMessage(error), errorCode: controller.signal.aborted ? 'ANALYSIS_TIMEOUT' : failureCode(error, status), retryable })) this.failuresSinceStart++;
     } finally { clearTimeout(timeout); clearInterval(heartbeat); }
   }
   async close() { this.closing = true; clearInterval(this.timer); for (const controller of this.controllers.values()) controller.abort(); await Promise.allSettled([...this.tasks]); }
