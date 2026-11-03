@@ -12,6 +12,7 @@ import { GroupingService } from '@patchwork/ai';
 import { parseRepository } from '@patchwork/github';
 import { createStore, newJob, type SnapshotStore, type StoreScope } from '@patchwork/storage';
 import { BusyError, WorkerAdmission } from './worker-admission';
+import { OperationalMetrics, readiness, type QueueOperations } from './operations';
 
 try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -53,6 +54,11 @@ export async function createApplicationServer(options: { production?: boolean; s
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
   const loadSources = options.runSources ?? runSourceAnalysisInWorker;
   const admission = new WorkerAdmission(2);
+  const operations = new OperationalMetrics();
+  const queueOperations = async (): Promise<QueueOperations> => {
+    const current = [...jobs.values()]; const queued = current.filter(job => job.status === 'queued');
+    return { queuedJobs: queued.length, leasedJobs: current.filter(job => job.status === 'running').length, oldestQueuedAgeMs: queued.length ? Math.max(...queued.map(job => Math.max(0, Date.now() - Date.parse(job.createdAt)))) : null, activeWorkersInProcess: current.filter(job => job.status === 'running').length, failuresSinceProcessStart: current.filter(job => job.status === 'failed').length, stopping: false };
+  };
   const sourceRequests = new Map<string, { controller: AbortController }>();
   const runningTasks = new Set<Promise<unknown>>();
   const jobScopes = new Map<string, StoreScope>();
@@ -102,6 +108,11 @@ export async function createApplicationServer(options: { production?: boolean; s
         if (!window || now - window.start > 60_000) { window = { start: now, requests: 0 }; rateWindows.set(key, window); }
         if (++window.requests > 240) { res.setHeader('Retry-After', '60'); return json(res, 429, { error: 'Too many requests. Try again shortly.', code: 'RATE_LIMITED', retryAfter: 60 }); }
         if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.1.0', mode: 'local-public' });
+        if (req.method === 'GET' && url.pathname === '/api/readiness') {
+          const result = await readiness({ storage: () => store.getSnapshot(scopeFor(demoSnapshot.repository.fullName), demoSnapshot.id), queue: queueOperations, productionAssets: () => useProduction ? stat(resolve(dist, 'index.html')) : Promise.resolve(true) });
+          return json(res, result.status === 'ready' ? 200 : 503, result);
+        }
+        if (req.method === 'GET' && url.pathname === '/api/metrics' && process.env.OPS_METRICS_ENABLED === 'true') return json(res, 200, operations.snapshot(await queueOperations()));
         if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: 'local-public', github: { publicRepositories: true, privateRepositories: false, configuredToken: Boolean(process.env.GITHUB_TOKEN) }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: false } });
         if (req.method === 'GET' && url.pathname === '/api/demo') return json(res, 200, await saveSnapshot(grouping.view(structuredClone(demoSnapshot)).snapshot));
         if (req.method === 'GET' && url.pathname.startsWith('/api/snapshots/')) return json(res, 200, await lookupSnapshot(decodeURIComponent(url.pathname.slice(15)), url.searchParams.get('repository')));
@@ -154,7 +165,7 @@ export async function createApplicationServer(options: { production?: boolean; s
             job.code ??= typeof error === 'object' && error && 'code' in error ? String(error.code) : 'ANALYSIS_FAILED'; persisted.status = job.status;
             delete persisted.leaseOwner; delete persisted.leaseExpiresAt;
             try { await persist(); } catch { job.code = 'STORAGE_FAILED'; job.error = 'Analysis state could not be persisted. Check the configured database and retry.'; }
-          }).finally(() => { clearTimeout(timeout); aborts.delete(id); inFlightAnalyses.delete(analysisKey); runningTasks.delete(task); release(); });
+          }).finally(() => { operations.recordAnalysis(Math.max(0, Date.now() - Date.parse(job.createdAt)), job.status === 'failed'); clearTimeout(timeout); aborts.delete(id); inFlightAnalyses.delete(analysisKey); runningTasks.delete(task); release(); });
           runningTasks.add(task);
           return json(res, 202, { jobId: id });
         }

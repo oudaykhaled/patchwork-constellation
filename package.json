@@ -15,6 +15,10 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "release:pack": "node scripts/release-artifact.mjs",
+    "release:verify": "node scripts/release-artifact.mjs verify",
+    "release:rehearse": "node scripts/release-rehearsal.mjs",
+    "test:release": "node --test scripts/release-artifact.test.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
