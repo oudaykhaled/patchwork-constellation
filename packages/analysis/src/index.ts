@@ -11,7 +11,7 @@ export { deriveGroups, groupKeyFor, deriveRepositoryHierarchy, applyHierarchy, R
 export type { RepositoryHierarchy, RepositoryMapping, HierarchyOptions, ManifestBoundary } from './groups';
 
 export interface AnalysisProgress { stage: 'fetching' | 'indexing' | 'sources' | 'ready'; progress: number; message: string; }
-export interface AnalysisOptions extends GitHubOptions { onProgress?: (progress: AnalysisProgress) => void; maxFiles?: number; maxSourceFiles?: number; sourcePages?: number; gitFallback?: (input: import('./git-fallback').GitDiffRequest) => Promise<import('./git-fallback').GitDiffFile[]>; }
+export interface AnalysisOptions extends GitHubOptions { onProgress?: (progress: AnalysisProgress) => void; maxFiles?: number; maxSourceFiles?: number; sourcePages?: number; gitFallback?: (input: import('./git-fallback').GitDiffRequest) => Promise<import('./git-fallback').GitDiffFile[]>; gitComparisonFallback?: (input: import('./git-fallback').GitDiffRequest) => Promise<import('./git-fallback').GitDiffComparison>; }
 export interface AnalyzeInput { repository: string; contextRef?: string; mode?: 'pr' | 'commit'; }
 interface ApiRepository { name: string; full_name: string; private: boolean; default_branch: string; html_url: string; owner: { login: string }; }
 interface ApiCommit { sha: string; html_url?: string; commit: { message: string }; parents: { sha: string }[]; files?: ApiFile[]; }

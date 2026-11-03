@@ -4,7 +4,7 @@ import { GitHubClient, GitHubError, parseRepository } from '@patchwork/github';
 import type { AnalysisOptions } from './index';
 import { deriveGroups, nodeForPath } from './groups';
 import { languageFor } from './imports';
-import { boundedGitDiff } from './git-fallback';
+import { boundedGitComparison, boundedGitDiff } from './git-fallback';
 import { enrichSelectedSourceDependencies } from './source-dependencies';
 
 interface ApiCommit { sha: string; html_url?: string; commit: { message: string; committer?: { date?: string } }; parents: { sha: string }[]; files?: ApiFile[]; }
@@ -17,6 +17,14 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const unique = (values: string[]) => [...new Set(values)];
 const prefixFor = (fullName: string) => '/repos/'+fullName.split('/').map(encodeURIComponent).join('/');
 const statusFor = (value: string): ChangeStatus => ['added', 'modified', 'removed', 'renamed', 'copied', 'unchanged', 'binary'].includes(value) ? value as ChangeStatus : 'modified';
+const isSha = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{40,64}$/i.test(value);
+let validationNonce = 0;
+const freshCheck = () => `state_check=${Date.now()}-${++validationNonce}`;
+function permitsPinnedFallback(error: unknown): boolean {
+  // This handles only an already-authorized source's object/file endpoint. It
+  // never catches repository authorization or an invalid/expired credential.
+  return error instanceof GitHubError && error.code !== 'AUTH_FAILED' && (error.status === 403 || error.status === 404 || error.status === 422 || error.status === 429 || error.status >= 500);
+}
 
 function toChanges(files: ApiFile[], snapshot: GraphSnapshot, sourceId: string): { changes: FileChange[]; nodes: FileNode[] } {
   const pathMap = new Map<string, FileNode[]>(); const extra: FileNode[] = [];
@@ -61,20 +69,36 @@ export async function loadSourceChanges(snapshot: GraphSnapshot, kind: 'pr' | 'c
     if (source.loaded) continue;
     options.onProgress?.({ stage: 'sources', progress: Math.round((index / Math.max(selection.length, 1)) * 100), message: `Loading ${source.label}` });
     let files: ApiFile[] = []; let sourceReasons: string[] = [];
-    let fallbackNeeded = false;
+    let fallbackNeeded = false; let needsMergeBase = false;
+    let pullPins: { number: number; baseSha: string; headSha: string } | undefined;
     if (kind === 'pr') {
       if (!source.number || !/^pr:\d+$/.test(id)) throw new GitHubError('Invalid pull request ID.', 400, 'INVALID_SOURCE');
       const pull = await client.get<ApiPull>(`${prefix}/pulls/${source.number}`);
-      if ((source.headSha && source.headSha !== pull.head.sha) || (source.baseSha && source.baseSha !== pull.base.sha)) throw new GitHubError('This pull request changed since the snapshot was created. Refresh the repository before applying it.', 409, 'STALE_SOURCE');
-      const comparison = await client.get<ApiComparison>(`${prefix}/compare/${pull.base.sha}...${pull.head.sha}?per_page=1`, true);
-      files = comparison.files ?? []; source.baseRefSha = pull.base.sha; source.baseSha = comparison.merge_base_commit.sha; source.headSha = pull.head.sha; source.comparisonKind = 'merge-base'; source.sourceUpdatedAt = pull.updated_at;
-      if (!comparison.files) { fallbackNeeded = true; sourceReasons.push(`${source.label}: GitHub did not supply a compared-file array.`); }
-      if ((pull.changed_files ?? files.length) > files.length || files.length >= 300) {
-        files = [];
-        for (let page = 1; page <= 30; page++) { const batch = await client.page<ApiFile>(`${prefix}/pulls/${source.number}/files`, page, 100); files.push(...batch.items); if (!batch.nextPage) break; }
-        const after = await client.get<ApiPull>(`${prefix}/pulls/${source.number}?state_check=${Date.now()}`);
-        if (after.head.sha !== pull.head.sha || after.base.sha !== pull.base.sha) throw new GitHubError('The pull request changed while files were loading. Refresh and retry.', 409, 'STALE_SOURCE');
-        if ((pull.changed_files ?? 0) > files.length || files.length >= 3_000) { fallbackNeeded = true; sourceReasons.push(`${source.label}: GitHub's 3,000-file PR limit may truncate this change set.`); }
+      if ((source.headSha && source.headSha !== pull.head.sha) || ((source.baseRefSha ?? source.baseSha) && (source.baseRefSha ?? source.baseSha) !== pull.base.sha)) throw new GitHubError('This pull request changed since the snapshot was created. Refresh the repository before applying it.', 409, 'STALE_SOURCE');
+      if (!isSha(pull.base.sha) || !isSha(pull.head.sha)) throw new GitHubError('GitHub did not supply pinned pull request objects.', 502, 'INVALID_RESPONSE');
+      pullPins = { number: source.number, baseSha: pull.base.sha, headSha: pull.head.sha };
+      source.baseRefSha = pull.base.sha; source.headSha = pull.head.sha; source.comparisonKind = 'merge-base'; source.sourceUpdatedAt = pull.updated_at;
+      needsMergeBase = true;
+      try {
+        const comparison = await client.get<ApiComparison>(`${prefix}/compare/${pull.base.sha}...${pull.head.sha}?per_page=1`, true);
+        if (!isSha(comparison.merge_base_commit?.sha)) throw new GitHubError('GitHub did not establish an immutable merge base.', 502, 'INVALID_RESPONSE');
+        source.baseSha = comparison.merge_base_commit.sha; source.comparisonResolved = true; needsMergeBase = false;
+        files = comparison.files ?? [];
+        if (!comparison.files) { fallbackNeeded = true; sourceReasons.push(`${source.label}: GitHub did not supply a compared-file array.`); }
+        if ((pull.changed_files ?? files.length) > files.length || files.length >= 300) {
+          files = [];
+          for (let page = 1; page <= 30; page++) { const batch = await client.page<ApiFile>(`${prefix}/pulls/${source.number}/files`, page, 100); files.push(...batch.items); if (!batch.nextPage) break; }
+          const after = await client.get<ApiPull>(`${prefix}/pulls/${source.number}?${freshCheck()}`);
+          if (after.head.sha !== pull.head.sha || after.base.sha !== pull.base.sha) throw new GitHubError('The pull request changed while files were loading. Refresh and retry.', 409, 'STALE_SOURCE');
+          if ((pull.changed_files ?? 0) > files.length || files.length >= 3_000) { fallbackNeeded = true; sourceReasons.push(`${source.label}: GitHub's 3,000-file PR limit may truncate this change set.`); }
+        }
+      } catch (error) {
+        if (options.signal?.aborted || !permitsPinnedFallback(error)) throw error;
+        // A mutable files endpoint may have failed midway across a force push.
+        // Discard that unverified array and compare the original pinned objects.
+        files = []; fallbackNeeded = true;
+        sourceReasons.push(`${source.label}: GitHub's pinned comparison or file endpoint is unavailable; attempting bounded Git evidence.`);
+        if (needsMergeBase) { delete source.baseSha; source.comparisonResolved = false; }
       }
     } else {
       if (!source.sha || !/^[a-f0-9]{40,64}$/i.test(source.sha) || id !== `commit:${source.sha}`) throw new GitHubError('Invalid commit ID.', 400, 'INVALID_SOURCE');
@@ -87,24 +111,51 @@ export async function loadSourceChanges(snapshot: GraphSnapshot, kind: 'pr' | 'c
       if (source.mergeCommit) {
         // Commit endpoints may expose combined merge presentation. Comparing the
         // explicit first parent with the merge makes the rule unambiguous.
-        const comparison = await client.get<ApiComparison>(`${prefix}/compare/${source.baseSha}...${source.headSha}?per_page=1`, true);
-        if (comparison.merge_base_commit.sha !== source.baseSha) throw new GitHubError('The merge first-parent comparison could not be established.', 502, 'INVALID_RESPONSE');
-        files = comparison.files ?? [];
-        if (!comparison.files || files.length >= 300) { fallbackNeeded = true; sourceReasons.push(`${source.label}: First-parent comparison exceeds GitHub's 300-file comparison limit or is unavailable.`); }
+        files = []; // Combined commit presentation is never retained as a first-parent delta.
+        try {
+          const comparison = await client.get<ApiComparison>(`${prefix}/compare/${source.baseSha}...${source.headSha}?per_page=1`, true);
+          if (comparison.merge_base_commit?.sha !== source.baseSha) throw new GitHubError('The merge first-parent comparison could not be established.', 502, 'INVALID_RESPONSE');
+          files = comparison.files ?? [];
+          if (!comparison.files || files.length >= 300) { fallbackNeeded = true; sourceReasons.push(`${source.label}: First-parent comparison exceeds GitHub's 300-file comparison limit or is unavailable.`); }
+        } catch (error) {
+          if (options.signal?.aborted || !permitsPinnedFallback(error)) throw error;
+          fallbackNeeded = true; sourceReasons.push(`${source.label}: First-parent comparison API is unavailable; attempting the exact pinned Git delta.`);
+        }
       }
     }
     if (fallbackNeeded) {
       try {
-        files = await (options.gitFallback ?? boundedGitDiff)({ repository: snapshot.repository.fullName, baseSha: source.baseSha!, headSha: source.headSha!, signal: options.signal });
+        if (needsMergeBase && pullPins) {
+          const comparison = await (options.gitComparisonFallback ?? boundedGitComparison)({ repository: snapshot.repository.fullName, baseSha: pullPins.baseSha, headSha: pullPins.headSha, comparisonKind: 'merge-base', signal: options.signal });
+          if (!isSha(comparison.baseSha) || comparison.headSha !== pullPins.headSha) throw new GitHubError('Git fallback did not establish the pinned comparison.', 502, 'INVALID_RESPONSE');
+          files = comparison.files; source.baseSha = comparison.baseSha; source.comparisonResolved = true;
+        } else files = await (options.gitFallback ?? boundedGitDiff)({ repository: snapshot.repository.fullName, baseSha: source.baseSha!, headSha: source.headSha!, signal: options.signal });
         sourceReasons = []; source.fileEvidence = 'bounded-git-diff';
       } catch (error) {
         if (options.signal?.aborted) throw error;
-        sourceReasons.push(`${source.label}: Bounded Git fallback could not establish the complete footprint. Partial API results are retained.`);
+        source.fileEvidence = files.length ? 'github-api-partial' : 'unavailable';
+        sourceReasons.push(`${source.label}: Bounded Git fallback could not establish the complete footprint. Verified API results, if any, are retained; refresh or retry explicitly.`);
+      }
+      if (pullPins) {
+        try {
+          const after = await client.get<ApiPull>(`${prefix}/pulls/${pullPins.number}?${freshCheck()}`);
+          if (after.head.sha !== pullPins.headSha || after.base.sha !== pullPins.baseSha) throw new GitHubError('The pull request changed during bounded Git fallback. The pinned snapshot is unchanged; refresh explicitly.', 409, 'STALE_SOURCE');
+        } catch (error) {
+          if (options.signal?.aborted || (error instanceof GitHubError && error.code === 'ACCESS_DENIED') || !permitsPinnedFallback(error)) throw error;
+          sourceReasons.push(`${source.label}: Current PR refs could not be rechecked after fallback. Results remain pinned to the original objects; refresh explicitly to discover newer refs.`);
+          source.refreshRequired = true;
+        }
       }
     } else source.fileEvidence = 'github-api';
-    source.comparedAt = new Date().toISOString();
-    source.version = `source:${hash(`${source.id}:${source.baseSha}:${source.headSha}:${source.comparisonKind}`)}`;
-    const canonical = toChanges(files, result, id); source.files = canonical.changes; source.loaded = true; source.coverage = { status: sourceReasons.length ? 'partial' : 'complete', reasons: sourceReasons }; result.nodes.push(...canonical.nodes);
+    source.comparisonAttemptedAt = new Date().toISOString();
+    if (source.comparisonResolved === false) {
+      delete source.comparedAt; delete source.version;
+      source.requestedVersion = `source-request:${hash(`${source.id}:${source.baseRefSha}:${source.headSha}:merge-base`)}`;
+    } else {
+      source.comparedAt = source.comparisonAttemptedAt;
+      source.version = `source:${hash(`${source.id}:${source.baseSha}:${source.headSha}:${source.comparisonKind}`)}`;
+    }
+    const canonical = toChanges(files, result, id); source.files = canonical.changes; source.loaded = source.comparisonResolved !== false; source.coverage = { status: sourceReasons.length ? 'partial' : 'complete', reasons: sourceReasons }; result.nodes.push(...canonical.nodes);
     if (canonical.nodes.length) reasons.push('Selected-source-only files are visible, but import edges describe the pinned context snapshot. Imports from other source heads have not been analyzed.');
     if (canonical.nodes.some(node => node.ambiguousLineage)) reasons.push('Independent selected sources add the same path. Separate source-only identities are retained because content equality does not establish shared lineage.');
     reasons.push(...sourceReasons);

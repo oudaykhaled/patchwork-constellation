@@ -152,6 +152,10 @@ export const ChangeSourceSchema = z.object({
   sha: z.string().optional(),
   baseSha: z.string().optional(),
   headSha: z.string().optional(),
+  /** A discovered PR branch tip is distinct from a resolved merge base. */
+  baseRefSha: GitShaSchema.optional(),
+  comparisonResolved: z.boolean().optional(),
+  loaded: z.boolean().optional(),
   comparisonKind: z.enum(['merge-base', 'first-parent', 'empty-tree']).optional(),
   url: GitHubWebUrlSchema,
   files: z.array(FileChangeSchema),
@@ -286,8 +290,12 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
   });
   snapshot.sources.forEach((source, index) => {
     const fail = (message: string) => ctx.addIssue({ code: 'custom', path: ['sources', index], message });
-    if (!source.baseSha || !source.headSha || !source.comparisonKind) fail('Source comparison requires exact base/head and comparison kind');
-    if (snapshot.mode === 'github' && (!GitShaSchema.safeParse(source.baseSha).success || !GitShaSchema.safeParse(source.headSha).success)) fail('Source comparison must use immutable SHAs');
+    const unresolvedPull = source.kind === 'pr' && source.comparisonResolved === false;
+    if (unresolvedPull) {
+      if (source.loaded !== false || source.files.length || source.baseSha !== undefined || !GitShaSchema.safeParse(source.baseRefSha).success || !source.coverage || !['partial', 'failed'].includes(source.coverage.status)) fail('Unresolved PR comparison must be unloaded, have no changes/base, and expose requested branch pins with incomplete coverage');
+    } else if (!source.baseSha) fail('Source comparison requires exact base/head and comparison kind');
+    if (!source.headSha || !source.comparisonKind) fail('Source comparison requires exact base/head and comparison kind');
+    if (snapshot.mode === 'github' && ((!unresolvedPull && !GitShaSchema.safeParse(source.baseSha).success) || !GitShaSchema.safeParse(source.headSha).success)) fail('Source comparison must use immutable SHAs');
     if (source.kind === 'pr' && source.comparisonKind !== 'merge-base') fail('Pull request requires merge-base comparison');
     if (source.kind === 'commit' && (!['first-parent', 'empty-tree'].includes(source.comparisonKind ?? '') || !source.sha || source.sha !== source.headSha)) fail('Commit requires parent/commit comparison');
     const fileIds = new Set<string>();

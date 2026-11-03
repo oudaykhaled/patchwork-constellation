@@ -6,7 +6,8 @@ import { GitHubError, parseRepository } from '@patchwork/github';
 
 export const EMPTY_GIT_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 export interface GitDiffFile { filename: string; previous_filename?: string; status: string; additions: number; deletions: number; binary?: boolean; }
-export interface GitDiffRequest { repository: string; baseSha: string; headSha: string; signal?: AbortSignal; }
+export interface GitDiffRequest { repository: string; baseSha: string; headSha: string; signal?: AbortSignal; comparisonKind?: 'merge-base'; }
+export interface GitDiffComparison { files: GitDiffFile[]; baseSha: string; headSha: string; }
 export interface GitFallbackLimits { timeoutMs?: number; maxDiskBytes?: number; maxOutputBytes?: number; maxFiles?: number; }
 const shaPattern = /^[a-f0-9]{40}$/i;
 
@@ -20,10 +21,17 @@ const config = ['-c', 'core.hooksPath=', '-c', 'credential.helper=', '-c', 'prot
 
 async function diskUsage(path: string): Promise<number> {
   let size = 0;
-  for (const entry of await readdir(path, { withFileTypes: true })) {
+  let entries;
+  try { entries = await readdir(path, { withFileTypes: true }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw error; }
+  for (const entry of entries) {
     const child = join(path, entry.name);
     if (entry.isSymbolicLink()) throw new GitHubError('Git fallback contained an unexpected symlink.', 502, 'GIT_FALLBACK_LIMIT');
-    size += entry.isDirectory() ? await diskUsage(child) : (await stat(child)).size;
+    // Git atomically renames/removes temporary pack files while fetch is active.
+    // A vanished entry is not a storage failure; the final stable scan still
+    // enforces the budget before any diff is accepted.
+    try { size += entry.isDirectory() ? await diskUsage(child) : (await stat(child)).size; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
   return size;
 }
@@ -85,6 +93,11 @@ export function parseGitDiff(nameStatus: Buffer, numstat: Buffer, maxFiles = 10_
 
 /** Public-only, fresh bare repository: no checkout, submodules, hooks, filters, scripts or dependencies. */
 export async function boundedGitDiff(request: GitDiffRequest, settings: GitFallbackLimits = {}): Promise<GitDiffFile[]> {
+  return (await boundedGitComparison(request, settings)).files;
+}
+
+/** Resolves a merge base only from bounded fetched ancestry, never from the branch tip. */
+export async function boundedGitComparison(request: GitDiffRequest, settings: GitFallbackLimits = {}): Promise<GitDiffComparison> {
   const repository = parseRepository(request.repository);
   if (!shaPattern.test(request.baseSha) || !shaPattern.test(request.headSha)) throw new GitHubError('Git fallback requires pinned SHA-1 objects.', 400, 'INVALID_REF');
   const limits = { timeoutMs: Math.min(Math.max(settings.timeoutMs ?? 20_000, 1), 60_000), maxDiskBytes: Math.min(settings.maxDiskBytes ?? 64 * 1024 * 1024, 256 * 1024 * 1024), maxOutputBytes: Math.min(settings.maxOutputBytes ?? 4 * 1024 * 1024, 16 * 1024 * 1024), maxFiles: Math.min(settings.maxFiles ?? 10_000, 20_000) };
@@ -94,11 +107,17 @@ export async function boundedGitDiff(request: GitDiffRequest, settings: GitFallb
   try {
     await run(['init', '--bare', '--template=', '.']);
     const url = `https://github.com/${repository.fullName}.git`;
-    for (const sha of [...new Set([request.baseSha, request.headSha])]) if (sha !== EMPTY_GIT_TREE) await run(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--depth=1', url, sha]);
+    const depth = request.comparisonKind === 'merge-base' ? 128 : 1;
+    for (const sha of [...new Set([request.baseSha, request.headSha])]) if (sha !== EMPTY_GIT_TREE) await run(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', `--depth=${depth}`, url, sha]);
     if (await diskUsage(directory) > limits.maxDiskBytes) throw new GitHubError('Git fallback exceeded its disk budget.', 413, 'GIT_FALLBACK_LIMIT');
+    let baseSha = request.baseSha;
+    if (request.comparisonKind === 'merge-base') {
+      baseSha = (await run(['merge-base', request.baseSha, request.headSha])).toString('utf8').trim();
+      if (!shaPattern.test(baseSha)) throw new GitHubError('The pinned merge base could not be established within the ancestry budget.', 502, 'GIT_FALLBACK_FAILED');
+    }
     const args = ['diff', '--no-ext-diff', '--no-textconv', '--find-renames=50%', '-z'];
-    const names = await run([...args, '--name-status', request.baseSha, request.headSha, '--']);
-    const stats = await run([...args, '--numstat', request.baseSha, request.headSha, '--']);
-    return parseGitDiff(names, stats, limits.maxFiles);
+    const names = await run([...args, '--name-status', baseSha, request.headSha, '--']);
+    const stats = await run([...args, '--numstat', baseSha, request.headSha, '--']);
+    return { files: parseGitDiff(names, stats, limits.maxFiles), baseSha, headSha: request.headSha };
   } finally { await rm(directory, { recursive: true, force: true, maxRetries: 3 }); }
 }
