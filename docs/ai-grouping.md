@@ -63,4 +63,3 @@ Hard gates: zero unknown file/evidence IDs accepted; zero hidden source transfer
 - M2 real-data MVP: AI-01 enrichment/evidence contract wraps the DATA-06 deterministic hierarchy; remains functional without external AI.
 - M3 intelligence: AI-02 provider integration gate and AI-05 controls; then AI-03 proposed grouping and AI-04 persistent revision/override APIs; UX-04 owns the review controls; AI-06 evaluation/rollout gate.
 - M4 beta release depends on completed intelligent-path evaluation if AI grouping is enabled. Do not label deterministic-only behavior as “AI + Jev powered”.
-
