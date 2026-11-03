@@ -12,6 +12,7 @@ import { GroupingService } from '@patchwork/ai';
 import { parseRepository } from '@patchwork/github';
 import { createStore, newJob, type SnapshotStore, type StoreScope } from '@patchwork/storage';
 import { BusyError, WorkerAdmission } from './worker-admission';
+import { handleGitHubWebhook, type WebhookRefreshService } from './webhook-refresh';
 
 try { process.loadEnvFile('.env'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -47,7 +48,7 @@ const analyzeRequest = z.object({ repository: z.string().trim().min(3).max(250),
 const idRequest = z.object({ snapshotId: z.string().max(500) });
 const rateWindows = new Map<string, { start: number; requests: number }>();
 
-export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker } = {}) {
+export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; webhooks?: WebhookRefreshService } = {}) {
   const useProduction = options.production ?? production;
   const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100 });
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
@@ -88,11 +89,13 @@ export async function createApplicationServer(options: { production?: boolean; s
     }
   }
   await saveSnapshot(structuredClone(demoSnapshot));
+  options.webhooks?.start();
   const vite = useProduction ? null : await (await import('vite')).createServer({ configFile: resolve(root, 'apps/web/vite.config.ts'), server: { middlewareMode: true }, appType: 'spa' });
   const server = createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      if (url.pathname === '/api/webhooks/github') return await handleGitHubWebhook(req, res, options.webhooks);
       if (url.pathname.startsWith('/api/')) {
         // This runnable edition is a local, single-user tool. It only analyzes public repositories.
         const host = req.headers.host ?? '';
@@ -101,6 +104,16 @@ export async function createApplicationServer(options: { production?: boolean; s
         const key = req.socket.remoteAddress ?? 'local'; const now = Date.now(); let window = rateWindows.get(key);
         if (!window || now - window.start > 60_000) { window = { start: now, requests: 0 }; rateWindows.set(key, window); }
         if (++window.requests > 240) { res.setHeader('Retry-After', '60'); return json(res, 429, { error: 'Too many requests. Try again shortly.', code: 'RATE_LIMITED', retryAfter: 60 }); }
+        if (req.method === 'GET' && url.pathname === '/api/refresh') {
+          const repository = z.string().min(3).max(250).parse(url.searchParams.get('repository'));
+          const scope = scopeFor(repository);
+          return json(res, 200, { available: Boolean(options.webhooks), state: await options.webhooks?.state(scope) });
+        }
+        if (req.method === 'POST' && url.pathname === '/api/refresh/reconcile') {
+          if (!options.webhooks) return json(res, 503, { code: 'WEBHOOK_UNCONFIGURED', error: 'Refresh delivery is not configured. Analyze the repository again to reconcile it.' });
+          const input = z.object({ repository: z.string().min(3).max(250) }).parse(await body(req));
+          return json(res, 202, { available: true, state: await options.webhooks.reconcile(scopeFor(input.repository)) });
+        }
         if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { status: 'ok', version: '0.1.0', mode: 'local-public' });
         if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: 'local-public', github: { publicRepositories: true, privateRepositories: false, configuredToken: Boolean(process.env.GITHUB_TOKEN) }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: false } });
         if (req.method === 'GET' && url.pathname === '/api/demo') return json(res, 200, await saveSnapshot(grouping.view(structuredClone(demoSnapshot)).snapshot));
@@ -250,7 +263,7 @@ export async function createApplicationServer(options: { production?: boolean; s
       if (!res.headersSent) json(res, status >= 400 && status < 600 ? status : 500, { error: safeError(error), code }); else res.end();
     }
   });
-  server.on('close', () => { for (const controller of aborts.values()) controller.abort(); for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void Promise.allSettled([...runningTasks]).then(() => store.close()); });
+  server.on('close', () => { for (const controller of aborts.values()) controller.abort(); for (const request of sourceRequests.values()) request.controller.abort(); void vite?.close(); void options.webhooks?.close(); void Promise.allSettled([...runningTasks]).then(() => store.close()); });
   return server;
 }
 function safeError(error: unknown) { const message = error instanceof Error ? error.message : 'Request failed.'; return message.replace(/(?:gh[pousr]_[a-zA-Z0-9]+|sk-[a-zA-Z0-9_-]+)/g, '[redacted]').slice(0, 500); }
