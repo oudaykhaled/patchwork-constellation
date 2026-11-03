@@ -7,6 +7,7 @@ import { GroupingError, type GroupingConfig, type GroupingOperation, type Groupi
 import { AI_FIELDS_SENT, AI_POLICY_VERSION, createExternalDataPolicy, externalGroupingCacheKey } from './policy';
 import { ProviderBudgetLedger } from './budget';
 import { createGroupingEvidence, evaluateGroupingProposal, GROUPING_PIPELINE_VERSION } from './pipeline';
+import { evaluateReleaseGate, evaluationAllowsTenant, loadEvaluationManifest } from './evaluation-gate';
 
 export * from './types';
 export * from './contracts';
@@ -14,6 +15,7 @@ import { GroupingRevisionSchema, validateGroupingProposal, validateGroupingRevis
 export { validateCandidateLabels, TypeSafeDecisionProvider, OpenAIGenerativeProvider, PROVIDER_CONTRACT_VERSION, LABEL_PROMPT_VERSION, MEMBERSHIP_PROMPT_VERSION, type DecisionProvider, type GenerativeProvider, type ChoiceQuestion, type ScoreQuestion, type NoulQuestion, type ChoiceAnswer, type ScoreAnswer, type NoulAnswer, type DecisionResponse, type DiscoveredModel } from './providers';
 export { createExternalDataPolicy, externalGroupingCacheKey } from './policy';
 export { createGroupingEvidence, evaluateGroupingProposal, GROUPING_PIPELINE_VERSION } from './pipeline';
+export { evaluateReleaseGate, evaluationAllowsTenant, loadEvaluationManifest, EVALUATION_VERSIONS, QUALITY_TARGETS } from './evaluation-gate';
 
 const MAX_CONTEXTS = 100;
 const MAX_REVISIONS = 20;
@@ -64,6 +66,7 @@ export class GroupingService {
     this.config = {
       maxFiles: 32, maxRequestsPerAnalysis: 5, maxRequestsPerTenant: 100, maxInputCharacters: 40_000, minimumConfidence: 0.8, timeoutMs: 15_000,
       ...config,
+      evaluationManifest: config.evaluationManifest ?? loadEvaluationManifest(),
     };
     if (!Number.isSafeInteger(this.config.maxFiles) || this.config.maxFiles < 1 || this.config.maxFiles > 64 || !Number.isSafeInteger(this.config.maxRequestsPerAnalysis) || this.config.maxRequestsPerAnalysis < 3 || this.config.maxRequestsPerAnalysis > 10 || !Number.isFinite(this.config.minimumConfidence) || this.config.minimumConfidence < 0 || this.config.minimumConfidence > 1) throw new GroupingError('INVALID_CONFIG', 'AI limits are outside the supported bounds.');
     if (!Number.isSafeInteger(this.config.maxRequestsPerTenant) || this.config.maxRequestsPerTenant < 1 || !Number.isSafeInteger(this.config.maxInputCharacters) || this.config.maxInputCharacters < 1 || this.config.maxInputCharacters > 100_000 || !Number.isFinite(this.config.timeoutMs) || this.config.timeoutMs < 1 || this.config.timeoutMs > 60_000 || this.config.proposalTtlMs !== undefined && (!Number.isSafeInteger(this.config.proposalTtlMs) || this.config.proposalTtlMs < 1 || this.config.proposalTtlMs > 900_000) || this.config.maxReservedTokensPerTenant !== undefined && (!Number.isSafeInteger(this.config.maxReservedTokensPerTenant) || this.config.maxReservedTokensPerTenant < 1)) throw new GroupingError('INVALID_CONFIG', 'AI budget or retention settings are outside the supported bounds.');
@@ -74,14 +77,15 @@ export class GroupingService {
 
   capabilities() {
     const configured = Boolean(this.config.jevApiKey && this.config.jevModel && this.config.generativeApiKey && this.config.generativeModel);
+    const evaluation = evaluateReleaseGate(this.config.evaluationManifest, this.config);
     return {
-      enabled: Boolean(this.config.enabled), configured, available: Boolean(this.config.enabled && configured),
+      enabled: Boolean(this.config.enabled), configured, available: Boolean(this.config.enabled && configured && evaluation.passed), evaluation,
       jevConfigured: Boolean(this.config.jevApiKey && this.config.jevModel),
       generativeConfigured: Boolean(this.config.generativeApiKey && this.config.generativeModel),
       models: { jev: this.config.jevModel ?? null, generative: this.config.generativeModel ?? null },
       policy: { version: AI_POLICY_VERSION, fieldsSent: AI_FIELDS_SENT, sourceExcerpts: false, maxFiles: this.config.maxFiles, maxRequests: this.config.maxRequestsPerAnalysis, maxOutputTokens: 3000, proposalRetentionMs: this.config.proposalTtlMs ?? 900_000, currencyBudgetVerified: false },
       persistence: this.config.storagePath ? 'local-file' : 'process-memory',
-      message: !this.config.enabled ? 'External AI is disabled. Folder grouping and manual corrections remain available.' : !configured ? 'Configure both model providers and pinned model names on the server to enable AI + Jev.' : 'External AI sends only the disclosed metadata when explicitly requested.',
+      message: !this.config.enabled ? 'External AI is disabled. Folder grouping and manual corrections remain available.' : !configured ? 'Configure both model providers and pinned model names on the server to enable AI + Jev.' : !evaluation.passed ? evaluation.reason : 'External AI sends only the disclosed metadata when explicitly requested.',
     };
   }
 
@@ -147,6 +151,7 @@ export class GroupingService {
       dataPolicy: { fieldsSent: [], excludedFiles, analyzedFiles: 0 },
     }, snapshot, revision.groups.map(group => group.id));
     if (!options.enabled || !this.capabilities().available) return baseline(this.capabilities().message);
+    if (!evaluationAllowsTenant(this.capabilities().evaluation, options.tenantId ?? 'local')) return baseline('AI + Jev is in a limited canary. The current grouping is retained for this session.');
     if (options.signal?.aborted) return baseline('Grouping analysis was cancelled. The current grouping is retained.');
     if (!evidence.files.length) return baseline('No eligible unlocked files are available for external grouping.');
     if (JSON.stringify(evidence).length > this.config.maxInputCharacters) return baseline('The metadata budget was exceeded. Narrow the repository scope before requesting AI grouping.');

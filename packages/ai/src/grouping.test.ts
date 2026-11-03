@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GraphSnapshot } from '@patchwork/contracts';
 import { GroupingService, validateCandidateLabels } from './index';
+import { testEvaluationManifest } from './evaluation/test-support';
 
 const snapshot = (): GraphSnapshot => ({
   schemaVersion: '1',
@@ -41,7 +42,8 @@ function providerMock(options: MockOptions = {}) {
   });
 }
 function configured(fetcher: ReturnType<typeof providerMock>, additional = {}) {
-  return new GroupingService({ enabled: true, jevApiKey: 'test-only', jevModel: 'test-jev', generativeApiKey: 'test-only', generativeModel: 'test-generative', fetch: fetcher as typeof fetch, ...additional });
+  const settings = { enabled: true, jevApiKey: 'test-only', jevModel: 'test-jev', generativeApiKey: 'test-only', generativeModel: 'test-generative', fetch: fetcher as typeof fetch, ...additional };
+  return new GroupingService({ ...settings, evaluationManifest: testEvaluationManifest({ jev: settings.jevModel ?? 'missing', generative: settings.generativeModel ?? 'missing' }) });
 }
 
 const directories: string[] = [];

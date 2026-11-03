@@ -92,6 +92,8 @@ export interface GroupingResult { snapshot: GraphSnapshot; revision: GroupingRev
 export interface RequestContext { tenantId?: string; signal?: AbortSignal; expectedRevisionId?: string }
 export interface GroupingConfig {
   enabled?: boolean;
+  /** Reviewed live evaluation artifact; absent/invalid blocks external AI even when enabled. */
+  evaluationManifest?: unknown;
   jevApiKey?: string;
   jevModel?: string;
   generativeApiKey?: string;
