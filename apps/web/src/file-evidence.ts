@@ -1,4 +1,5 @@
 import type { ChangeSource, FileChange, FileNode, GraphSnapshot, Group, ImportEdge } from '@patchwork/contracts';
+import { ImportEdgeSchema } from '@patchwork/contracts';
 
 const sha = /^[a-f0-9]{40,64}$/i;
 const repositoryPart = /^[a-z0-9_.-]+$/i;
@@ -75,5 +76,37 @@ export function connectionEvidence(snapshot: GraphSnapshot, edge: ImportEdge): {
   return {
     text: `${evidence.path}${evidence.line ? `:${evidence.line}` : ''} · ${evidence.resolver || 'resolver not recorded'}${evidence.specifier ? ` · ${evidence.specifier}` : ''} · ${ref.slice(0, 7)}`,
     url: sourceFileLink(snapshot, evidence.path, ref, evidence.line),
+  };
+}
+
+export const textReasons = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+export function importReferences(value: unknown): { specifier: string; reason?: string; line?: number }[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => {
+    const entry = record(item);
+    return typeof entry.specifier === 'string' ? [{ specifier: entry.specifier, ...(typeof entry.reason === 'string' ? { reason: entry.reason } : {}), ...(typeof entry.line === 'number' && Number.isSafeInteger(entry.line) && entry.line > 0 ? { line: entry.line } : {}) }] : [];
+  });
+}
+/** Separate selected-head metadata is never merged into context edges or counts. */
+export function selectedHeadEvidence(snapshot: GraphSnapshot, source: ChangeSource, file: FileNode) {
+  const coverage = record(source.importCoverage);
+  const status = typeof coverage.status === 'string' ? coverage.status : 'unavailable';
+  const reasons = textReasons(coverage.reasons);
+  const ref = typeof source.importHeadSha === 'string' ? source.importHeadSha : undefined;
+  const pinned = !!ref && sha.test(ref) && ref === source.headSha;
+  const fileRecord = Array.isArray(source.importFiles) ? source.importFiles.map(record).find(item => item.fileId === file.id) : undefined;
+  const rawEdges = Array.isArray(source.importEdges) ? source.importEdges : [];
+  const nodeIds = new Set(snapshot.nodes.map(node => node.id));
+  let rejectedEdges = 0;
+  const edges = rawEdges.flatMap(value => {
+    const result = ImportEdgeSchema.safeParse(value);
+    if (!pinned || !result.success || result.data.provenance !== 'selected-head' || result.data.sourceId !== source.id || !nodeIds.has(result.data.source) || !nodeIds.has(result.data.target) || typeof result.data.evidence !== 'object' || result.data.evidence.snapshotSha !== ref || result.data.evidence.sourceId !== source.id) { rejectedEdges++; return []; }
+    return result.data.source === file.id || result.data.target === file.id ? [result.data] : [];
+  });
+  return {
+    status, reasons, ref, pinned, edges, rejectedEdges,
+    fileStatus: pinned && typeof fileRecord?.status === 'string' ? fileRecord.status : 'unavailable',
+    fileReasons: pinned ? textReasons(fileRecord?.reasons) : [ref ? 'Selected-head metadata belongs to a different source revision; refresh before reviewing it.' : 'No verified selected-head analysis is available for this revision.', ...textReasons(fileRecord?.reasons).map(reason => `Unverified file record: ${reason}`)],
   };
 }
