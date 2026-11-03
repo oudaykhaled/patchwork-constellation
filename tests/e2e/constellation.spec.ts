@@ -73,6 +73,7 @@ test('search opens the matching file inspector with honest demo provenance', asy
 test('accessible file list exposes file-level review without canvas hit testing', async ({ page }) => {
   await openDemo(page);
   await page.getByTestId('accessible-list-toggle').click();
+  await page.getByLabel('Filter file list').fill('refresh.ts');
   await expect(page.getByRole('button', { name: /refresh\.ts/ }).first()).toBeVisible();
   await page.getByRole('button', { name: /refresh\.ts/ }).first().click();
   await expect(page.getByTestId('file-inspector')).toContainText('refresh.ts');
@@ -175,5 +176,6 @@ test('core controls remain usable with reduced motion and a narrow viewport', as
   await expect(page.getByTestId('source-pr-248')).toBeVisible();
   await page.keyboard.press('Escape');
   await page.getByTestId('accessible-list-toggle').click();
+  await page.getByLabel('Filter file list').fill('refresh.ts');
   await expect(page.getByRole('button', { name: /refresh\.ts/ }).first()).toBeVisible();
 });
