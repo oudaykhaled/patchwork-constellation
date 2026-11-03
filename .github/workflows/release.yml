@@ -123,6 +123,8 @@ jobs:
         run: pnpm exec vitest run packages/storage/src/storage.test.ts packages/storage/src/webhook-postgres.test.ts tests/backend-release/postgres.test.ts
       - name: Verify deployed BFF isolation and resource boundaries
         run: pnpm exec tsx tests/backend-release/staging.ts .tmp/staging/data-09.json
+      - name: Verify Git ground truth and adversarial input controls
+        run: pnpm exec vitest run tests/backend-release/correctness.test.ts tests/backend-release/isolation.test.ts
       - name: Deploy candidate and rehearse database restore and traffic rollback
         shell: bash
         run: |
