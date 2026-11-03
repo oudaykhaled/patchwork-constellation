@@ -16,7 +16,7 @@ At more than 10,000 edges and overview zoom below 0.6, the renderer explicitly s
 
 - Windows x64; Intel Core Ultra 9 275HX; Node 24.22.1.
 - Chrome 156.0.8078.4, viewport 1600 × 1000, device pixel ratio 1.
-- Local Vite development build on loopback, with no GitHub or AI requests.
+- Local production build (`pnpm build`, then `pnpm start`) on loopback port 4310, with no GitHub or AI requests.
 - Deterministic synthetic scale fixtures, seed 42. The 212-file visual fixture contains six islands and 235 connections; the scale fixtures contain twelve module islands.
 - This is one local run for each browser fixture. Other development activity can affect wall-clock samples.
 
@@ -38,9 +38,9 @@ Each panning sample alternates left and right so that the graph stays in view th
 
 | Files | Connections | Navigation to rendered circles | Median frame interval | p95 frame interval | Observed long tasks during pan |
 | --- | --- | --- | --- | --- | --- |
-| 212 | 235 | 394 ms | 16.7 ms | 16.8 ms | 0 |
-| 2,000 | 8,000 | 380 ms | 16.7 ms | 16.8 ms | 0 |
-| 10,000 | 40,000 | 661 ms | 16.8 ms | 33.4 ms | 0 |
+| 212 | 235 | 283 ms | 16.7 ms | 16.8 ms | 0 |
+| 2,000 | 8,000 | 202 ms | 16.7 ms | 16.8 ms | 0 |
+| 10,000 | 40,000 | 417 ms | 16.7 ms | 33.4 ms | 0 |
 
 The initial 2,000-file target was below the proposed 33 ms p95 frame interval in this sample. The 10,000-file stress case reached approximately 30 fps at p95, slightly above 33 ms. Navigation timings include HTML/module loading and cannot be presented as a separate network-independent layout time or a repository-analysis latency result. Selection latency, GPU memory and repeated long-session leak behavior need separate release evidence.
 
@@ -52,10 +52,11 @@ From the repository root:
 pnpm exec vitest run packages/graph-core/src/index.test.ts
 pnpm exec tsx packages/graph-core/src/benchmark.ts
 $env:PLAYWRIGHT_CHROME='1'
+$env:GRAPH_BENCHMARK_BUILD='production'
 pnpm exec playwright test tests/e2e/graph-performance.spec.ts --project=chromium --workers=1
 ```
 
-The Playwright configuration starts the local server when needed. On a machine using Playwright's installed Chromium, omit `PLAYWRIGHT_CHROME`. Run performance tests with a single worker. The tests attach JSON measurements and rendered screenshots, and write PNGs into their test output directory. A later Playwright invocation may clear that transient directory.
+To reproduce the production sample, first run `pnpm build` and keep `pnpm start` running in a separate terminal. Playwright reuses that local server. Without a running server its configuration starts a development server, so record that different build condition explicitly. On a machine using Playwright's installed Chromium, omit `PLAYWRIGHT_CHROME`. Run performance tests with a single worker. The tests report viewport dimensions from the browser itself, attach JSON measurements and rendered screenshots, and write PNGs into their test output directory. A later Playwright invocation may clear that transient directory.
 
 The browser tests intercept only `/api/demo` to inject synthetic graph data. No debug fixture-loading endpoint is added to the application. The tests assert rendering and camera behavior; timing values are recorded as evidence rather than brittle machine-specific pass/fail assertions.
 
