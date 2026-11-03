@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import type { FileNode, Group } from '@patchwork/contracts';
+import { unparsedFileFacts, type FileNode, type Group } from '@patchwork/contracts';
 
 const palette = ['#66bfa0', '#9d8fd4', '#6a9ec7', '#b8a073', '#7796c3', '#839da0', '#ae8ca1', '#98ac7a'];
 export const GROUPING_RULES_VERSION = 'hierarchy-v1';
@@ -156,5 +156,5 @@ export function applyHierarchy(nodes: FileNode[], hierarchy: RepositoryHierarchy
   });
 }
 export function nodeForPath(fullName: string, path: string): FileNode {
-  return { id: `${fullName}:${path}`, path, groupId: `group:${groupKeyFor(path)}`, sourceIds: [], presence: 'context', status: 'unchanged', folder: folderFor(path), folderId: folderId(folderFor(path)) };
+  return { ...unparsedFileFacts('Dependency extraction has not run for this context inventory entry.'), id: `${fullName}:${path}`, path, groupId: `group:${groupKeyFor(path)}`, sourceIds: [], folder: folderFor(path), folderId: folderId(folderFor(path)) };
 }

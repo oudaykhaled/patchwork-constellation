@@ -36,7 +36,7 @@ function toChanges(files: ApiFile[], snapshot: GraphSnapshot, sourceId: string):
       const base = nodeForPath(snapshot.repository.fullName, file.status === 'renamed' && file.previous_filename ? file.previous_filename : file.filename);
       const candidateId = ambiguousAddition || file.status === 'added' ? `${base.id}@${hash(`${sourceId}:${file.sha ?? 'unknown-blob'}`).slice(0, 12)}` : base.id;
       node = snapshot.nodes.find(item => item.id === candidateId) ?? extra.find(item => item.id === candidateId);
-      if (!node) { node = { ...base, path: file.filename, groupId: nodeForPath(snapshot.repository.fullName, file.filename).groupId, id: candidateId, presence: file.status === 'removed' ? 'deleted' : 'source-only', status: statusFor(file.status), language: languageFor(file.filename), sourceIds: [sourceId], importCoverage: 'unsupported', blobSha: file.sha, ...(ambiguousAddition ? { ambiguousLineage: true } : {}) }; extra.push(node); }
+      if (!node) { node = { ...base, path: file.filename, groupId: nodeForPath(snapshot.repository.fullName, file.filename).groupId, id: candidateId, presence: file.status === 'removed' ? 'deleted' : 'source-only', status: 'unparsed', language: languageFor(file.filename), sourceIds: [sourceId], importCoverage: 'excluded', importReasons: ['This file has no inventoried context blob. Its source-specific status and dependency evidence remain in the source comparison layer.'], blobSha: file.sha, ...(ambiguousAddition ? { ambiguousLineage: true } : {}) }; extra.push(node); }
       remember(file.filename, node);
     }
     if (file.status === 'renamed' && file.previous_filename) {

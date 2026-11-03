@@ -1,3 +1,4 @@
+import { authoredFileFacts } from '@patchwork/fixtures';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +10,7 @@ function snapshot(id = 'snapshot-1'): GraphSnapshot { return {
   schemaVersion: '1', id, repository: { owner: 'example', name: 'repo', fullName: 'example/repo', defaultBranch: 'main', htmlUrl: 'https://github.com/example/repo' },
   contextSha: id, contextRef: 'main', createdAt: '2026-11-03T00:00:00Z', mode: 'demo', sources: [], edges: [], coverage: { status: 'complete', reasons: [] },
   groups: [{ id: 'auth', label: 'Auth', origin: 'rules' }, { id: 'billing', label: 'Billing', origin: 'rules' }],
-  nodes: [{ id: 'a', path: 'src/auth/session.ts', groupId: 'auth', sourceIds: [], presence: 'context' }, { id: 'b', path: 'src/auth/token.ts', groupId: 'auth', sourceIds: [], presence: 'context' }, { id: 'c', path: 'src/billing.ts', groupId: 'billing', sourceIds: [], presence: 'context' }],
+  nodes: [{ ...authoredFileFacts('complete'), id: 'a', path: 'src/auth/session.ts', groupId: 'auth', sourceIds: [], presence: 'context' }, { ...authoredFileFacts('complete'), id: 'b', path: 'src/auth/token.ts', groupId: 'auth', sourceIds: [], presence: 'context' }, { ...authoredFileFacts('complete'), id: 'c', path: 'src/billing.ts', groupId: 'billing', sourceIds: [], presence: 'context' }],
 }; }
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
