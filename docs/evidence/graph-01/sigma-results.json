@@ -1,0 +1,71 @@
+{
+  "measuredAt": "2026-11-03T17:09:14.474Z",
+  "version": {
+    "sigma": "4.0.4",
+    "graphology": "0.26.0"
+  },
+  "build": "Vite development comparison spike",
+  "hardware": {
+    "os": "win32",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logicalCpus": 24,
+    "ramBytes": 33752997888
+  },
+  "browser": "156.0.8078.80",
+  "viewport": {
+    "width": 1600,
+    "height": 1000
+  },
+  "seed": 42,
+  "note": "Isolated candidate proof, not a production migration or directly comparable to historical production Canvas timings. JS heap is target heap, not GPU or total process memory.",
+  "samples": [
+    {
+      "files": 212,
+      "edges": 235,
+      "islands": 6,
+      "startupToObservationMs": 392.39999997615814,
+      "navigationToObservationMs": 490,
+      "heapBytes": 13590333,
+      "gpu": "WebKit WebGL",
+      "count": 86,
+      "frameMedianMs": 16.699999999999818,
+      "frameP95Ms": 16.800000000000182,
+      "longTasks": [],
+      "heapBytesAfterPan": 15737769,
+      "picking": "passed",
+      "focusedConnections": 4,
+      "fileList": "complete",
+      "screenshots": [
+        "212-overview.jpg",
+        "212-out.jpg",
+        "212-in.jpg"
+      ]
+    },
+    {
+      "files": 2000,
+      "edges": 8000,
+      "islands": 12,
+      "startupToObservationMs": 334.90000009536743,
+      "navigationToObservationMs": 403.7000000476837,
+      "heapBytes": 42156705,
+      "gpu": "WebKit WebGL",
+      "count": 86,
+      "frameMedianMs": 16.699999999999818,
+      "frameP95Ms": 16.799999999999955,
+      "longTasks": [],
+      "heapBytesAfterPan": 41392815,
+      "picking": "passed",
+      "focusedConnections": 9,
+      "fileList": "complete",
+      "screenshots": [
+        "2000-overview.jpg",
+        "2000-out.jpg",
+        "2000-in.jpg"
+      ]
+    }
+  ],
+  "webglFailure": {
+    "fallbackFiles": 212,
+    "retryButton": "retains complete list when capability is still unavailable"
+  }
+}
