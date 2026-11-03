@@ -16,3 +16,5 @@ Thumbs.db
 .cache/
 .tmp/
 release-artifacts/
+.ci-diagnostics/
+.data/

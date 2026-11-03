@@ -1,6 +1,6 @@
 # Graph renderer evidence
 
-Measured locally on 2026-11-03. These samples establish the initial renderer's behavior on this machine; they are not a promise for every repository, GPU, browser, or display density.
+Historical baseline measured locally on 2026-11-03, before the worker/camera changes. Current integrated renderer measurements, explicit scope controls and release gates are in [Graph capacity](GRAPH_CAPACITY.md) and [numeric results](evidence/graph-04/results.json). Neither sample promises performance on every repository, GPU, browser, or display density.
 
 ## Renderer decision
 
@@ -8,7 +8,7 @@ The initial implementation uses a Canvas 2D renderer behind pure graph layout an
 
 Canvas 2D was selected for this implementation because the measured 2,000-file/8,000-edge target remains within the proposed interaction budget while supporting the required island visual treatment without a custom WebGL program. Sigma/Graphology remains an alternative for a later measured bottleneck; it is not a dependency of this renderer.
 
-Layout is a bounded deterministic calculation. It has no continuing force simulation. The current calculation runs synchronously, with the CPU timing below; a layout worker is future hardening rather than a capability claimed by these results. Source toggles do not participate in placement, and new source-only files preserve surviving file coordinates. A changed context/grouping key explicitly resets layout and framing.
+This historical baseline calculated layout synchronously. The current renderer settles it in a cancellable dedicated worker; source selection is excluded from its structural key. See [worker evidence](issues/13.md). The CPU timings below describe the earlier pure calculation, not worker startup or the latest renderer.
 
 At more than 10,000 edges and overview zoom below 0.6, the renderer explicitly shows one third of background import lines and displays a detail-reduction notice. It retains every file node and the full underlying connection data. Focused connections and closer zoom reveal detail. Viewport culling avoids drawing offscreen circles.
 
