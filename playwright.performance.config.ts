@@ -9,7 +9,14 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  use: { ...base.use, baseURL: `http://127.0.0.1:${port}` },
+  use: {
+    ...base.use, baseURL: `http://127.0.0.1:${port}`,
+    // retain-on-failure records snapshots/screencast before a failure is known.
+    // Keep that recorder outside reference timing; numeric samples and explicit
+    // canvas-proof screenshots are still produced. Trace is diagnostic opt-in.
+    trace: process.env.GRAPH_PROFILE_TRACE === 'true' ? 'retain-on-failure' : 'off',
+    video: 'off',
+  },
   projects: base.projects?.filter(project => project.name === 'chromium'),
   webServer: {
     command: 'pnpm start',

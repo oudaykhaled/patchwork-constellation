@@ -6,10 +6,24 @@ import { resolve } from 'node:path';
 import { GRAPH_BUDGETS } from '../../packages/graph-core/src/render-policy';
 
 test.describe('Constellation rendering evidence @performance', () => {
-  test.describe.configure({ mode: 'serial' });
+  // The dedicated configuration already runs one worker. Keep tests independent
+  // so a target-budget failure still produces the later 10k stress artifact.
+  test.describe.configure({ mode: 'default' });
   for (const [files, edges] of [[212, 235], [2000, 8000], [10000, 40000]]) {
-    test(`${files} file circles and ${edges} connections render and pan`, async ({ page, browserName }, testInfo) => {
+    test(`${files} file circles and ${edges} connections render and pan`, async ({ page, browser, browserName }, testInfo) => {
       test.skip(browserName !== 'chromium', 'The performance sample is recorded on Chromium; correctness journeys cover the other engines.');
+      let renderingBackend: unknown = { status: 'unavailable' };
+      const browserProtocol = await browser.newBrowserCDPSession();
+      try {
+        const system = await browserProtocol.send('SystemInfo.getInfo');
+        renderingBackend = {
+          devices: system.gpu.devices.map((device: { vendorString: string; deviceString: string; driverVendor: string; driverVersion: string }) => ({ vendor: device.vendorString, device: device.deviceString, driverVendor: device.driverVendor, driverVersion: device.driverVersion })),
+          featureStatus: system.gpu.featureStatus,
+          glRenderer: system.gpu.auxAttributes?.glRenderer,
+          glVendor: system.gpu.auxAttributes?.glVendor,
+        };
+      } catch { /* Backend metadata is diagnostic, not permission to skip a budget. */ }
+      finally { await browserProtocol.detach(); }
       const graph = files === 212 ? createDemoSnapshot() : createScaleFixture(files, edges, 42);
       await page.route('**/api/demo', route => route.fulfill({ json: graph }));
       await page.addInitScript(() => {
@@ -68,14 +82,19 @@ test.describe('Constellation rendering evidence @performance', () => {
           };
           requestAnimationFrame(frame);
         });
-        observer.disconnect(); frames.sort((a, b) => a - b);
-        return { viewport: { width: innerWidth, height: innerHeight }, frames: frames.length, frameMedianMs: frames[Math.floor(frames.length / 2)], frameP95Ms: frames[Math.floor(frames.length * .95)], longTasks, browser: navigator.userAgent, devicePixelRatio: devicePixelRatio };
+        // Observer delivery is asynchronous; drain the final queued long task
+        // before disconnecting so the tail of the measured window is retained.
+        for (const entry of observer.takeRecords()) longTasks.push(entry.duration);
+        observer.disconnect(); const frameIntervalsMs = [...frames]; frames.sort((a, b) => a - b);
+        return { viewport: { width: innerWidth, height: innerHeight }, frames: frames.length, frameIntervalsMs, frameMedianMs: frames[Math.floor(frames.length / 2)], frameP95Ms: frames[Math.floor(frames.length * .95)], longTasks, browser: navigator.userAgent, devicePixelRatio: devicePixelRatio };
       });
       await expect.poll(async () => Number(await canvas.getAttribute('data-camera-x'))).toBeGreaterThan(initialX);
       expect(errors).toEqual([]);
       const checks = { firstUseful: boot.firstUsefulAfterDataMs <= GRAPH_BUDGETS.firstUsefulMs, pan: evidence.frameP95Ms <= GRAPH_BUDGETS.panP95Ms, startupLongTask: boot.startupLongTasks.every(task => task.duration <= GRAPH_BUDGETS.layoutLongTaskMs) };
       const report = { schemaVersion: '1', files, edges, seed: 42, navigationToRenderedMs, ...boot, ...evidence, conditions: { platform: platform(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, totalMemoryBytes: totalmem(), node: process.version, network: 'loopback; synthetic /api/demo response; no GitHub/AI', concurrency: process.env.GRAPH_BENCHMARK_CONCURRENCY || 'unrecorded', cacheState: 'new browser context; first page navigation' }, budgets: GRAPH_BUDGETS, checks, capacity: files > 2000 ? 'stress-only' : 'target', build: process.env.GRAPH_BENCHMARK_BUILD || 'unspecified', note: 'First-use time begins after demo JSON is available and ends at polled green-circle/worker-ready proof; it includes polling overhead. Startup long tasks include app/rendering plus pixel-proof overhead, not isolated worker CPU. JS heap is browser-reported and is not GPU or process memory. Frame samples measure keyboard panning, not ingestion or AI.' };
       Object.assign(report, { seed: files === 212 ? 'authored-constellation-v1' : 42, layoutSeed: 0, commit: process.env.GRAPH_BENCHMARK_COMMIT || 'unrecorded' });
+      const trace = testInfo.project.use.trace;
+      Object.assign(report.conditions, { browserVersion: browser.version(), renderingBackend, recording: { trace: typeof trace === 'string' ? trace : trace?.mode || 'off', video: testInfo.project.use.video || 'off', proofScreenshots: 'Captured before the timed pan window; failure screenshot after measurement.' }, runner: { os: process.env.RUNNER_OS, arch: process.env.RUNNER_ARCH, image: process.env.ImageOS, imageVersion: process.env.ImageVersion } });
       console.log('Graph rendering evidence:', JSON.stringify(report));
       await testInfo.attach(`graph-performance-${files}.json`, { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
       if (process.env.GRAPH_BENCHMARK_OUTPUT) {

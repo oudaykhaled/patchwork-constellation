@@ -39,6 +39,8 @@ jobs:
         if: always()
         with:
           name: graph-budget-numeric-evidence
-          path: test-results/graph-budgets/*.json
+          path: |
+            test-results/graph-budgets/*.json
+            test-results/**/rendered-*.png
           retention-days: 7
           if-no-files-found: ignore
