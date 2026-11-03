@@ -31,6 +31,7 @@ jobs:
       - run: pnpm exec playwright test --config playwright.performance.config.ts
         env:
           GRAPH_BENCHMARK_BUILD: production
+          GRAPH_BENCHMARK_COMMIT: ${{ github.sha }}
           GRAPH_ENFORCE_BUDGETS: 'true'
           GRAPH_BENCHMARK_CONCURRENCY: dedicated single-worker GitHub Actions job
           GRAPH_BENCHMARK_OUTPUT: test-results/graph-budgets

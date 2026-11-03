@@ -16,6 +16,6 @@ export default defineConfig({
     url: `http://127.0.0.1:${port}/api/health`,
     reuseExistingServer: process.env.GRAPH_BENCHMARK_REUSE === 'true',
     timeout: 60_000,
-    env: { PORT: port, GITHUB_TOKEN: '', AI_ENABLED: 'false', TYPESAFE_API_KEY: '', JEV_MODEL: '', OPENAI_API_KEY: '', OPENAI_MODEL: '', DATABASE_URL: '', GROUPING_STORAGE_PATH: '' },
+    env: { PORT: port, GITHUB_TOKEN: '', GITHUB_APP_ID: '', GITHUB_APP_CLIENT_ID: '', GITHUB_APP_CLIENT_SECRET: '', GITHUB_APP_PRIVATE_KEY: '', APP_ORIGIN: '', AI_ENABLED: 'false', TYPESAFE_API_KEY: '', JEV_MODEL: '', OPENAI_API_KEY: '', OPENAI_MODEL: '', DATABASE_URL: '', GROUPING_STORAGE_PATH: '' },
   },
 });

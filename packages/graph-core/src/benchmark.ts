@@ -11,6 +11,6 @@ const results = [212, 2000, 10000].map(count => {
     timings.push(performance.now() - start);
   }
   timings.sort((a, b) => a - b);
-  return { files: graph.nodes.length, edges: graph.edges.length, seed: 42, runs: timings.length, medianMs: +timings[12].toFixed(2), p95Ms: +timings[23].toFixed(2) };
+  return { files: graph.nodes.length, edges: graph.edges.length, seed: count === 212 ? 'authored-constellation-v1' : 42, layoutSeed: 0, runs: timings.length, medianMs: +timings[12].toFixed(2), p95Ms: +timings[23].toFixed(2) };
 });
 console.log(JSON.stringify({ measured: 'CPU layout + footprint + neighbor computation; excludes browser canvas rendering and network', node: process.version, platform: process.platform, architecture: process.arch, results }, null, 2));
