@@ -56,13 +56,33 @@ pnpm exec vitest run tests/release/evidence.test.ts
 
 The default is a quick 24-cycle regression. `RELEASE_SOAK_CYCLES` is bounded between 12 and 5,000. On a declared stable reference runner, set `RELEASE_ENFORCE_BUDGETS=1` to fail the 2k selection/hover/warm-navigation sample when its target is missed. Do not confuse the warm-navigation proxy with the authenticated view target. Raw timings, long tasks, GC/DOM counters, worker/handler counts and browser/build conditions are attached to Playwright and written under `.tmp/release-evidence/`.
 
+### Authenticated payload arrival to useful view
+
+The dedicated `authenticated-view.spec.ts` fixture starts the production BFF on an ephemeral loopback port. It uses the actual OAuth session issuer, opaque-cookie lookup, CSRF guard and live user/installation repository intersection with an authored GitHub transport. Installation-token minting and repository analysis/source loading are dependency-injected test doubles. No real App key is loaded or generated, no response is intercepted in the browser, and no production test route exists.
+
+Its controls require missing and tampered sessions to return 401, missing CSRF and removed repository access to return 403, and zero unauthorized analyses. The benchmark cannot run successfully without those controls. It then warms the actual completed owner-scoped BFF job and measures 20 fresh-page cached views. Each browser timestamp starts at `PerformanceResourceTiming.responseEnd` for the authenticated ready-job JSON body, and ends only when the real layout worker is ready and the main canvas contains file-circle pixels. Navigation, module loading and synthetic analysis generation are outside this interval. The test asserts one analysis call across all cached samples and repeated live authorization discovery.
+
+```powershell
+pnpm build
+$env:PLAYWRIGHT_CHROME='1'
+$env:AI_ENABLED='false'
+$env:DATABASE_URL=''
+$env:API_REQUESTS_PER_MINUTE='2400'
+$env:AUTHENTICATED_VIEW_SAMPLES='20'
+$env:RELEASE_EVIDENCE_COMMIT=(git rev-parse HEAD)
+$env:RELEASE_EVIDENCE_ACTIVITY='Describe actual runner activity'
+pnpm exec playwright test --config playwright.authenticated-performance.config.ts
+```
+
+This produces `.tmp/release-evidence/authenticated-view.json`. It proves the controlled-identity BFF/browser timing boundary; it does not verify live App registration, real private-repository access, WAN latency, human navigation or GPU behavior. The default 20-sample report is required by the aggregate gate; smaller preparation runs remain diagnostic.
+
 After the renderer/backend suites produce reports, aggregate them:
 
 ```powershell
-pnpm exec tsx scripts/release-evidence.ts --renderer docs/evidence/graph-04/results.json --backend docs/evidence/data-09.json --output .tmp/release-evidence/DEL-05.json
+pnpm exec tsx scripts/release-evidence.ts --renderer docs/evidence/graph-04/results.json --backend docs/evidence/data-09.json --authenticated-view .tmp/release-evidence/authenticated-view.json --output .tmp/release-evidence/DEL-05.json
 ```
 
-The aggregator expects versioned dependency envelopes `{schemaVersion:'1',status,commit,checks:[{id,status,evidence}]}`. It checks the three exact fixture sizes/seed, finite metrics, same recorded production commit, bounded retention and 2k timing targets. Missing/failed/different-commit dependency reports remain visible. Optional `--reference-runner`, `--analysis-phases` and `--authenticated-view` arguments record explicit evidence references supplied by the maintainer; they are attestations, not independent verification by the script. Supply them only after those checks were performed. `--require-release` exits nonzero unless all aggregate checks pass. A normal command can finish successfully while its report says `partial`.
+The aggregator expects versioned dependency envelopes `{schemaVersion:'1',status,commit,checks:[{id,status,evidence}]}`. It checks the three exact fixture sizes/seed, finite metrics, same recorded production commit, bounded retention and 2k timing targets. Missing/failed/different-commit dependency reports remain visible. `--authenticated-view` now reads and validates a measured JSON artifact: at least 20 warm observations, real workers, response-end timestamps, correct denial controls, computed p95 and the same production commit. A string attestation or zero-worker/zero-observation report fails. Optional `--reference-runner` and `--analysis-phases` arguments remain explicit evidence references supplied by the maintainer; supply them only after those checks were performed. `--require-release` exits nonzero unless all aggregate checks pass. A normal command can finish successfully while its report says `partial`.
 
 ## Remaining acceptance
 

@@ -25,6 +25,23 @@ const envelope = (value: unknown): value is DependencyEvidence => {
   return item.schemaVersion === '1' && ['passed', 'partial', 'failed'].includes(item.status) && Array.isArray(item.checks) && item.checks.length > 0 && item.checks.every(check => check && typeof check.id === 'string' && ['passed', 'partial', 'failed'].includes(check.status) && typeof check.evidence === 'string');
 };
 
+type AuthenticatedViewEvidence = {
+  schemaVersion: '1'; status: EvidenceStatus; commit: string; sampleKind: 'controlled-authenticated-BFF'; files: number; edges: number; seed: number; sampleCount: number; p95Ms: number;
+  samples: { responseEndMs: number; usefulPixelsMs: number; responseToUsefulMs: number; workerCount: number; warm: boolean; payloadBytes: number }[];
+  conditions: { build: string };
+  controls: { noSession: string; tamperedSession: string; missingCsrf: string; removedRepository: string; unauthorizedAnalysisCalls: number; analysisCalls: number; liveDiscoveryCalls: number; externalRequests: number };
+};
+export function validateAuthenticatedView(value: unknown): value is AuthenticatedViewEvidence {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as AuthenticatedViewEvidence;
+  if (item.schemaVersion !== '1' || item.sampleKind !== 'controlled-authenticated-BFF' || item.files !== 2_000 || item.edges !== 8_000 || item.seed !== 42 || !['passed', 'partial', 'failed'].includes(item.status) || !sha(item.commit) || item.conditions?.build !== 'production' || !Number.isInteger(item.sampleCount) || item.sampleCount < 20 || !finite(item.p95Ms) || item.p95Ms <= 0 || !Array.isArray(item.samples) || item.samples.filter(sample => sample.warm).length !== item.sampleCount) return false;
+  const controls = item.controls;
+  if (!controls || controls.noSession !== '401' || controls.tamperedSession !== '401' || controls.missingCsrf !== '403' || controls.removedRepository !== '403' || controls.unauthorizedAnalysisCalls !== 0 || controls.analysisCalls !== 1 || controls.liveDiscoveryCalls <= item.sampleCount || controls.externalRequests !== 0) return false;
+  if (!item.samples.every(sample => typeof sample.warm === 'boolean' && [sample.responseEndMs, sample.usefulPixelsMs, sample.responseToUsefulMs, sample.workerCount, sample.payloadBytes].every(finite) && sample.responseEndMs > 0 && sample.usefulPixelsMs > sample.responseEndMs && Math.abs(sample.responseToUsefulMs - (sample.usefulPixelsMs - sample.responseEndMs)) < .01 && Number.isInteger(sample.workerCount) && sample.workerCount > 0 && Number.isInteger(sample.payloadBytes) && sample.payloadBytes > 20_000)) return false;
+  const sorted = item.samples.filter(sample => sample.warm).map(sample => sample.responseToUsefulMs).sort((a, b) => a - b);
+  return Math.abs(item.p95Ms - sorted[Math.ceil(sorted.length * .95) - 1]) < .01;
+}
+
 export function validateSoak(value: unknown): value is SoakEvidence {
   if (!value || typeof value !== 'object') return false;
   const item = value as SoakEvidence;
@@ -34,7 +51,7 @@ export function validateSoak(value: unknown): value is SoakEvidence {
 
 /** Aggregate measured artifacts. A successful script invocation never means the
  * release gate passed: callers must inspect status or use --require-release. */
-export function buildReleaseEvidence(input: { soak: unknown[]; renderer?: unknown; backend?: unknown; referenceRunner?: string; analysisPhaseEvidence?: string; authenticatedViewEvidence?: string }) {
+export function buildReleaseEvidence(input: { soak: unknown[]; renderer?: unknown; backend?: unknown; referenceRunner?: string; analysisPhaseEvidence?: string; authenticatedView?: unknown; authenticatedViewReference?: string }) {
   const checks: EvidenceCheck[] = [];
   const valid = input.soak.filter(validateSoak);
   const add = (id: string, status: EvidenceStatus, evidence: string) => checks.push({ id, status, evidence });
@@ -65,7 +82,13 @@ export function buildReleaseEvidence(input: { soak: unknown[]; renderer?: unknow
   }
   add('reference-runner', input.referenceRunner ? 'passed' : 'partial', input.referenceRunner || 'No stable reference-runner assertion supplied; concurrent agent activity cannot establish a release budget.');
   add('analysis-phases', input.analysisPhaseEvidence ? 'passed' : 'partial', input.analysisPhaseEvidence || 'No actual phase timing evidence supplied. Mocked worker delay is not repository analysis latency.');
-  add('authenticated-useful-view', input.authenticatedViewEvidence ? 'passed' : 'partial', input.authenticatedViewEvidence || 'No authorized authenticated-response-to-useful-view evidence supplied. Synthetic navigation is a different measure.');
+  if (input.authenticatedView === undefined) add('authenticated-useful-view', 'partial', 'No measured authenticated BFF response-to-useful-view artifact supplied. Synthetic navigation is a different measure.');
+  else if (!validateAuthenticatedView(input.authenticatedView)) add('authenticated-useful-view', 'failed', 'Authenticated artifact failed measured-sample, real-worker, finite-timing or denied-session/CSRF/repository control validation.');
+  else {
+    const artifact = input.authenticatedView;
+    const sameCommit = commits.size === 1 && artifact.commit === [...commits][0];
+    add('authenticated-useful-view', artifact.status === 'failed' || artifact.p95Ms > 2_000 ? 'failed' : sameCommit && artifact.status === 'passed' ? 'passed' : 'partial', `${artifact.sampleCount} warm controlled-identity BFF samples; response-body-arrival to worker-ready file pixels p95 ${artifact.p95Ms.toFixed(2)} ms; same measured commit ${sameCommit}. ${input.authenticatedViewReference || ''} No live App registration or WAN claim.`);
+  }
   const status: EvidenceStatus = checks.some(check => check.status === 'failed') ? 'failed' : checks.every(check => check.status === 'passed') ? 'passed' : 'partial';
   return { schemaVersion: '1' as const, generatedAt: new Date().toISOString(), status, releaseReady: status === 'passed', commit: commits.size === 1 ? [...commits][0] : undefined, checks, limitations: ['This report aggregates evidence supplied by the caller; it does not certify independent human review or staging conditions.', 'API timeout, worker restart, GitHub retry and provider-outage outcomes come from linked backend suites; browser fixture timings do not establish those outcomes.', 'Do not enable intelligence or publish beta solely because bounded synthetic interaction budgets pass.'] };
 }
@@ -80,7 +103,7 @@ async function main() {
     try { soak.push(await readOptional(resolve(directory, `release-soak-${size}.json`))); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   }
-  const report = buildReleaseEvidence({ soak, renderer: await readOptional(option('--renderer')), backend: await readOptional(option('--backend')), referenceRunner: option('--reference-runner'), analysisPhaseEvidence: option('--analysis-phases'), authenticatedViewEvidence: option('--authenticated-view') });
+  const report = buildReleaseEvidence({ soak, renderer: await readOptional(option('--renderer')), backend: await readOptional(option('--backend')), referenceRunner: option('--reference-runner'), analysisPhaseEvidence: option('--analysis-phases'), authenticatedView: await readOptional(option('--authenticated-view')), authenticatedViewReference: option('--authenticated-view') });
   const output = resolve(option('--output') || resolve(directory, 'DEL-05.json'));
   await mkdir(dirname(output), { recursive: true }); await writeFile(output, JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify({ status: report.status, releaseReady: report.releaseReady, output, pending: report.checks.filter(check => check.status !== 'passed').map(check => check.id) }));

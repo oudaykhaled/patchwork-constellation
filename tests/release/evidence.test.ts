@@ -5,6 +5,7 @@ const commit = 'a'.repeat(40);
 const sample = (files: number, edges: number): SoakEvidence => ({ schemaVersion: '1', files, edges, seed: 42, appCommit: commit, build: 'production', conditions: { concurrentActivity: 'synthetic unit-test record', network: 'loopback' }, coldNavigationToPaintMs: 120, warmNavigationToPaintMs: 100, selection: { samples: 1_000, durationMs: 32_000, p95Ms: 30 }, hover: { samples: 12, p95Ms: 20 }, retainedBefore: { heapUsedBytes: 5_000_000, nodes: 400 }, retainedAfter: { heapUsedBytes: 5_100_000, nodes: 400 }, resourcesBefore: { workersCreated: 2, workersLive: 1, globalListeners: 4 }, resourcesAfter: { workersCreated: 2, workersLive: 1, globalListeners: 4 } });
 const all = () => [sample(212, 235), sample(2_000, 8_000), sample(10_000, 40_000)];
 const dependency = () => ({ schemaVersion: '1', status: 'passed', commit, checks: [{ id: 'fixture-check', status: 'passed', evidence: 'unit-test artifact only' }] });
+const authenticated = () => ({ schemaVersion: '1', status: 'passed', commit, sampleKind: 'controlled-authenticated-BFF', files: 2_000, edges: 8_000, seed: 42, sampleCount: 20, p95Ms: 50, samples: Array.from({ length: 21 }, (_, i) => ({ responseEndMs: 200, usefulPixelsMs: 250, responseToUsefulMs: 50, workerCount: 1, warm: i > 0, payloadBytes: 100_000 })), conditions: { build: 'production' }, controls: { noSession: '401', tamperedSession: '401', missingCsrf: '403', removedRepository: '403', unauthorizedAnalysisCalls: 0, analysisCalls: 1, liveDiscoveryCalls: 50, externalRequests: 0 } });
 
 describe('DEL-05 evidence aggregation gates', () => {
   test('timing success does not imply beta readiness without missing dependency and operational evidence', () => {
@@ -30,7 +31,7 @@ describe('DEL-05 evidence aggregation gates', () => {
   });
   test('different builds, empty dependency checks and wrong seeds cannot satisfy the release gate', () => {
     const artifacts = all(); artifacts[1].appCommit = 'b'.repeat(40); artifacts[2].seed = 99;
-    const report = buildReleaseEvidence({ soak: artifacts, renderer: { ...dependency(), checks: [] }, backend: dependency(), referenceRunner: 'declared reference', analysisPhaseEvidence: 'declared source', authenticatedViewEvidence: 'declared source' });
+    const report = buildReleaseEvidence({ soak: artifacts, renderer: { ...dependency(), checks: [] }, backend: dependency(), referenceRunner: 'declared reference', analysisPhaseEvidence: 'declared source', authenticatedView: authenticated() });
     expect(report.releaseReady).toBe(false);
     for (const key of ['fixture-10000', 'same-production-build', 'GRAPH-04', 'DATA-09']) expect(report.checks.find(check => check.id === key)?.status).toBe('partial');
   });
@@ -42,7 +43,17 @@ describe('DEL-05 evidence aggregation gates', () => {
     expect(report.checks.find(check => check.id === 'GRAPH-04')?.status).toBe('failed');
   });
   test('only complete same-commit explicit evidence can pass the aggregate gate', () => {
-    const report = buildReleaseEvidence({ soak: all(), renderer: dependency(), backend: dependency(), referenceRunner: 'test reference runner declaration', analysisPhaseEvidence: 'test phase artifact declaration', authenticatedViewEvidence: 'test auth artifact declaration' });
+    const report = buildReleaseEvidence({ soak: all(), renderer: dependency(), backend: dependency(), referenceRunner: 'test reference runner declaration', analysisPhaseEvidence: 'test phase artifact declaration', authenticatedView: authenticated() });
     expect(report.status).toBe('passed'); expect(report.releaseReady).toBe(true);
+  });
+  test('an authentication attestation string or forged zero-worker timing cannot pass', () => {
+    for (const artifact of ['we tested auth', { ...authenticated(), samples: authenticated().samples.map(sample => ({ ...sample, workerCount: 0 })) }, { ...authenticated(), controls: { ...authenticated().controls, unauthorizedAnalysisCalls: 1 } }, { ...authenticated(), p95Ms: 0 }, { ...authenticated(), files: 1 }]) {
+      const report = buildReleaseEvidence({ soak: all(), authenticatedView: artifact });
+      expect(report.checks.find(check => check.id === 'authenticated-useful-view')?.status).toBe('failed');
+    }
+  });
+  test('an otherwise measured auth artifact from a different build remains partial', () => {
+    const report = buildReleaseEvidence({ soak: all(), authenticatedView: { ...authenticated(), commit: 'c'.repeat(40) } });
+    expect(report.checks.find(check => check.id === 'authenticated-useful-view')?.status).toBe('partial');
   });
 });
