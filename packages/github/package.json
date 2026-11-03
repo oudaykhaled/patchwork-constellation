@@ -1,0 +1,7 @@
+{
+  "name": "@patchwork/github",
+  "exports": "./src/index.ts",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true
+}
