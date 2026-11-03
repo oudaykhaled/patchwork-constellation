@@ -54,7 +54,7 @@ export class MemoryWebhookInbox implements WebhookInbox {
   private now() { return this.options.now?.() ?? Date.now(); }
   async enqueue(value: WebhookEnvelope) {
     value = checked(value); const now = this.now();
-    for (const [id, entry] of this.entries) if (entry.expires <= now && entry.state !== 'running') this.entries.delete(id);
+    for (const [id, entry] of this.entries) if (entry.expires <= now && (entry.state !== 'running' || (entry.leaseUntil ?? 0) <= now)) this.entries.delete(id);
     if (this.entries.has(value.deliveryId)) return false;
     if (this.entries.size >= (this.options.maxEntries ?? 10_000)) throw Object.assign(new Error('Webhook inbox is full; redeliver later.'), { status: 503 });
     this.entries.set(value.deliveryId, { value, expires: now + (this.options.retentionMs ?? 604_800_000), state: 'queued', available: now, attempts: 0 }); return true;
@@ -86,6 +86,7 @@ export class MemoryWebhookInbox implements WebhookInbox {
 /** PostgreSQL inbox/outbox: insertion and replay identity are one atomic durable write. */
 export class PostgresWebhookInbox implements WebhookInbox {
   readonly durable = true;
+  private closePromise?: Promise<void>;
   constructor(private readonly pool: Pool, private readonly options: { maxEntries?: number; retentionMs?: number; ownsPool?: boolean } = {}) {}
   async enqueue(input: WebhookEnvelope) {
     const value = checked(input), client = await this.pool.connect();
@@ -93,7 +94,8 @@ export class PostgresWebhookInbox implements WebhookInbox {
       await client.query('BEGIN');
       // Serialize the bounded-capacity decision, including across BFF instances.
       await client.query("SELECT pg_advisory_xact_lock(173124908, 20)");
-      await client.query("DELETE FROM patchwork_webhook_inbox WHERE expires_at < now() AND status <> 'running'");
+      await client.query("DELETE FROM patchwork_webhook_inbox WHERE expires_at < now() AND (status <> 'running' OR lease_until < now())");
+      await client.query('DELETE FROM patchwork_refresh_state WHERE expires_at < now()');
       const previous = await client.query('SELECT delivery_id FROM patchwork_webhook_inbox WHERE delivery_id=$1', [value.deliveryId]);
       if (previous.rowCount) { await client.query('COMMIT'); return false; }
       const count = await client.query<{ count: string }>('SELECT count(*) FROM patchwork_webhook_inbox');
@@ -104,6 +106,7 @@ export class PostgresWebhookInbox implements WebhookInbox {
   }
   async claim(): Promise<LeasedWebhook | undefined> {
     const lease = randomUUID();
+    await this.pool.query("UPDATE patchwork_webhook_inbox SET status='failed',lease=NULL,lease_until=NULL WHERE status='running' AND lease_until < now() AND attempts >= 10");
     const result = await this.pool.query<{ payload: WebhookEnvelope; attempts: number }>(`WITH candidate AS (
       SELECT delivery_id FROM patchwork_webhook_inbox WHERE status IN ('queued','running') AND available_at <= now() AND (lease_until IS NULL OR lease_until < now()) AND attempts < 10 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
     ) UPDATE patchwork_webhook_inbox i SET status='running',lease=$1,lease_until=now()+interval '60 seconds',attempts=attempts+1 FROM candidate c WHERE i.delivery_id=c.delivery_id RETURNING i.payload,i.attempts`, [lease]);
@@ -119,7 +122,7 @@ export class PostgresWebhookInbox implements WebhookInbox {
     return result.rows[0]!.payload;
   }
   async state(scope: StoreScope): Promise<RefreshState | undefined> { const value = await this.pool.query<{ payload: RefreshState }>("SELECT payload || jsonb_build_object('revision',revision) AS payload FROM patchwork_refresh_state WHERE owner_id=$1 AND repository=$2 AND expires_at > now()", [scope.ownerId, scope.repository.toLowerCase()]); return value.rows[0]?.payload; }
-  async close() { if (this.options.ownsPool) await this.pool.end(); }
+  async close() { if (this.options.ownsPool) { this.closePromise ??= this.pool.end(); await this.closePromise; } }
 }
 
 export async function createPostgresWebhookInbox(config: { databaseUrl: string; autoMigrate?: boolean; maxEntries?: number; retentionMs?: number }): Promise<WebhookInbox> {

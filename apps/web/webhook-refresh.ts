@@ -83,10 +83,12 @@ export class WebhookRefreshService {
             await this.options.invalidateAuthorization(task.installationId, task.reason === 'installation_deleted' ? undefined : task.repositoryId);
             await this.options.purgeRepository(task.scope);
           } else {
-            const current = await this.options.resolveScope(task.scope);
+            let current: InstallationBinding | undefined;
+            try { current = await this.options.resolveScope(task.scope); }
+            catch (error) { const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : 500; if (![401, 403].includes(status)) throw error; }
             if (!current || !sameScope(current.scope, task.scope) || current.installationId !== task.installationId || current.repositoryId !== task.repositoryId) {
               const revoked: RefreshTask = { ...task, kind: 'revoke', reason: 'repository_removed' };
-              await this.options.inbox.mark(revoked); await this.options.purgeRepository(task.scope); continue;
+              await this.options.inbox.mark(revoked); await this.options.invalidateAuthorization(task.installationId, task.repositoryId); await this.options.purgeRepository(task.scope); continue;
             }
             // The callback rechecks live access; event ordering/force-push cannot roll refs backward.
             const result = await this.options.enqueueRefresh(task);
