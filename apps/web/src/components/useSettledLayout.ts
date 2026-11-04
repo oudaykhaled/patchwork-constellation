@@ -18,13 +18,17 @@ export function useSettledLayout(snapshot: Snapshot, seed = 0, pins?: Record<str
   const sequence = useRef(0);
   const [layout, setLayout] = useState(EMPTY_LAYOUT);
   const [state, setState] = useState<'pending' | 'ready' | 'failed'>('pending');
+  // The repository whose layout is currently held. Effects run in the same commit as a
+  // repository switch, before the reset below is rendered, so 'ready' alone could
+  // describe the previous repository's layout and frame the new one with stale bounds.
+  const [readyRepository, setReadyRepository] = useState('');
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   const resetLayout = useCallback(() => { cache.current.delete(key); previous.current = null; setRetry(value => value + 1); }, [key]);
 
   useEffect(() => {
     const cached = cache.current.get(key);
-    if (cached) { previous.current = { repository, seed, layout: cached }; setLayout(cached); setState('ready'); setError(''); return; }
+    if (cached) { previous.current = { repository, seed, layout: cached }; setLayout(cached); setState('ready'); setReadyRepository(repository); setError(''); return; }
     const controller = new AbortController();
     const id = ++sequence.current;
     setState('pending'); setError('');
@@ -46,7 +50,7 @@ export function useSettledLayout(snapshot: Snapshot, seed = 0, pins?: Record<str
       // Bound revision history: cache is an optimization, not durable state.
       while (cache.current.size > 8) cache.current.delete(cache.current.keys().next().value!);
       previous.current = { repository, seed, layout: result };
-      setLayout(result); setState('ready');
+      setLayout(result); setState('ready'); setReadyRepository(repository);
     }).catch(reason => {
       if (controller.signal.aborted || id !== sequence.current) return;
       setState('failed'); setError(reason instanceof Error ? reason.message : 'Layout failed. Use Files or retry.');
@@ -54,5 +58,5 @@ export function useSettledLayout(snapshot: Snapshot, seed = 0, pins?: Record<str
     return () => controller.abort();
   }, [key, repository, seed, retry]);
 
-  return { layout, layoutState: state, layoutError: error, resetLayout };
+  return { layout, layoutState: state === 'ready' && readyRepository !== repository ? 'pending' as const : state, layoutError: error, resetLayout };
 }

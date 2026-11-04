@@ -42,4 +42,11 @@ describe('shared source selection', () => {
     await expect(discoverSelectedSources(createDemoSnapshot(), 'pr', ['pr:missing'], async page => { calls++; return { sources: [], nextPage: page + 1 }; }, new AbortController().signal)).rejects.toThrow();
     expect(calls).toBe(10);
   });
+
+  it('restores local repositories by registered id and pinned context', () => {
+    const snapshot = { ...createDemoSnapshot(), mode: 'local-git' as const, contextSha: 'c'.repeat(40), repository: { ...createDemoSnapshot().repository, owner: 'local', name: 'example-app', fullName: 'local/example-app', htmlUrl: 'local-git://local/example-app' } };
+    const params = new URLSearchParams(sharedViewQuery('', snapshot, 'pr', ['pr:1'], null));
+    expect(params.get('repo')).toBe('local/example-app');
+    expect(params.get('context')).toBe('c'.repeat(40));
+  });
 });

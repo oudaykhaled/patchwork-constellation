@@ -57,7 +57,7 @@ export async function discoverSelectedSources(
 export function sharedViewQuery(search: string, snapshot: GraphSnapshot, kind: SourceKind, ids: string[], fileId: string | null, camera?: SharedCamera): string {
   const params = new URLSearchParams(search);
   params.set('mode', kind); params.set('sources', [...new Set(ids)].join(','));
-  if (snapshot.mode === 'github') { params.set('repo', snapshot.repository.fullName); params.set('context', snapshot.contextSha); }
+  if (snapshot.mode !== 'demo') { params.set('repo', snapshot.repository.fullName); params.set('context', snapshot.contextSha); }
   else { params.delete('repo'); params.delete('context'); }
   if (fileId) params.set('file', fileId); else params.delete('file');
   if (camera) params.set('camera', [camera.x, camera.y, camera.zoom].map(value => Number(value.toFixed(5))).join(','));
