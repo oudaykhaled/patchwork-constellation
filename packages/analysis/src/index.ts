@@ -76,3 +76,8 @@ export async function analyzeRepository(input: AnalyzeInput, options: AnalysisOp
 }
 
 export { loadSourceChanges } from './footprints';
+export { analyzeLocalRepository, listLocalRepositorySources, loadLocalSourceChanges, pinLocalAnalysisInput, resolveLocalCommit, runLocalGit, LocalSnapshotReader, LocalGitError, LOCAL_GIT_SUBCOMMANDS, LOCAL_REF_PATTERN } from './local-git';
+export { currentLocalGitRegistry, loadLocalGitConfig, loadLocalGitRegistry, localGitConfigPath, localGitOnly, normalizeFootprints, publicLocalConfig, LocalConfigError, LOCAL_LIMIT_CEILINGS, LOCAL_LIMIT_DEFAULTS } from './local-git-config';
+export type { LocalGitRegistry, LocalRepository, LocalLimits, LocalFootprints, FootprintRecord, PublicLocalConfig } from './local-git-config';
+export { githubSnapshotReader, pathPattern } from './static-graph';
+export type { SnapshotReader, PathFilter } from './static-graph';

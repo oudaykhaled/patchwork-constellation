@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { CoverageStatusSchema, type ChangeSource, type Coverage, type GraphSnapshot, type ImportEdge, type SourceImportFileCoverage } from '@patchwork/contracts';
 import { GitHubClient, parseRepository, type GitHubOptions } from '@patchwork/github';
-import { buildStaticGraph } from './static-graph';
+import { buildStaticGraph, type PathFilter, type SnapshotReader } from './static-graph';
 
+/** Local-mode inputs; GitHub mode leaves them unset and keeps its own client and limits. */
+export interface SourceHeadReaderOptions { reader?: SnapshotReader; maxFilesCeiling?: number; maxSourceBytes?: number; pathFilter?: PathFilter; }
 export interface SourceDependencyResult {
   schemaVersion: '1'; sourceId: string; headSha: string; contextSha: string;
   edges: ImportEdge[]; coverage: Coverage;
@@ -13,9 +15,9 @@ export interface SourceDependencyResult {
  * imports are parsed. Stable file IDs come from confirmed source footprints; unchanged
  * context targets are reused only when the blob hash is identical at the source head.
  */
-export async function analyzeSourceDependencies(snapshot: GraphSnapshot, source: ChangeSource, options: GitHubOptions & { maxFiles?: number; maxSourceFiles?: number } = {}): Promise<SourceDependencyResult> {
+export async function analyzeSourceDependencies(snapshot: GraphSnapshot, source: ChangeSource, options: GitHubOptions & SourceHeadReaderOptions & { maxFiles?: number; maxSourceFiles?: number } = {}): Promise<SourceDependencyResult> {
   if (!source.loaded || !source.headSha || !/^[a-f0-9]{40,64}$/i.test(source.headSha)) throw new Error('Source dependencies require a loaded footprint and immutable head SHA.');
-  const graph = await buildStaticGraph(new GitHubClient(options), parseRepository(snapshot.repository.fullName), source.headSha, { maxFiles: options.maxFiles, maxSourceFiles: options.maxSourceFiles ?? 40, maxManifests: 20, signal: options.signal, parsePaths: new Set(source.files.filter(file => file.status !== 'removed' && file.status !== 'deleted').map(file => file.path)) });
+  const graph = await buildStaticGraph(options.reader ?? new GitHubClient(options), parseRepository(snapshot.repository.fullName), source.headSha, { maxFiles: options.maxFiles, maxFilesCeiling: options.maxFilesCeiling, maxSourceBytes: options.maxSourceBytes, pathFilter: options.pathFilter, maxSourceFiles: options.maxSourceFiles ?? 40, maxManifests: 20, signal: options.signal, parsePaths: new Set(source.files.filter(file => file.status !== 'removed' && file.status !== 'deleted').map(file => file.path)) });
   const graphNodeById = new Map(graph.nodes.map(node => [node.id, node]));
   const resultNodes = new Map(snapshot.nodes.map(node => [node.id, node]));
   const changedIds = new Map(source.files.map(file => [file.path, file.fileId]));
@@ -53,7 +55,7 @@ export async function analyzeSourceDependencies(snapshot: GraphSnapshot, source:
 }
 
 /** Bounded optional enrichment; a failed layer never discards an exact footprint. */
-export async function enrichSelectedSourceDependencies(snapshot: GraphSnapshot, kind: 'pr' | 'commit', ids: string[], options: GitHubOptions & { maxFiles?: number; maxSourceFiles?: number; maxSourceHeads?: number } = {}): Promise<GraphSnapshot> {
+export async function enrichSelectedSourceDependencies(snapshot: GraphSnapshot, kind: 'pr' | 'commit', ids: string[], options: GitHubOptions & SourceHeadReaderOptions & { maxFiles?: number; maxSourceFiles?: number; maxSourceHeads?: number } = {}): Promise<GraphSnapshot> {
   const selected = snapshot.sources.filter(source => source.kind === kind && ids.includes(source.id) && source.loaded);
   const limit = Math.min(Math.max(options.maxSourceHeads ?? 3, 0), 20);
   const perHeadBudget = Math.max(0, Math.floor((options.maxSourceFiles ?? 120) / Math.max(1, Math.min(selected.length, limit))));
