@@ -6,7 +6,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { z } from 'zod';
 import { validateGraphSnapshot, type GraphSnapshot } from '@patchwork/contracts';
 import { demoSnapshot } from '@patchwork/fixtures';
-import { listRepositorySources } from '@patchwork/analysis';
+import { listLocalRepositorySources, listRepositorySources, loadLocalGitRegistry, pinLocalAnalysisInput, publicLocalConfig, LocalConfigError, type LocalGitRegistry } from '@patchwork/analysis';
 import { runAnalysisInWorker, runSourceAnalysisInWorker } from '../worker/src/index';
 import { GroupingService, ownerGroupingStoragePath } from '@patchwork/ai';
 import { parseRepository, invalidateGitHubRepositoryCache, purgeGitHubRepositoryCache } from '@patchwork/github';
@@ -47,9 +47,15 @@ const analyzeRequest = z.object({ repository: z.string().trim().min(3).max(250),
 const idRequest = z.object({ snapshotId: z.string().max(500) });
 const revisionRequest = idRequest.extend({ expectedRevisionId: z.string().min(1).max(500) });
 
-export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput>; auth?: GitHubAppAuth | null; grouping?: GroupingService; webhooks?: WebhookRefreshService; webhookInbox?: WebhookInbox } = {}) {
+export async function createApplicationServer(options: { production?: boolean; store?: SnapshotStore; runAnalysis?: typeof runAnalysisInWorker; runSources?: typeof runSourceAnalysisInWorker; resolveAnalysisInput?: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput>; auth?: GitHubAppAuth | null; grouping?: GroupingService; webhooks?: WebhookRefreshService; webhookInbox?: WebhookInbox; localRegistry?: LocalGitRegistry | null } = {}) {
   if (environmentLoadFailure) throw new ConfigurationError(['The .env file could not be read. Check its format and file permissions.']);
   const { apiRequestsPerMinute, databaseAutoMigrate } = validateEnvironment();
+  // Server-side registry of local mirrors. Requests may name a registered id, never a path.
+  let localRegistry: LocalGitRegistry | undefined;
+  try { localRegistry = options.localRegistry === undefined ? await loadLocalGitRegistry() : options.localRegistry ?? undefined; }
+  catch (error) { throw error instanceof LocalConfigError ? new ConfigurationError(error.problems) : error; }
+  if (localRegistry && process.env.AI_ENABLED === 'true') throw new ConfigurationError(['AI grouping must stay disabled (AI_ENABLED=false) while local repositories are configured.']);
+  const localOnlyError = () => Object.assign(new Error('This server only analyzes its registered local repositories.'), { status: 400, code: 'LOCAL_ONLY' });
   const requestScope = new AsyncLocalStorage<{ ownerId: string; epochs: Map<string, number> }>();
   const ownerId = () => requestScope.getStore()?.ownerId ?? 'local-public';
   const snapshotKey = (id: string) => `${ownerId()}:${id}`;
@@ -75,8 +81,9 @@ export async function createApplicationServer(options: { production?: boolean; s
   const useProduction = options.production ?? production;
   const authConfig = options.auth === undefined ? githubAuthConfig() : undefined;
   const auth = options.auth === undefined ? (authConfig ? new GitHubAppAuth(authConfig) : undefined) : options.auth ?? undefined;
+  if (localRegistry && auth) throw new ConfigurationError(['Local repositories cannot be combined with GitHub App sign-in. Unset the GitHub App settings or LOCAL_REPOS.']);
   if (process.env.GITHUB_WEBHOOK_SECRET && !auth && !options.webhooks) throw new ConfigurationError(['GITHUB_WEBHOOK_SECRET requires GitHub App configuration.']);
-  const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100, autoMigrate: databaseAutoMigrate });
+  const store = options.store ?? await createStore({ maxSnapshots: MAX_SNAPSHOTS, maxJobs: 100, autoMigrate: databaseAutoMigrate, ...(localRegistry ? { maxLocalSnapshotBytes: localRegistry.limits.maxSnapshotBytes } : {}) });
   const analyze = options.runAnalysis ?? runAnalysisInWorker;
   const loadSources = options.runSources ?? runSourceAnalysisInWorker;
   const admission = new WorkerAdmission(2);
@@ -148,7 +155,15 @@ export async function createApplicationServer(options: { production?: boolean; s
     auth ? scope => auth.credentialsForOwner(scope.ownerId, scope.repository) : undefined,
     { onGitHub: (scope, event) => metricsForOwner(scope.ownerId).observeGitHub(event), onAnalysis: (scope, event) => metricsForOwner(scope.ownerId).recordAnalysis(event.durationMs, event.failed) });
   const workerReady = () => { if (!workerHealth || Date.now() - workerHealth.checkedAt > 10_000) workerHealth = { checkedAt: Date.now(), result: checkWorkerHealth() }; return workerHealth.result; };
-  const resolveAnalysisInput: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput> = options.resolveAnalysisInput ?? (options.runAnalysis ? async (input: Parameters<typeof runAnalysisInWorker>[0]) => input : pinAnalysisInput);
+  const resolveRemoteInput: (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]) => Promise<PinnedAnalysisInput> = options.resolveAnalysisInput ?? (options.runAnalysis ? async (input: Parameters<typeof runAnalysisInWorker>[0]) => input : pinAnalysisInput);
+  // Registered local ids are pinned from the mirror and never reach GitHub. In local-only
+  // mode every other repository is rejected before any request is made.
+  const resolveAnalysisInput = async (input: Parameters<typeof runAnalysisInWorker>[0], credentials?: Parameters<typeof pinAnalysisInput>[1]): Promise<PinnedAnalysisInput> => {
+    const local = localRegistry?.get(input.repository);
+    if (local) return pinLocalAnalysisInput(input, local, AbortSignal.timeout(30_000));
+    if (localRegistry?.only) throw localOnlyError();
+    return resolveRemoteInput(input, credentials);
+  };
   if (!auth) analysisJobs.startRecovery();
   async function mutateGrouping<T extends { snapshot: GraphSnapshot }>(snapshot: GraphSnapshot, operation: () => Promise<T> | T) {
     const scope = scopeFor(snapshot.repository.fullName), epoch = expectedEpoch(scope);
@@ -281,7 +296,7 @@ export async function createApplicationServer(options: { production?: boolean; s
           try { return json(res, 200, await workerReady()); }
           catch { return json(res, 503, { status: 'unavailable', code: 'WORKER_UNAVAILABLE', error: 'The analysis worker could not start. Restart the server and check the Node.js installation.' }); }
         }
-        if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: auth ? 'github-app' : 'local-public', github: { publicRepositories: true, privateRepositories: Boolean(auth), configuredToken: Boolean(process.env.GITHUB_TOKEN), appConfigured: Boolean(auth), loginUrl: auth ? '/api/auth/login' : null }, ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: store.kind === 'postgres' } });
+        if (req.method === 'GET' && url.pathname === '/api/config') return json(res, 200, { mode: auth ? 'github-app' : 'local-public', github: { publicRepositories: !localRegistry?.only, privateRepositories: Boolean(auth), configuredToken: Boolean(process.env.GITHUB_TOKEN), appConfigured: Boolean(auth), loginUrl: auth ? '/api/auth/login' : null }, local: publicLocalConfig(localRegistry), ai: grouping.capabilities(), storage: store.kind, deployment: 'local', recovery: { snapshots: store.kind === 'postgres', jobs: store.kind === 'postgres', automaticJobResume: store.kind === 'postgres' } });
         if (req.method === 'GET' && url.pathname === '/api/demo') return json(res, 200, await saveSnapshot(grouping.view(structuredClone(demoSnapshot), { tenantId: ownerId() }).snapshot));
         if (req.method === 'GET' && url.pathname.startsWith('/api/snapshots/')) return json(res, 200, await lookupSnapshot(decodeURIComponent(url.pathname.slice(15)), url.searchParams.get('repository')));
         const graphMatch = url.pathname.match(/^\/api\/graphs\/([^/]+)(\/chunks)?$/);
@@ -323,7 +338,13 @@ export async function createApplicationServer(options: { production?: boolean; s
             const snapshot = await lookupSnapshot(input.snapshotId, url.searchParams.get('repository'));
             if (snapshot.mode === 'demo') return { sources: snapshot.sources.filter(source => source.kind === input.kind), nextPage: null, snapshot };
             const metrics = metricsForOwner(ownerId());
-            const page = await listRepositorySources(snapshot.repository.fullName, input.kind, input.page, snapshot.contextSha, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal: AbortSignal.timeout(30_000), onTelemetry: event => metrics.observeGitHub(event) });
+            let page: Awaited<ReturnType<typeof listRepositorySources>>;
+            if (snapshot.mode === 'local-git') {
+              const local = localRegistry?.get(snapshot.repository.fullName);
+              if (!local) throw Object.assign(new Error('This local repository is not registered on this server.'), { status: 404, code: 'LOCAL_UNAVAILABLE' });
+              page = await listLocalRepositorySources(local, input.kind, input.page, snapshot.contextSha, { signal: AbortSignal.timeout(30_000) });
+            } else if (localRegistry?.only) throw localOnlyError();
+            else page = await listRepositorySources(snapshot.repository.fullName, input.kind, input.page, snapshot.contextSha, { token: repositoryToken, allowPrivate: Boolean(auth && repositoryToken), signal: AbortSignal.timeout(30_000), onTelemetry: event => metrics.observeGitHub(event) });
             const byId = new Map(snapshot.sources.map(source => [source.id, source]));
             for (const source of page.sources) if (!byId.has(source.id)) byId.set(source.id, source);
             const updated = await saveSnapshot({ ...snapshot, sources: [...byId.values()], sourcePagination: { ...(snapshot.sourcePagination as Record<string, number | null> | undefined), [input.kind]: page.nextPage } });
@@ -336,6 +357,7 @@ export async function createApplicationServer(options: { production?: boolean; s
           const snapshot = getSnapshot(input.snapshotId); const ids = [...new Set(input.ids)];
           if (ids.some(id => !snapshot.sources.some(source => source.id === id && source.kind === input.kind))) throw Object.assign(new Error('Unknown change source.'), { status: 400 });
           if (snapshot.mode === 'demo') return json(res, 200, await serialSnapshot(input.snapshotId, () => saveSnapshot(grouping.view(getSnapshot(input.snapshotId), { tenantId: ownerId() }).snapshot)));
+          if (snapshot.mode === 'github' && localRegistry?.only) throw localOnlyError();
           // A newer selection cancels its predecessor rather than joining a work queue.
           const sourceKey = snapshotKey(input.snapshotId);
           sourceRequests.get(sourceKey)?.controller.abort();

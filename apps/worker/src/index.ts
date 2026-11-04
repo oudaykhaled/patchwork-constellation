@@ -1,16 +1,41 @@
 import { Worker } from 'node:worker_threads';
 import { validateGraphSnapshot, type GraphSnapshot } from '@patchwork/contracts';
-import type { AnalysisProgress, AnalyzeInput } from '@patchwork/analysis';
+import { currentLocalGitRegistry, loadLocalGitRegistry, localGitConfigPath, type AnalysisProgress, type AnalyzeInput, type LocalGitRegistry, type LocalRepository } from '@patchwork/analysis';
 import { receiveWorkerTelemetry } from './telemetry';
 import { serializableWorkerOptions, type WorkerOptions } from './options';
 
 type Task = { kind: 'repository'; input: AnalyzeInput } | { kind: 'sources'; snapshot: GraphSnapshot; sourceKind: 'pr' | 'commit'; ids: string[] };
+export const DEFAULT_WORKER_HEAP_MB = 256;
+/** What a worker thread needs from the server's local registry for one task. */
+export interface LocalTaskContext { only: boolean; maxSnapshotBytes: number; repository?: LocalRepository; }
+/**
+ * Resolves the task's local repository in this (server) thread from the registry the
+ * server loaded at startup, so a worker never re-reads the configuration, re-parses
+ * footprint files or re-checks mirrors, and always agrees with the server. Only a
+ * registered entry is handed over; task input never supplies a path.
+ */
+function localContextFor(task: Task, registry: LocalGitRegistry | undefined): LocalTaskContext | undefined {
+  if (!registry) return undefined;
+  const name = task.kind === 'repository' ? task.input.repository : task.snapshot.mode === 'local-git' ? task.snapshot.repository.fullName : undefined;
+  const repository = name ? registry.get(name) : undefined;
+  return { only: registry.only, maxSnapshotBytes: registry.limits.maxSnapshotBytes, ...(repository ? { repository } : {}) };
+}
+/** Local repositories may use the configured heap; every other task keeps the 256 MB default. */
+const heapFor = (local: LocalTaskContext | undefined) => local?.repository ? local.repository.limits.workerHeapMb : DEFAULT_WORKER_HEAP_MB;
 function runTask(task: Task, options: WorkerOptions = {}): Promise<GraphSnapshot> {
   options.signal?.throwIfAborted();
-  const { signal, onProgress, onTelemetry } = options;
   const serializable = serializableWorkerOptions(options, task.kind === 'repository' ? task.input.repository : undefined);
+  // The server loads the registry at startup, so this is normally synchronous. A caller
+  // that starts a task before any registry load waits for the one process-wide load.
+  const registry = currentLocalGitRegistry();
+  if (registry || !localGitConfigPath()) return startWorker(task, serializable, options, localContextFor(task, registry));
+  return loadLocalGitRegistry().then(loaded => { options.signal?.throwIfAborted(); return startWorker(task, serializable, options, localContextFor(task, loaded)); });
+}
+function startWorker(task: Task, serializable: ReturnType<typeof serializableWorkerOptions>, options: WorkerOptions, local: LocalTaskContext | undefined): Promise<GraphSnapshot> {
+  const { signal, onProgress, onTelemetry } = options;
+  const heap = heapFor(local);
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./thread.ts', import.meta.url), { workerData: { task, options: serializable }, execArgv: ['--import', 'tsx'], resourceLimits: { maxOldGenerationSizeMb: 256, stackSizeMb: 4 } });
+    const worker = new Worker(new URL('./thread.ts', import.meta.url), { workerData: { task, options: serializable, local }, execArgv: ['--import', 'tsx'], resourceLimits: { maxOldGenerationSizeMb: heap, stackSizeMb: 4 } });
     let finished = false;
     let telemetryCount = 0;
     const cleanup = async () => { clearTimeout(timeout); signal?.removeEventListener('abort', cancel); await worker.terminate(); };

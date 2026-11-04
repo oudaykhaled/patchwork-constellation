@@ -26,4 +26,11 @@ describe('server environment', () => {
     }
     throw new Error('Invalid database configuration was accepted.');
   });
+
+  test('validates the local repository switches', () => {
+    expect(() => validateEnvironment({ LOCAL_REPOS: '/abs/registry.json', LOCAL_REPOS_ONLY: 'true' })).not.toThrow();
+    expect(() => validateEnvironment({ LOCAL_REPOS: '/abs/registry.json', LOCAL_REPOS_ONLY: 'false' })).not.toThrow();
+    expect(() => validateEnvironment({ LOCAL_REPOS: 'relative/registry.json' })).toThrow('LOCAL_REPOS must be an absolute path');
+    expect(() => validateEnvironment({ LOCAL_REPOS_ONLY: 'yes' })).toThrow('LOCAL_REPOS_ONLY must be true or false');
+  });
 });

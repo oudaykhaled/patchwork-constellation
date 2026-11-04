@@ -50,6 +50,14 @@ const messages: Readonly<Record<string, string>> = Object.freeze({
   GIT_FALLBACK_UNAVAILABLE: 'Git comparison is unavailable on this host. Partial coverage is retained.',
   GIT_FALLBACK_FAILED: 'The pinned Git comparison failed. Partial coverage is retained.',
   INVALID_RESPONSE: 'The external service returned invalid data. Retry shortly.',
+  LOCAL_ONLY: 'This server only analyzes its registered local repositories. Choose one from the list.',
+  LOCAL_UNAVAILABLE: 'This local repository is not registered on this server. Choose one from the list.',
+  LOCAL_REF: 'That branch or commit is not in the local mirror. Use a ref the mirror contains.',
+  LOCAL_GIT_FAILED: 'The local mirror could not be read at the requested revision.',
+  LOCAL_GIT_LIMIT: 'A local Git read exceeded its time or output budget.',
+  LOCAL_GIT_DENIED: 'That local Git operation is not permitted.',
+  LOCAL_SNAPSHOT_LIMIT: 'The local snapshot exceeds the configured size limit. Narrow the configured scope or lower maxFiles.',
+  SNAPSHOT_LIMIT: 'The snapshot exceeds the configured storage limit. Select fewer or smaller changes.',
 });
 
 export function publicErrorCode(error: unknown): string {

@@ -1,3 +1,5 @@
+import { isAbsolute } from 'node:path';
+
 /** Validate server settings without ever including their values in diagnostics. */
 export class ConfigurationError extends Error {
   constructor(readonly problems: string[]) {
@@ -14,6 +16,8 @@ export function validateEnvironment(env: NodeJS.ProcessEnv = process.env) {
   if (!Number.isInteger(apiRequestsPerMinute) || apiRequestsPerMinute < 1 || apiRequestsPerMinute > 2400) problems.push('API_REQUESTS_PER_MINUTE must be an integer from 1 to 2400.');
   if (env.AI_ENABLED && !['true', 'false'].includes(env.AI_ENABLED)) problems.push('AI_ENABLED must be true or false.');
   if (env.DATABASE_AUTO_MIGRATE && !['true', 'false'].includes(env.DATABASE_AUTO_MIGRATE)) problems.push('DATABASE_AUTO_MIGRATE must be true or false.');
+  if (env.LOCAL_REPOS && !isAbsolute(env.LOCAL_REPOS)) problems.push('LOCAL_REPOS must be an absolute path to a JSON file.');
+  if (env.LOCAL_REPOS_ONLY && !['true', 'false'].includes(env.LOCAL_REPOS_ONLY)) problems.push('LOCAL_REPOS_ONLY must be true or false.');
   if (env.DATABASE_URL) {
     try {
       const url = new URL(env.DATABASE_URL);
