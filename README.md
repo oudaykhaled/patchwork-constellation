@@ -61,8 +61,33 @@ Copy `.env.example` to `.env` only when configuring optional services. Values st
 | `PORT` | Local HTTP port; defaults to 4310. |
 | `API_REQUESTS_PER_MINUTE` | Bounded local API request quota, 1–2400; defaults to 240. Browser test servers explicitly use 2400 for independent journeys. |
 | `OPS_METRICS_ENABLED` | Defaults to false. Enables source-free operational aggregates; App mode requires a valid session and returns that owner's observations only. |
+| `LOCAL_REPOS` | Absolute path to a local repository registry. See [local Git repositories](#local-git-repositories-offline). |
+| `LOCAL_REPOS_ONLY` | With `LOCAL_REPOS` set, defaults to true: every unregistered repository is rejected with `LOCAL_ONLY` before any GitHub request. |
 
 The graph retains deterministic grouping until both providers and the reviewed evaluation gate are configured. External AI uses bounded metadata, validated IDs, reserved budgets, scoped caches and failure fallback. The current authored evaluation does not establish a navigation improvement; live intelligence remains gated. [Review the exact data policy](docs/AI_DATA_POLICY.md) before enabling external calls. Manual corrections persist separately and support revision conflicts, lineage review and undo.
+
+## Local Git repositories (offline)
+
+`LOCAL_REPOS` points to a JSON registry of bare mirrors (`git clone --mirror`). Registered repositories appear in the repository dialog next to the sample, and an HTTP request can only name a registered id such as `local/example-app`, never a path. The server and worker read mirrors with an allowlist of read-only Git plumbing (`rev-parse`, `for-each-ref`, `ls-tree`, `cat-file`, `log`, `rev-list`, `diff-tree`, `merge-base`), `shell: false`, a scrubbed environment and `protocol.allow=never`. Local mode makes no network request, rejects `AI_ENABLED=true` and GitHub App sign-in, and never builds github.com links.
+
+```json
+{
+  "version": 1,
+  "limits": { "maxFiles": 8000, "workerHeapMb": 768 },
+  "repositories": [
+    { "id": "local/example-app", "label": "Example app", "gitDir": "/abs/mirrors/example-app.git", "defaultRef": "main",
+      "include": ["src/**"], "exclude": ["**/generated/**"], "mapping": "/abs/example-app.constellation.json",
+      "footprints": "/abs/example-app.footprints.json", "footprintRepos": ["example-app"], "limits": { "maxFiles": 5000 } }
+  ]
+}
+```
+
+- The server reads the registry, mappings and footprint files once at startup and hands each worker thread the registered entry it needs; restart the server after editing them.
+- `id` (owner/name form), `label`, `gitDir` and `defaultRef` are required; relative paths resolve against the registry file. Global `limits` default to `{ "maxFiles": 10000, "maxSourceFiles": 500, "maxSourceBytes": 80000, "maxManifests": 50, "maxSnapshotBytes": 67108864, "workerHeapMb": 1024, "maxChangedFiles": 25000, "maxListedSources": 1000 }` (`LOCAL_LIMIT_DEFAULTS`).
+- Limits are bounded (`maxFiles` ≤ 25,000, `maxSourceFiles` ≤ 500, `maxSnapshotBytes` ≤ 64 MiB, `workerHeapMb` ≤ 2,048); per-repository `limits` override the global ones except the snapshot and heap ceilings. `maxSnapshotBytes` and `workerHeapMb` apply to local repositories only; GitHub snapshots keep the 16 MiB store limit and the 256 MB worker heap when `LOCAL_REPOS_ONLY=false`. Scope filters, inventory caps (naming the folders an alphabetical cut removed), unsupported languages and recorded footprints all appear as coverage reasons.
+- `mapping` is an out-of-repository `.constellation.json` (version 1) that replaces in-repository island mapping.
+- `footprints` is a JSON file `{ "schemaVersion": 1, "pulls": [...], "commits": [...], "views": [...] }`. A pull is `{ "number", "title", "state", "updatedAt", "baseSha", "headSha", "origin", "repo", "notes", "files" }` and a commit is `{ "sha", "title", "updatedAt", "origin", "repo", "notes", "files" }`; only `number` or `sha` is required. A file row is `{ "path", "status", "additions", "deletions", "previousPath", "inHead", "note" }`, where `status` is a full name or a Git name-status letter. A view is `{ "id", "title", "description", "sources": [{ "kind": "pr" | "commit", ...a pull or commit }] }`; a view source may also reference a listed pull or commit by its `number` or `sha` alone. With `footprintRepos`, only records whose `repo` equals a listed name, or starts with a name that ends in `*`, are kept, so one file can serve several mirrors. A record becomes an exact Git delta when its commits are in the mirror, a recorded footprint (comparison kind `recorded`, partial coverage naming its origin) when only a file list exists, and an unloaded entry with an explicit reason otherwise. Views become one-click selections in the sources dialog. When rename history from another loaded change links two rows of one footprint to the same file (for example a case-only rename recorded as a removal plus an addition), the rows are shown as one change and the source names each merge as a coverage reason.
+- File identity follows the mirror's history, not the IDs or the order in which changes are selected (together or one at a time). Selected changes load anchored at the context: commits the context contains load newest first, so their renames chain back to the context file; other commits (other branches) load oldest first from where they left the context's history, so an addition maps before later edits; recorded footprints load in ID order. Same-path files outside the context are then matched by `merge-base` of the two heads: on one line of history a path is one file, and an addition on a separate branch is a separate file. Recorded footprints have no history in the mirror, so their same-path matching follows the path rules. GitHub mode is unchanged.
 
 ## Analysis boundaries
 

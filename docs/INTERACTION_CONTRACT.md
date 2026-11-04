@@ -20,13 +20,13 @@ The compact legend remains available at every width. Its `?` disclosure explains
 | Outer overlap ring | Two or more selected sources directly touched the same identity | Inspector lists source membership; overlap alone is not a merge conflict. |
 | Selected file | A distinct selection cue plus file details and path | Selection must remain recognizable without color. Do not rely solely on green or a thicker overlap ring. |
 | Keyboard focus | A visible outline around the focused DOM control/canvas | Focus is independent of selection; Tab moves focus without selecting a file. File exploration remains available in Files. |
-| Organic boundary + label | A collection of file circles at the selected grouping level | Boundary/label is not another file circle and is excluded from file totals. |
+| Rounded rectangle, sized by file count, name on hover/focus | A collection of file circles at the selected grouping level. A green border and a count badge mark islands the selection changed; unchanged islands are a quiet outline. | The rectangle and its badge are not file circles and are excluded from file totals. The name appears in one tooltip on pointer hover (after a short rest) or keyboard focus, in the breadcrumb, search and Files; an optional "Always, when they fit" setting draws it inside its own rectangle only. |
 | Curved connection | A code-derived relationship between canonical file identities | Direction is importer → imported file. Focused arrows and inspector text expose direction. |
 | Connection relation | `import`, `reexport`, `type-import` or `dynamic-import` | Inspector names the relation and available path/line/specifier/resolver/ref evidence. Do not collapse these into inferred runtime impact. |
 | AI grouping | A separately labeled proposed or accepted semantic membership revision | It cannot create observed dependency edges or change source footprint counts. No AI-inferred connection lines are implemented; future inferred relations require a separate toggle and different line pattern with explicit provenance. |
 | Coverage | Snapshot analysis status and reasons/counts | Missing or unresolved edges never establish absence of a dependency. |
 
-Hover, neighbor emphasis and selection must not masquerade as persistent overlap. The integrated renderer draws corner brackets for the selected file, a dashed ring for hover, and separate overlap rings. Canvas instructions name the selection cue, while Files and details expose status and source membership in text. Keyboard focus remains the outline of the active DOM control and is independent of the inspected file.
+Hover, neighbor emphasis and selection must not masquerade as persistent overlap. The integrated renderer draws corner brackets for the selected file, a solid lighter ring (`#8bc7a5`) for a hovered file, and separate overlap rings; a hovered island gets a solid outline ring and a focused island a brighter accent ring, both drawn outside the cached scene. Canvas instructions name the selection cue, while Files and details expose status and source membership in text. Keyboard focus remains the outline of the active DOM control and is independent of the inspected file.
 
 ## File lifecycle and incomplete analysis
 
@@ -56,8 +56,8 @@ These states are testable views of one continuous map rather than seven static i
 
 | Reference state | Entry and expected behavior | Exit and continuity |
 | --- | --- | --- |
-| Overview | Open the sample: PRs #248, #251 and #256 selected; 68 unique touched files and 14 overlaps. Show all six labeled islands and the compact legend. | No timeline or persistent sidebar. Pan/zoom begins from settled coordinates. |
-| Zoomed-out islands | Zoom out continuously or use Fit. Preserve individual file circles; reduce colliding file labels while retaining useful island names/counts. | Zoom about pointer/pinch center; source counts remain exact. Detail suppression must be disclosed. |
+| Overview | Open the sample: PRs #248, #251 and #256 selected; 68 unique touched files and 14 overlaps. Show all six islands (names on hover, focus or in Always mode) and the compact legend. | No timeline or persistent sidebar. Pan/zoom begins from settled coordinates. |
+| Zoomed-out islands | Zoom out continuously or use Fit. Preserve individual file circles; reduce colliding file labels while retaining island counts via the change badge and names via the tooltip. | Zoom about pointer/pinch center; source counts remain exact. Detail suppression must be disclosed. |
 | Authentication zoom | Activate the Authentication island label. Fit its file region, display a breadcrumb and keep surrounding context navigable. | All islands/Fit exits focus; source selection and inspected identity remain unless deliberately cleared. |
 | File/neighbor focus | Search/select `src/auth/session/refresh.ts`. Show its details, source membership, typed inbound/outbound neighbors and evidence; emphasize the selected file and actual neighbors. | Close/Escape dismisses details. Neighbor activation inspects that file without changing selected sources. Synthetic demo diff is explicitly unavailable. |
 | Two-PR selection | Remove #256 from the overview. Expect 57 touched files and two overlaps. | Existing coordinates and camera remain unchanged. Re-adding restores 68/14 without simulation or ref change. |

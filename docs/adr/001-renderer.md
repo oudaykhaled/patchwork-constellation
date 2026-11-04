@@ -8,7 +8,9 @@ Keep the browser's native Canvas 2D API in `ConstellationGraph` for the initial 
 
 Do not replace the renderer on the basis of a generic performance claim. An isolated, pinned **Sigma 4.0.4 / Graphology 0.26.0** implementation now proves that this alternative can consume the same layout, render both target fixtures, pick individual circles, focus directed imports, suppress labels, show overlap/selection rings and pan/zoom with synchronized islands. It remains an opt-in developer tool, with no production bundle or root installation dependency.
 
-Canvas already provides the approved organic island treatment, hollow context circles, collision-bounded labels and semantic application controls. The bounded measurements below show both approaches can reach the required target on this machine. They do not establish a speed ranking: the Canvas sample used a production build and an earlier Chrome patch; the candidate sample uses Vite development and includes its deliberately simple overlay and full-list implementation. Migrating now adds WebGL/program lifecycle and coordinate synchronization cost without an established user benefit.
+Canvas already provides the approved organic island treatment, hollow context circles, collision-bounded labels and semantic application controls.
+
+Later change: the organic island treatment was replaced by rounded rectangles sized by file count (dense first-fit packing in `packages/graph-core`), with no island names on the canvas by default. Names appear in one hover/keyboard-focus tooltip; changed islands carry a green border and a count badge. The renderer stays Canvas 2D; island hover and focus rings are DOM so they never rebuild the cached scene. The bounded measurements below show both approaches can reach the required target on this machine. They do not establish a speed ranking: the Canvas sample used a production build and an earlier Chrome patch; the candidate sample uses Vite development and includes its deliberately simple overlay and full-list implementation. Migrating now adds WebGL/program lifecycle and coordinate synchronization cost without an established user benefit.
 
 ## Measured candidate
 
