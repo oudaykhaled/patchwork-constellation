@@ -110,7 +110,9 @@ test('input interrupts camera animation and resize leaves navigation reachable',
   await openGraph(page);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   const before = await camera(page);
-  await page.getByRole('button', { name: /^Explore Authentication island/ }).click();
+  // Island buttons are the keyboard surface; the canvas owns pointer input.
+  await page.getByRole('button', { name: /^Explore Authentication island/ }).focus();
+  await page.keyboard.press('Enter');
   await expect.poll(async () => (await camera(page)).zoom).toBeGreaterThan(before.zoom);
   await page.getByRole('button', { name: 'Pan right', exact: true }).click();
   const interrupted = await camera(page);

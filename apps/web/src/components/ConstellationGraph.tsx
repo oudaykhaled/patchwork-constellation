@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { islandBounds, neighborsOf, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
+import { createPortal } from 'react-dom';
+import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import { ISLAND_GEOMETRY, islandBounds, layoutPitch, neighborsOf, screenToWorld, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
 import type { Bounds, Camera, GraphData, GraphLayout, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
 import { boundsIntersect, connectionInViewport, exceedsGraphEnvelope, scopeSummary, viewportBounds } from '../../../../packages/graph-core/src/render-policy';
 import { sceneTile, sceneTranslation, type SceneTile } from '../../../../packages/graph-core/src/scene-cache';
 import { useSettledLayout } from './useSettledLayout';
-import { fitVisibleCamera, isValidCamera, MAX_RELATIVE_ZOOM, MIN_RELATIVE_ZOOM, minimapPoint, navigationInsets, pinchCamera } from './camera-navigation';
+import { fitVisibleCamera, isRestorableCamera, landingWindow, MAX_RELATIVE_ZOOM, MIN_RELATIVE_ZOOM, minimapFrame, minimapPoint, navigationInsets, pinchCamera, sameCamera, type ViewportInsets } from './camera-navigation';
 import './constellation-graph.css';
+
+/** "hover": names only in the tooltip, breadcrumb, search and Files. "always": also drawn inside rectangles that fit them. */
+export type IslandNames = 'hover' | 'always';
 
 export interface ConstellationGraphProps {
   snapshot: GraphData & { id?: string; repository?: { fullName: string }; mode?: string };
@@ -25,31 +29,54 @@ export interface ConstellationGraphProps {
   layoutSeed?: number;
   layoutPins?: Record<string, Point>;
   onLayoutReady?: (layout: GraphLayout) => void;
+  islandNames?: IslandNames;
+  sourceKind?: 'pr' | 'commit';
+  /** The map key, rendered as the left cluster of the bottom bar. It receives the "files in view" detail output
+   * and, for repositories above the graph envelope, the current Explore scope sentence for its explanation. */
+  legend?: (detail: ReactNode, scopeNote?: string) => ReactNode;
 }
 
 type Size = { width: number; height: number };
+type IslandStats = { changed: number; overlap: number };
+type IslandTip = { id: string; point: Point; via: 'pointer' | 'keyboard' };
 const EMPTY_SIZE: Size = { width: 1600, height: 936 };
 const DEFAULT_CAMERA: Camera = { x: 800, y: 468, zoom: 1 };
+const NO_STATS: IslandStats = { changed: 0, overlap: 0 };
+/** Drawing size of the minimap SVG (constellation-graph.css: 138 × 94 box, 8 px padding, 1 px border). */
+const MINIMAP_PIXELS = { width: 120, height: 76 };
+/** Below this on-screen lattice pitch, single files are too dense to aim at: the island under the pointer is the target. */
+const FILE_TARGET_MIN_PITCH = 10;
+const ISLAND_TIP_DELAY_MS = 120, ISLAND_TIP_WARM_MS = 300, HOVER_BRIDGE_MS = 220;
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const basename = (path: string) => path.split('/').pop() ?? path;
-const alpha = (color: string, opacity: string) => /^#[0-9a-f]{6}$/i.test(color) ? color + opacity : '#66bfa0' + opacity;
+const alpha = (color: string, opacity: string) => /^#[0-9a-f]{6}$/i.test(color) ? color + opacity : '#6a9ec7' + opacity;
+const islandRect = (island: Island): Bounds => ({ x: island.x - island.rx, y: island.y - island.ry, width: island.rx * 2, height: island.ry * 2 });
+/** Corner radius in screen px: 14% of the short side, between 2 and 10. */
+const cornerRadius = (rect: Bounds, zoom: number) => clamp(.14 * Math.min(rect.width, rect.height) * zoom, 2, 10);
+const contains = (outer: Bounds, inner: Bounds) => inner.x >= outer.x && inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
 
-/** A bounded organic island outline. Every contained dot is still an individual file. */
-function islandPath(context: CanvasRenderingContext2D, island: Island) {
-  const { x, y, rx, ry } = island;
+/** A rounded rectangle path. Never `arc`: file circles are the only arcs on this canvas. */
+function roundedRect(context: CanvasRenderingContext2D, rect: Bounds, radius: number) {
+  const { x, y, width, height } = rect, r = Math.min(radius, width / 2, height / 2);
   context.beginPath();
-  context.moveTo(x - rx * .97, y - ry * .06);
-  context.bezierCurveTo(x - rx * 1.2, y - ry * .91, x - rx * .57, y - ry * 1.12, x + rx * .05, y - ry);
-  context.bezierCurveTo(x + rx * .72, y - ry * 1.03, x + rx * 1.08, y - ry * .65, x + rx * .98, y - ry * .02);
-  context.bezierCurveTo(x + rx * 1.13, y + ry * .64, x + rx * .6, y + ry * 1.02, x + rx * .06, y + ry * .97);
-  context.bezierCurveTo(x - rx * .5, y + ry * 1.12, x - rx * 1.08, y + ry * .73, x - rx * .97, y - ry * .06);
-  context.closePath();
+  if (typeof context.roundRect === 'function') { context.roundRect(x, y, width, height, r); return; }
+  context.moveTo(x + r, y);
+  context.arcTo(x + width, y, x + width, y + height, r); context.arcTo(x + width, y + height, x, y + height, r);
+  context.arcTo(x, y + height, x, y, r); context.arcTo(x, y, x + width, y, r); context.closePath();
+}
+function ellipsize(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  if (context.measureText(text).width <= maxWidth) return text;
+  let low = 0, high = text.length;
+  while (low < high) { const mid = Math.ceil((low + high) / 2); if (context.measureText(`${text.slice(0, mid)}…`).width <= maxWidth) low = mid; else high = mid - 1; }
+  return low ? `${text.slice(0, low)}…` : '';
 }
 
-export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, onOpenFiles, initialCamera, onCameraChange, overviewRequest = 0, className = '', layoutSeed = 0, layoutPins, onLayoutReady }: ConstellationGraphProps) {
+export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId, onSelectFile, focusGroupId, onFocusGroup, searchQuery = '', showImports = true, onOpenFiles, initialCamera, onCameraChange, overviewRequest = 0, className = '', layoutSeed = 0, layoutPins, onLayoutReady, islandNames = 'hover', sourceKind, legend }: ConstellationGraphProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const islandControlsRef = useRef<HTMLDivElement>(null);
   const cameraRef = useRef<Camera>(DEFAULT_CAMERA);
   const sizeRef = useRef(EMPTY_SIZE);
   const animationRef = useRef<number | null>(null);
@@ -73,10 +100,40 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const tooltipHovered = useRef(false);
   const dismissedHoverId = useRef<string | null>(null);
   const hoverLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Island hover never enters the scene key: the ring and tooltip are DOM.
+  const [hoveredIslandId, setHoveredIslandId] = useState<string | null>(null);
+  const hoveredIslandRef = useRef<string | null>(null);
+  const [islandTip, setIslandTipState] = useState<IslandTip | null>(null);
+  const islandTipRef = useRef<IslandTip | null>(null);
+  const islandTipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const islandLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const islandTipClosedAt = useRef(-Infinity);
+  const dismissedIslandId = useRef<string | null>(null);
+  const [keyboardIslandId, setKeyboardIslandId] = useState<string | null>(null);
+  const [rovingId, setRovingId] = useState<string | null>(null);
+  const [minimapOpen, setMinimapOpen] = useState(false);
+  // The bottom bar is rendered into the workspace (the host's parent) so its stacking order
+  // competes with the other workspace chrome; the host is an isolated stacking context.
+  const [barHost, setBarHost] = useState<HTMLElement | null>(null);
+  const setIslandTip = useCallback((tip: IslandTip | null) => {
+    if (!tip && islandTipRef.current) islandTipClosedAt.current = performance.now();
+    islandTipRef.current = tip; setIslandTipState(tip);
+  }, []);
   const cancelHoverLeave = useCallback(() => {
     if (hoverLeaveTimer.current !== null) clearTimeout(hoverLeaveTimer.current);
     hoverLeaveTimer.current = null;
   }, []);
+  const cancelIslandTimers = useCallback(() => {
+    if (islandTipTimer.current !== null) clearTimeout(islandTipTimer.current);
+    if (islandLeaveTimer.current !== null) clearTimeout(islandLeaveTimer.current);
+    islandTipTimer.current = null; islandLeaveTimer.current = null;
+  }, []);
+  /** Ends pointer hover on islands now (ring and pointer tooltip). A keyboard tooltip stays. */
+  const endIslandHover = useCallback(() => {
+    cancelIslandTimers();
+    hoveredIslandRef.current = null; setHoveredIslandId(null); dismissedIslandId.current = null;
+    if (islandTipRef.current?.via === 'pointer') setIslandTip(null);
+  }, [cancelIslandTimers, setIslandTip]);
   const clearTooltip = useCallback(() => { cancelHoverLeave(); setHoveredId(null); }, [cancelHoverLeave]);
   const leaveHover = useCallback(() => {
     if (hoverLeaveTimer.current !== null || tooltipHovered.current) return;
@@ -85,8 +142,17 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     hoverLeaveTimer.current = setTimeout(() => {
       hoverLeaveTimer.current = null;
       if (!hoverTriggerId.current && !tooltipHovered.current) setHoveredId(null);
-    }, 220);
+    }, HOVER_BRIDGE_MS);
   }, []);
+  const leaveIsland = useCallback(() => {
+    if (islandTipTimer.current !== null) { clearTimeout(islandTipTimer.current); islandTipTimer.current = null; }
+    if (islandLeaveTimer.current !== null || tooltipHovered.current || !hoveredIslandRef.current) return;
+    // The same bridge as files: crossing a gutter to the next island never flickers.
+    islandLeaveTimer.current = setTimeout(() => {
+      islandLeaveTimer.current = null;
+      if (!tooltipHovered.current) endIslandHover();
+    }, HOVER_BRIDGE_MS);
+  }, [endIslandHover]);
   const [dragging, setDragging] = useState(false);
   const [canvasFailed, setCanvasFailed] = useState(false);
   const [canvasAttempt, setCanvasAttempt] = useState(0);
@@ -95,41 +161,67 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const { layout, layoutState, layoutError, resetLayout } = useSettledLayout(snapshot, layoutSeed, layoutPins);
   useEffect(() => { if (layoutState === 'ready') onLayoutReady?.(layout); }, [layout, layoutState, onLayoutReady]);
   const framedRepository = useRef<string | null>(null);
+  const landedCamera = useRef<{ camera: Camera } | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(0);
   const membership = useMemo(() => selectedMembership(snapshot, selectedSourceIds), [snapshot, selectedSourceIds]);
   const neighbors = useMemo(() => neighborsOf(snapshot.edges, selectedFileId), [snapshot.edges, selectedFileId]);
+  // Per-island counts once per membership change, not per render or per frame.
+  const islandStats = useMemo(() => {
+    const stats = new Map<string, IslandStats>();
+    for (const island of layout.islands) {
+      let changed = 0, overlap = 0;
+      for (const node of island.nodes) { const count = membership.get(node.id) ?? 0; if (count) changed++; if (count > 1) overlap++; }
+      stats.set(island.id, { changed, overlap });
+    }
+    return stats;
+  }, [layout.islands, membership]);
+  const largeRepository = exceedsGraphEnvelope(snapshot);
+  const compact = size.width <= 760;
   const search = searchQuery.trim().toLowerCase();
   const selectedPosition = selectedFileId ? layout.nodeById.get(selectedFileId) : undefined;
   const focusedIsland = focusGroupId ? layout.islands.find(island => island.id === focusGroupId) : undefined;
   const hovered = hoveredId ? layout.nodeById.get(hoveredId) : undefined;
+  const islandById = useMemo(() => new Map(layout.islands.map(island => [island.id, island])), [layout.islands]);
   useEffect(() => {
     clearTooltip(); hoverTriggerId.current = null; tooltipHovered.current = false; dismissedHoverId.current = null;
-  }, [layout, scopeGroupId, clearTooltip]);
+    cancelIslandTimers(); hoveredIslandRef.current = null; setHoveredIslandId(null); setIslandTip(null); dismissedIslandId.current = null;
+  }, [layout, scopeGroupId, clearTooltip, cancelIslandTimers, setIslandTip]);
   useEffect(() => {
     const dismiss = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || !hoveredIdRef.current) return;
+      if (event.key !== 'Escape' || (!hoveredIdRef.current && !islandTipRef.current)) return;
       // Hover can coexist with focus in another control. Dismiss it without
       // moving that focus, changing source selection or closing file details.
-      dismissedHoverId.current = hoveredIdRef.current;
-      tooltipHovered.current = false; clearTooltip();
+      if (hoveredIdRef.current) { dismissedHoverId.current = hoveredIdRef.current; tooltipHovered.current = false; clearTooltip(); }
+      if (islandTipRef.current) { dismissedIslandId.current = islandTipRef.current.id; tooltipHovered.current = false; setIslandTip(null); }
       // A native modal makes the underlying graph inert. Its own Escape
       // handling takes priority over hover content behind the backdrop.
       if (document.querySelector('dialog[open]')) return;
       event.preventDefault(); event.stopPropagation();
     };
     window.addEventListener('keydown', dismiss, true);
-    return () => { window.removeEventListener('keydown', dismiss, true); cancelHoverLeave(); };
-  }, [clearTooltip, cancelHoverLeave]);
+    return () => { window.removeEventListener('keydown', dismiss, true); cancelHoverLeave(); cancelIslandTimers(); };
+  }, [clearTooltip, cancelHoverLeave, cancelIslandTimers, setIslandTip]);
   const scope = useMemo(() => scopeSummary(snapshot, scopeGroupId), [snapshot.nodes, snapshot.edges, scopeGroupId]);
-  const insets = useMemo(() => navigationInsets(size.width, inspectorWidth), [size.width, inspectorWidth]);
-  const fit = useMemo(() => fitVisibleCamera(layout.bounds, size.width, size.height, insets), [layout.bounds, size, insets]);
-  const fitBounds = useCallback((bounds: Bounds) => {
+  /** Fixed chrome insets, raised to the measured top strip and bottom bar when they wrap. */
+  const measureInsets = useCallback((width: number): ViewportInsets => {
     const host = hostRef.current;
     const inspector = host?.parentElement?.querySelector('[data-testid="file-inspector"]');
-    return fitVisibleCamera(bounds, sizeRef.current.width, sizeRef.current.height, navigationInsets(sizeRef.current.width, inspector?.getBoundingClientRect().width ?? 0));
+    const base = navigationInsets(width, inspector?.getBoundingClientRect().width ?? 0);
+    if (!host) return base;
+    const hostBox = host.getBoundingClientRect();
+    const strip = host.parentElement?.querySelector('.graph-strip')?.getBoundingClientRect();
+    const bar = barRef.current?.getBoundingClientRect();
+    return {
+      ...base,
+      top: strip?.height ? Math.max(base.top, Math.round(strip.bottom - hostBox.top + 12)) : base.top,
+      bottom: bar?.height ? Math.max(base.bottom, Math.round(hostBox.bottom - bar.top + 12)) : base.bottom,
+    };
   }, []);
-  const latest = useRef({ layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId });
-  latest.current = { layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId };
+  const [insets, setInsets] = useState<ViewportInsets>(() => navigationInsets(EMPTY_SIZE.width));
+  const fit = useMemo(() => fitVisibleCamera(layout.bounds, size.width, size.height, insets), [layout.bounds, size, insets]);
+  const fitBounds = useCallback((bounds: Bounds) => fitVisibleCamera(bounds, sizeRef.current.width, sizeRef.current.height, measureInsets(sizeRef.current.width)), [measureInsets]);
+  const latest = useRef({ layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId, islandStats, islandNames });
+  latest.current = { layout, snapshot, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId, islandStats, islandNames };
 
   const draw = useCallback(() => {
     frameRef.current = null;
@@ -154,7 +246,8 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     // padded bitmap of the complete current scene; pan copies those exact pixels.
     // Any data/highlight/scope/zoom/DPR/resize change rebuilds it. No facts or
     // edges are removed for this optimization, and allocation has a fixed cap.
-    const sceneKey = [data.layout, data.snapshot.edges, data.membership, data.neighbors, data.selectedFileId, data.hoveredId, data.search, data.showImports, data.scopeGroupId];
+    // Island hover/focus rings are DOM and deliberately absent from this key.
+    const sceneKey = [data.layout, data.snapshot.edges, data.membership, data.neighbors, data.selectedFileId, data.hoveredId, data.search, data.showImports, data.scopeGroupId, data.islandStats, data.islandNames];
     const previousScene = sceneCacheRef.current;
     const translation = sceneTranslation(previousScene?.tile ?? null, c, width, height, ratio, sceneKey);
     if (previousScene && translation) {
@@ -179,13 +272,25 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     if (!caching && previousScene) { previousScene.canvas.width = 0; previousScene.canvas.height = 0; sceneCacheRef.current = null; }
     context.translate(width / 2, height / 2); context.scale(c.zoom, c.zoom); context.translate(-c.x, -c.y);
     const viewport = viewportBounds(c, width, height, 30);
+    const px = 1 / c.zoom;
     const inScope = (node: PositionedFile) => !data.scopeGroupId || node.groupId === data.scopeGroupId;
     const visible = (node: Point, extra = 25) => Math.abs((node.x - c.x) * c.zoom) < width / 2 + extra && Math.abs((node.y - c.y) * c.zoom) < height / 2 + extra;
+    const selectedIslandId = data.selectedFileId ? data.layout.islands.find(island => island.nodes.some(node => node.id === data.selectedFileId))?.id : undefined;
+    // Quiet by default: unchanged islands are a 1 px outline in their own colour;
+    // islands the selection touched get the green border and a count badge.
+    const drawn: { island: Island; rect: Bounds; changed: number }[] = [];
     for (const island of data.layout.islands) {
-      if ((data.scopeGroupId && island.id !== data.scopeGroupId) || !boundsIntersect(viewport, { x: island.x - island.rx * 1.2, y: island.y - island.ry * 1.2, width: island.rx * 2.4, height: island.ry * 2.4 })) continue;
-      islandPath(context, island);
-      context.fillStyle = alpha(island.color, data.selectedFileId && !island.nodes.some(node => node.id === data.selectedFileId) ? '04' : '07');
-      context.fill(); context.strokeStyle = alpha(island.color, '45'); context.lineWidth = .8 / c.zoom; context.stroke();
+      if (data.scopeGroupId && island.id !== data.scopeGroupId) continue;
+      const rect = islandRect(island);
+      if (!boundsIntersect(viewport, rect)) continue;
+      const changed = data.islandStats.get(island.id)?.changed ?? 0;
+      const dimmed = !!selectedIslandId && island.id !== selectedIslandId;
+      roundedRect(context, rect, cornerRadius(rect, c.zoom) * px);
+      context.fillStyle = alpha(island.color, dimmed ? '0a' : changed ? '17' : '0f'); context.fill();
+      context.globalAlpha = dimmed ? .6 : 1;
+      context.strokeStyle = changed ? '#42b968f2' : alpha(island.color, '80'); context.lineWidth = (changed ? 1.5 : 1) * px; context.stroke();
+      context.globalAlpha = 1;
+      drawn.push({ island, rect, changed });
     }
     const focusedEdges: typeof data.snapshot.edges = [];
     const connectionFocus = data.selectedFileId ?? data.hoveredId;
@@ -213,7 +318,11 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
         context.moveTo(endX, endY); context.lineTo(endX - Math.cos(angle + .55) * arrow, endY - Math.sin(angle + .55) * arrow); context.stroke();
       }
     }
-    const labels: { node: PositionedFile; priority: number }[] = [];
+    const labels: { node: PositionedFile; priority: number; home?: Bounds }[] = [];
+    // "Multiple selected sources" rings are a fixed screen size. On a dense overview they would merge
+    // into blobs: below an 8 px file pitch they are left out (the island tooltip and the overlap count
+    // carry the number), and below 10 px they are capped at 0.45 pitch with a 1 px stroke.
+    const pitchOnScreen = layoutPitch(data.layout) * c.zoom;
     for (const node of data.layout.nodes) {
       if (!inScope(node) || !visible(node)) continue;
       const count = data.membership.get(node.id) ?? 0;
@@ -228,8 +337,10 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       context.fillStyle = isSelected ? '#a2f4ba' : count ? '#42b968' : '#18252a'; context.fill();
       context.shadowBlur = 0;
       context.strokeStyle = count || isSelected ? '#a0e3b0' : '#52686d'; context.lineWidth = .65 / c.zoom; context.stroke();
-      if (count > 1 || isSelected || isNeighbor || node.id === data.hoveredId || isSearch) {
-        context.beginPath(); context.arc(node.x, node.y, radius + 3.6 / c.zoom, 0, Math.PI * 2);
+      const overlapOnly = count > 1 && !isSelected && !isNeighbor && node.id !== data.hoveredId && !isSearch;
+      if ((count > 1 || isSelected || isNeighbor || node.id === data.hoveredId || isSearch) && !(overlapOnly && pitchOnScreen < 8)) {
+        const capped = overlapOnly && pitchOnScreen < 10;
+        context.beginPath(); context.arc(node.x, node.y, capped ? Math.min(radius + 3.6 / c.zoom, .45 * pitchOnScreen / c.zoom) : radius + 3.6 / c.zoom, 0, Math.PI * 2);
         context.strokeStyle = isSelected ? '#e1ffec' : count > 1 ? '#d7e8de' : '#8bc7a5'; context.lineWidth = (isSelected ? 1.6 : 1) / c.zoom; context.stroke();
       }
       // Four corner brackets identify selection independently of the overlap ring
@@ -247,18 +358,48 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       context.globalAlpha = 1;
       if (isSelected || isSearch || node.id === data.hoveredId || (isNeighbor && c.zoom > .7) || (c.zoom > 1.25 && count)) labels.push({ node, priority: isSelected ? 0 : isSearch ? 1 : isNeighbor ? 2 : 3 });
     }
-    // Draw a few contextual labels in overview and more labels at semantic zoom.
-    if (c.zoom <= 1.25 && !data.selectedFileId && !data.search) for (const island of data.layout.islands) {
-      if (data.scopeGroupId && island.id !== data.scopeGroupId) continue;
-      const representative = island.nodes.find(node => data.membership.has(node.id)) ?? island.nodes[0];
-      if (representative) labels.push({ node: representative, priority: 4 });
+    // Count badges sit inside the top-right corner of changed islands that are large
+    // enough on screen; smaller changed islands rely on the green border alone.
+    const boxes: Bounds[] = [];
+    const badgeWidths = new Map<string, number>();
+    context.font = `600 ${10 * px}px 'Geist Mono', 'SFMono-Regular', Consolas, monospace`;
+    context.textAlign = 'center'; context.textBaseline = 'middle';
+    for (const { island, rect, changed } of drawn) {
+      if (!changed || rect.width * c.zoom < 36 || rect.height * c.zoom < 24) continue;
+      const text = String(changed), badgeWidth = Math.max(14 * px, context.measureText(text).width + 8 * px);
+      const badge = { x: rect.x + rect.width - 3 * px - badgeWidth, y: rect.y + 3 * px, width: badgeWidth, height: 14 * px };
+      roundedRect(context, badge, 7 * px); context.fillStyle = '#42b968'; context.fill();
+      context.fillStyle = '#06130a'; context.fillText(text, badge.x + badge.width / 2, badge.y + badge.height / 2 + .5 * px);
+      boxes.push(badge); badgeWidths.set(island.id, badgeWidth);
     }
-    const boxes: Bounds[] = data.layout.islands.map(island => ({ x: island.x - island.rx * .78, y: island.y - island.ry * .82, width: (Math.max(145, island.label.length * 9) + 18) / c.zoom, height: 58 / c.zoom }));
+    context.textAlign = 'start'; context.textBaseline = 'alphabetic';
+    // "Always" names: inside their own rectangle only, never over a neighbour.
+    const nameBands = new Map<string, Bounds>();
+    if (data.islandNames === 'always') {
+      context.font = `500 ${11 * px}px Geist, Inter, -apple-system, 'Segoe UI', sans-serif`;
+      for (const { island, rect } of drawn) {
+        if (rect.width * c.zoom < 72 || rect.height * c.zoom < 40) continue;
+        const room = rect.width - 8 * px - (badgeWidths.has(island.id) ? badgeWidths.get(island.id)! + 4 * px : 0);
+        const text = ellipsize(context, island.label, room - 12 * px);
+        if (!text) continue;
+        const band = { x: rect.x + 4 * px, y: rect.y + 4 * px, width: Math.min(room, context.measureText(text).width + 12 * px), height: 18 * px };
+        context.fillStyle = '#0a1217d9'; roundedRect(context, band, 4 * px); context.fill();
+        context.fillStyle = '#dcebe4'; context.fillText(text, band.x + 6 * px, band.y + 13 * px);
+        boxes.push(band); nameBands.set(island.id, band);
+      }
+    }
+    // A representative file label per island only once file pitch reaches 18 px on
+    // screen, and only inside its own rectangle, so the overview stays quiet.
+    if (c.zoom * layoutPitch(data.layout) >= 18 && c.zoom <= 1.25 && !data.selectedFileId && !data.search) for (const { island, rect } of drawn) {
+      const representative = island.nodes.find(node => data.membership.has(node.id)) ?? island.nodes[0];
+      if (representative) labels.push({ node: representative, priority: 4, home: rect });
+    }
     context.font = `${10 / c.zoom}px 'Geist Mono', 'SFMono-Regular', Consolas, monospace`;
-    labels.sort((a, b) => a.priority - b.priority).slice(0, 100).forEach(({ node, priority }) => {
+    labels.sort((a, b) => a.priority - b.priority).slice(0, 100).forEach(({ node, priority, home }) => {
       const label = basename(node.path); const textWidth = context.measureText(label).width;
       const box = { x: node.x + 15 / c.zoom, y: node.y - 12 / c.zoom, width: textWidth + 15 / c.zoom, height: 24 / c.zoom };
       if (!visible(node, -10) || (priority > 0 && boxes.some(b => intersects(b, box)))) return;
+      if (home && !contains(home, box)) return;
       boxes.push(box); context.fillStyle = '#0a1217ef'; context.fillRect(box.x, box.y, box.width, box.height);
       context.fillStyle = priority < 3 ? '#dcebe4' : '#a2b1aa'; context.fillText(label, box.x + 7 / c.zoom, box.y + 15 / c.zoom);
     });
@@ -297,11 +438,36 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     };
     animationRef.current = requestAnimationFrame(tick);
   }, [reducedMotion, setCamera, stopAnimation]);
+  /** Desktop lands on Fit all. A phone above the envelope lands on the changed islands at a readable zoom. */
+  const landingCamera = useCallback((): { camera: Camera } => {
+    const { layout: current, snapshot: data, islandStats: stats } = latest.current;
+    const fitted = fitBounds(current.bounds);
+    const { width, height } = sizeRef.current;
+    if (width > 760 || !exceedsGraphEnvelope(data)) return { camera: fitted };
+    const changed = current.islands.flatMap(island => { const count = stats.get(island.id)?.changed ?? 0; return count ? [{ ...islandRect(island), weight: count }] : []; });
+    const zoom = Math.max(fitted.zoom, .2), inset = measureInsets(width);
+    // The visible map (between the chrome insets) that holds the most changed files in whole islands
+    // and leaves the fewest changed islands cut or behind the chrome; the camera centres on it.
+    const chrome = { top: inset.top / zoom, right: inset.right / zoom, bottom: inset.bottom / zoom, left: inset.left / zoom };
+    const box = landingWindow(changed, Math.max(1, width - inset.left - inset.right) / zoom, Math.max(1, height - inset.top - inset.bottom) / zoom, chrome) ?? current.bounds;
+    const anchor = { x: (inset.left + width - inset.right) / 2, y: (inset.top + height - inset.bottom) / 2 };
+    return { camera: { x: box.x + box.width / 2 - (anchor.x - width / 2) / zoom, y: box.y + box.height / 2 - (anchor.y - height / 2) / zoom, zoom } };
+  }, [fitBounds, measureInsets]);
   const fitAll = useCallback(() => { setScopeGroupId(null); onFocusGroup?.(null); moveCamera(fitBounds(layout.bounds)); }, [layout.bounds, moveCamera, onFocusGroup, fitBounds]);
   const fitIsland = useCallback((id: string) => {
     const island = layout.islands.find(group => group.id === id);
     if (island) { onFocusGroup?.(id); moveCamera(fitBounds(islandBounds(island))); }
   }, [layout.islands, onFocusGroup, moveCamera, fitBounds]);
+  /** Keyboard focus pans (never zooms) the minimum distance that shows the whole rectangle. */
+  const ensureIslandVisible = useCallback((id: string) => {
+    const island = layout.islands.find(group => group.id === id); if (!island) return;
+    const { width, height } = sizeRef.current, c = cameraRef.current, inset = measureInsets(width);
+    const topLeft = worldToScreen({ x: island.x - island.rx, y: island.y - island.ry }, c, width, height);
+    const bottomRight = worldToScreen({ x: island.x + island.rx, y: island.y + island.ry }, c, width, height);
+    const shift = (low: number, high: number, min: number, max: number) => low < min || high - low > max - min ? low - min : high > max ? high - max : 0;
+    const dx = shift(topLeft.x, bottomRight.x, inset.left, width - inset.right), dy = shift(topLeft.y, bottomRight.y, inset.top, height - inset.bottom);
+    if (dx || dy) moveCamera({ ...c, x: c.x + dx / c.zoom, y: c.y + dy / c.zoom });
+  }, [layout.islands, measureInsets, moveCamera]);
   const zoom = useCallback((factor: number, anchor?: Point) => {
     stopAnimation(); const { width, height } = sizeRef.current; const c = cameraRef.current;
     setCamera(zoomAt(c, clamp(c.zoom * factor, fit.zoom * MIN_RELATIVE_ZOOM, Math.max(4.8, fit.zoom * MAX_RELATIVE_ZOOM)), anchor ?? { x: width / 2, y: height / 2 }, width, height));
@@ -323,6 +489,28 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     return () => observer.disconnect();
   }, [selectedFileId]);
   useEffect(() => {
+    const workspace = hostRef.current?.parentElement ?? null; setBarHost(workspace);
+    // Keyboard focus may land on an island button outside the visible map. The camera pans
+    // to it (ensureIslandVisible); the page itself must never scroll.
+    const shell = workspace?.parentElement ?? null;
+    const reset = (event: Event) => { const element = event.currentTarget as HTMLElement; if (element.scrollTop || element.scrollLeft) { element.scrollTop = 0; element.scrollLeft = 0; } };
+    for (const element of [hostRef.current, workspace, shell]) element?.addEventListener('scroll', reset);
+    return () => { for (const element of [hostRef.current, workspace, shell]) element?.removeEventListener('scroll', reset); };
+  }, []);
+  // The fit readout follows the chrome: inspector, a wrapped top strip or a wrapped bottom bar.
+  useEffect(() => {
+    const update = () => setInsets(previous => {
+      const next = measureInsets(sizeRef.current.width);
+      return previous.top === next.top && previous.right === next.right && previous.bottom === next.bottom && previous.left === next.left ? previous : next;
+    });
+    update();
+    const observer = new ResizeObserver(update);
+    const strip = hostRef.current?.parentElement?.querySelector('.graph-strip');
+    if (strip) observer.observe(strip);
+    if (barRef.current) observer.observe(barRef.current);
+    return () => observer.disconnect();
+  }, [measureInsets, size.width, inspectorWidth, largeRepository, snapshot, barHost]);
+  useEffect(() => {
     const host = hostRef.current; const canvas = canvasRef.current;
     if (!host || !canvas) return;
     if (!canvas.getContext('2d')) { setCanvasFailed(true); return; }
@@ -332,10 +520,13 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       sizeRef.current = nextSize; setSize(nextSize);
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.round(rect.width * ratio); canvas.height = Math.round(rect.height * ratio);
-      if (first) setCamera(isValidCamera(initialCameraRef.current) ? initialCameraRef.current : fitBounds(latest.current.layout.bounds)); else requestDraw();
+      if (first) {
+        const current = latest.current.layout, restored = initialCameraRef.current;
+        setCamera(isRestorableCamera(restored, fitBounds(current.bounds), current.islands.map(islandRect), nextSize.width, nextSize.height, measureInsets(nextSize.width)) ? restored : fitBounds(current.bounds));
+      } else requestDraw();
     });
     observer.observe(host); return () => observer.disconnect();
-  }, [requestDraw, setCamera, fitBounds, canvasAttempt]);
+  }, [requestDraw, setCamera, fitBounds, measureInsets, canvasAttempt]);
   useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return;
     const discard = () => { const cache = sceneCacheRef.current; if (cache) { cache.canvas.width = 0; cache.canvas.height = 0; sceneCacheRef.current = null; } };
@@ -356,15 +547,47 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     const repository = snapshot.repository?.fullName ?? snapshot.id ?? 'graph';
     if (framedRepository.current === repository) return;
     framedRepository.current = repository;
-    moveCamera(isValidCamera(initialCameraRef.current) ? initialCameraRef.current : fitBounds(latest.current.layout.bounds), false);
-  }, [snapshot.id, snapshot.repository?.fullName, layoutState, moveCamera, fitBounds]);
+    // A saved camera that no longer frames this layout (for example one recorded against the
+    // larger organic-island layout) is ignored; the landing camera then replaces it in the URL.
+    const restored = initialCameraRef.current, { width, height } = sizeRef.current;
+    if (isRestorableCamera(restored, fitBounds(layout.bounds), layout.islands.map(islandRect), width, height, measureInsets(width))) { landedCamera.current = null; moveCamera(restored, false); return; }
+    const landing = landingCamera(); landedCamera.current = landing;
+    moveCamera(landing.camera, false);
+  }, [snapshot.id, snapshot.repository?.fullName, layoutState, moveCamera, landingCamera]);
+  // A re-packed map (an overlay overflowed an island) changes the world bounds. A camera still
+  // resting where it landed, or at Fit all, follows the new map; any other camera stays put.
+  const settledLayout = useRef<{ repository: string; bounds: Bounds } | null>(null);
+  useEffect(() => {
+    if (layoutState !== 'ready') return;
+    const repository = snapshot.repository?.fullName ?? snapshot.id ?? 'graph';
+    const previous = settledLayout.current; settledLayout.current = { repository, bounds: layout.bounds };
+    if (!previous || previous.repository !== repository || framedRepository.current !== repository) return;
+    const before = previous.bounds, after = layout.bounds;
+    if (before.x === after.x && before.y === after.y && before.width === after.width && before.height === after.height) return;
+    const current = cameraRef.current;
+    if (animationRef.current !== null) return;
+    if (landedCamera.current?.camera === current) { const landing = landingCamera(); landedCamera.current = landing; moveCamera(landing.camera, false); }
+    else if (sameCamera(current, fitBounds(before))) moveCamera(fitBounds(after), false);
+  }, [layout, layoutState, snapshot.id, snapshot.repository?.fullName, moveCamera, landingCamera, fitBounds]);
+  // A landing camera that has not moved since it landed follows what it was computed from: the
+  // chrome insets (the strip is taller while 'Updating footprint' shows) and, on a phone, the
+  // footprint as it settles from provisional to final highlights. It never interrupts a camera
+  // animation (a file or island focus) and never moves a camera the user has moved.
+  useEffect(() => {
+    const landed = landedCamera.current;
+    if (!landed || cameraRef.current !== landed.camera || animationRef.current !== null) return;
+    const landing = landingCamera();
+    if (sameCamera(landing.camera, landed.camera)) return;
+    landedCamera.current = landing; moveCamera(landing.camera, false);
+  }, [islandStats, insets, landingCamera, moveCamera]);
   useEffect(() => {
     if (lastOverviewRequest.current === overviewRequest) return;
     lastOverviewRequest.current = overviewRequest; fitAll();
   }, [overviewRequest, fitAll]);
-  useEffect(() => { requestDraw(); }, [layout, snapshot.edges, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId, requestDraw]);
+  useEffect(() => { requestDraw(); }, [layout, snapshot.edges, membership, neighbors, selectedFileId, hoveredId, search, showImports, scopeGroupId, islandStats, islandNames, requestDraw]);
   useEffect(() => { if (scopeGroupId && !snapshot.groups.some(group => group.id === scopeGroupId)) setScopeGroupId(null); }, [snapshot.groups, scopeGroupId]);
   useEffect(() => { if (selectedPosition && scopeGroupId && selectedPosition.groupId !== scopeGroupId) setScopeGroupId(null); }, [selectedPosition?.id, selectedPosition?.groupId, scopeGroupId]);
+  useEffect(() => { if (focusGroupId) setRovingId(focusGroupId); }, [focusGroupId]);
   useEffect(() => {
     if (!focusGroupId) return;
     const island = layout.islands.find(group => group.id === focusGroupId);
@@ -377,8 +600,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     const next = fitBounds({ x: node.x - 120, y: node.y - 100, width: 240, height: 200 });
     const zoom = Math.max(current.zoom, fit.zoom * 1.75);
     const size = sizeRef.current;
-    const inspector = hostRef.current?.parentElement?.querySelector('[data-testid="file-inspector"]');
-    const inset = navigationInsets(size.width, inspector?.getBoundingClientRect().width ?? 0);
+    const inset = measureInsets(size.width);
     const anchor = { x: (inset.left + size.width - inset.right) / 2, y: (inset.top + size.height - inset.bottom) / 2 };
     moveCamera({ ...next, x: node.x - (anchor.x - size.width / 2) / zoom, y: node.y - (anchor.y - size.height / 2) / zoom, zoom });
   }, [selectedFileId, selectedPosition?.x, selectedPosition?.y, moveCamera, fitBounds]);
@@ -405,10 +627,35 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   }, [zoom]);
 
   const eventPoint = (event: ReactPointerEvent<HTMLCanvasElement>): Point => { const rect = event.currentTarget.getBoundingClientRect(); return { x: event.clientX - rect.left, y: event.clientY - rect.top }; };
+  /** Files are pointer targets once their lattice is at least 10 px apart on screen. */
+  const filesTargetable = () => cameraRef.current.zoom * layoutPitch(layout) >= FILE_TARGET_MIN_PITCH;
   const hitNode = (point: Point) => {
+    if (!filesTargetable()) return undefined;
     let found: PositionedFile | undefined; let best = 16;
     for (const node of layout.nodes) { if (scopeGroupId && node.groupId !== scopeGroupId) continue; const screen = worldToScreen(node, cameraRef.current, sizeRef.current.width, sizeRef.current.height); const distance = Math.hypot(screen.x - point.x, screen.y - point.y); if (distance < best) { found = node; best = distance; } }
     return found;
+  };
+  /** Point-in-rectangle over in-scope islands, keeping the active island across a 16 px edge band. */
+  const hitIsland = (point: Point) => {
+    const { width, height } = sizeRef.current, c = cameraRef.current, world = screenToWorld(point, c, width, height);
+    const inside = (island: Island, slack = 0) => Math.abs(world.x - island.x) <= island.rx + slack && Math.abs(world.y - island.y) <= island.ry + slack;
+    for (const island of layout.islands) if ((!scopeGroupId || island.id === scopeGroupId) && inside(island)) return island;
+    const active = hoveredIslandRef.current ? islandById.get(hoveredIslandRef.current) : undefined;
+    return active && (!scopeGroupId || active.id === scopeGroupId) && inside(active, 16 / c.zoom) ? active : undefined;
+  };
+  const hoverIsland = (island: Island, point: Point) => {
+    if (islandLeaveTimer.current !== null) { clearTimeout(islandLeaveTimer.current); islandLeaveTimer.current = null; }
+    if (hoveredIslandRef.current !== island.id) { hoveredIslandRef.current = island.id; setHoveredIslandId(island.id); dismissedIslandId.current = null; }
+    if (dismissedIslandId.current === island.id || islandTipRef.current?.id === island.id) return;
+    // Warm state: while a tooltip is open, or closed a moment ago, the next island switches at once.
+    const warm = !!islandTipRef.current || !!hoveredIdRef.current || performance.now() - islandTipClosedAt.current < ISLAND_TIP_WARM_MS;
+    if (islandTipTimer.current !== null) clearTimeout(islandTipTimer.current);
+    islandTipTimer.current = null;
+    if (warm) { clearTooltip(); setIslandTip({ id: island.id, point, via: 'pointer' }); return; }
+    islandTipTimer.current = setTimeout(() => {
+      islandTipTimer.current = null;
+      if (hoveredIslandRef.current === island.id && !pointers.current.size) setIslandTip({ id: island.id, point, via: 'pointer' });
+    }, ISLAND_TIP_DELAY_MS);
   };
   const pointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (event.button !== 0 && event.pointerType === 'mouse') return;
@@ -416,6 +663,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus();
     const points = [...pointers.current.values()];
     gesture.current = { start: point, last: point, moved: points.length > 1, pinchDistance: points.length > 1 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : null, pinchMidpoint: points.length > 1 ? { x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2 } : null }; setDragging(true); clearTooltip(); hoverTriggerId.current = null;
+    endIslandHover();
   };
   const pointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const point = eventPoint(event);
@@ -438,12 +686,14 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       }
       gesture.current.last = point; return;
     }
+    // Touch has no hover: a tap focuses an island and the breadcrumb names it.
+    if (event.pointerType === 'touch') return;
     let node = hitNode(point);
     const active = hoveredIdRef.current ? layout.nodeById.get(hoveredIdRef.current) : undefined;
     const activePoint = active ? worldToScreen(active, cameraRef.current, sizeRef.current.width, sizeRef.current.height) : undefined;
     // Retain the active hit target through its radius instead of flickering
     // between nearby files while crossing toward content.
-    if (active && activePoint && Math.hypot(point.x - activePoint.x, point.y - activePoint.y) < 16) node = active;
+    if (active && activePoint && filesTargetable() && Math.hypot(point.x - activePoint.x, point.y - activePoint.y) < 16) node = active;
     const tooltipBox = tooltipRef.current?.getBoundingClientRect(), canvasBox = canvasRef.current?.getBoundingClientRect();
     if (active && activePoint && node?.id !== active.id && tooltipBox && canvasBox) {
       const left = tooltipBox.left - canvasBox.left, top = tooltipBox.top - canvasBox.top;
@@ -452,18 +702,31 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     }
     hoverTriggerId.current = node?.id ?? null;
     if (node) {
+      // A file hit always wins over the island under it.
+      endIslandHover();
       if (dismissedHoverId.current === node.id) return;
       dismissedHoverId.current = null; cancelHoverLeave();
       // Anchor to the trigger entry point instead of chasing a pointer that is
       // crossing toward the tooltip content.
       if (hoveredIdRef.current !== node.id) { hoveredIdRef.current = node.id; setHoveredId(node.id); setHoverPosition(point); }
-    } else { dismissedHoverId.current = null; leaveHover(); }
+      return;
+    }
+    dismissedHoverId.current = null;
+    const island = hitIsland(point);
+    if (island) { if (hoveredIdRef.current) clearTooltip(); hoverIsland(island, point); }
+    else { leaveHover(); leaveIsland(); }
   };
   const pointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const point = eventPoint(event); const hadPointers = pointers.current.has(event.pointerId); pointers.current.delete(event.pointerId);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     if (!pointers.current.size) setDragging(false);
-    if (hadPointers && !gesture.current.moved && event.type !== 'pointercancel') { const node = hitNode(point); onSelectFile(node?.id ?? null); }
+    if (hadPointers && !gesture.current.moved && event.type !== 'pointercancel') {
+      const node = hitNode(point);
+      const island = node ? undefined : hitIsland(point);
+      if (node) onSelectFile(node.id);
+      else if (island && island.id !== focusGroupId) { if (selectedFileId) onSelectFile(null); fitIsland(island.id); }
+      else onSelectFile(null);
+    }
     if (pointers.current.size === 1) { gesture.current.last = [...pointers.current.values()][0]; gesture.current.moved = true; }
     gesture.current.pinchDistance = null; gesture.current.pinchMidpoint = null;
   };
@@ -501,59 +764,160 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     return snapshot.edges.reduce((count, edge, index) => count + Number(index % 3 !== 0 && edge.source !== focus && edge.target !== focus), 0);
   }, [snapshot.edges, showImports, camera.zoom, selectedFileId, hoveredId]);
   const selectedIslandId = focusGroupId ?? (selectedFileId ? layout.nodeById.get(selectedFileId)?.groupId : undefined);
-  const islandLabels = useMemo(() => {
-    const boxes: Bounds[] = [];
-    return [...layout.islands].sort((a, b) => Number(b.id === focusGroupId) - Number(a.id === focusGroupId)).map(island => {
-      const point = worldToScreen({ x: island.x - island.rx * .78, y: island.y - island.ry * .82 }, camera, size.width, size.height);
-      const box = { ...point, width: Math.max(145, island.label.length * 9) + 18, height: 58 };
-      const offscreen = point.x < -180 || point.x > size.width || point.y < 0 || point.y > size.height - 50;
-      const hidden = offscreen || boxes.some(other => intersects(other, box));
-      if (!hidden) boxes.push(box);
-      return { island, point, hidden };
-    });
-  }, [layout.islands, camera, size, focusGroupId]);
+
+  // One keyboard surface: a focusable, named button per island in reading order.
+  // The container is world-space (one transform per frame); buttons never move.
+  const islandOrder = useMemo(() => layout.islands.filter(island => !scopeGroupId || island.id === scopeGroupId)
+    .sort((a, b) => (a.y - a.ry) - (b.y - b.ry) || (a.x - a.rx) - (b.x - b.rx)), [layout.islands, scopeGroupId]);
+  const activeIslandId = useMemo(() => {
+    const has = (id: string | null | undefined) => !!id && islandOrder.some(island => island.id === id);
+    if (has(rovingId)) return rovingId;
+    if (has(focusGroupId)) return focusGroupId;
+    return islandOrder.find(island => (islandStats.get(island.id)?.changed ?? 0) > 0)?.id ?? islandOrder[0]?.id ?? null;
+  }, [islandOrder, rovingId, focusGroupId, islandStats]);
+  const describedIslandId = islandTip?.via === 'keyboard' && !hovered ? islandTip.id : null;
+  const focusIslandButton = useCallback((id: string) => {
+    islandControlsRef.current?.querySelector<HTMLButtonElement>(`button[data-island-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  }, []);
+  const islandKeyDown = (event: KeyboardEvent<HTMLButtonElement>, island: Island) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const index = islandOrder.findIndex(entry => entry.id === island.id);
+    let target: Island | undefined;
+    if (event.key === 'ArrowRight') target = islandOrder[index + 1];
+    else if (event.key === 'ArrowLeft') target = islandOrder[index - 1];
+    else if (event.key === 'Home') target = islandOrder[0];
+    else if (event.key === 'End') target = islandOrder[islandOrder.length - 1];
+    else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      // The nearest island by x in the next (previous) module row.
+      const scale = layoutPitch(layout) / ISLAND_GEOMETRY.pitch, direction = event.key === 'ArrowDown' ? 1 : -1;
+      const step = ISLAND_GEOMETRY.module * scale, gutter = ISLAND_GEOMETRY.gutter * scale;
+      for (let probe = direction > 0 ? island.y + island.ry + gutter / 2 + step / 2 : island.y - island.ry - gutter / 2 - step / 2;
+        probe > layout.bounds.y && probe < layout.bounds.y + layout.bounds.height && !target; probe += direction * step) {
+        target = islandOrder.filter(entry => entry.y - entry.ry < probe && entry.y + entry.ry > probe)
+          .sort((a, b) => Math.abs(a.x - island.x) - Math.abs(b.x - island.x))[0];
+      }
+    } else if (event.key === 'Escape' && focusGroupId) {
+      // Clearing the island focus keeps keyboard focus on this island: the page-level Escape
+      // (which returns focus to search or the last file trigger) must not also run.
+      event.preventDefault(); event.stopPropagation(); onFocusGroup?.(null);
+      const target = event.currentTarget; requestAnimationFrame(() => { if (target.isConnected && document.activeElement !== target) target.focus({ preventScroll: true }); });
+      return;
+    }
+    else return;
+    event.preventDefault();
+    if (target) focusIslandButton(target.id);
+  };
+  const islandFocused = (event: FocusEvent<HTMLButtonElement>, island: Island) => {
+    setKeyboardIslandId(island.id); setRovingId(island.id);
+    // One tooltip at a time: keyboard focus replaces any pointer hover content.
+    clearTooltip(); cancelIslandTimers(); dismissedIslandId.current = null;
+    setIslandTip({ id: island.id, point: { x: 0, y: 0 }, via: 'keyboard' });
+    if (document.activeElement === event.target) ensureIslandVisible(island.id);
+  };
+  const islandBlurred = (island: Island) => {
+    setKeyboardIslandId(current => current === island.id ? null : current);
+    if (islandTipRef.current?.via === 'keyboard' && islandTipRef.current.id === island.id) setIslandTip(null);
+  };
+  // Buttons are memoised; their handlers read the latest closures through a ref.
+  const islandHandlers = useRef({ focus: islandFocused, blur: islandBlurred, keyDown: islandKeyDown, activate: fitIsland });
+  islandHandlers.current = { focus: islandFocused, blur: islandBlurred, keyDown: islandKeyDown, activate: fitIsland };
+  const islandButtons = useMemo(() => islandOrder.map(island => {
+    const stats = islandStats.get(island.id) ?? NO_STATS;
+    return <button type="button" key={island.id} data-island-id={island.id} tabIndex={island.id === activeIslandId ? 0 : -1}
+      className={`island-label ${focusGroupId === island.id ? 'is-focused' : ''}`}
+      style={{ left: island.x - island.rx, top: island.y - island.ry, width: island.rx * 2, height: island.ry * 2, '--island-color': island.color } as CSSProperties}
+      aria-label={`Explore ${island.label} island, ${stats.changed} changed of ${island.nodes.length} files`}
+      aria-describedby={describedIslandId === island.id ? 'graph-island-tooltip' : undefined}
+      onClick={() => islandHandlers.current.activate(island.id)} onFocus={event => islandHandlers.current.focus(event, island)} onBlur={() => islandHandlers.current.blur(island)} onKeyDown={event => islandHandlers.current.keyDown(event, island)}>
+      <span className="island-title"><i />{island.label}</span><span className="island-meta">{stats.changed} changed <b>/</b> {island.nodes.length} files</span>
+    </button>;
+  }), [islandOrder, islandStats, activeIslandId, focusGroupId, describedIslandId]);
+
+  const screenRect = (island: Island) => {
+    const topLeft = worldToScreen({ x: island.x - island.rx, y: island.y - island.ry }, camera, size.width, size.height);
+    return { x: topLeft.x, y: topLeft.y, width: island.rx * 2 * camera.zoom, height: island.ry * 2 * camera.zoom };
+  };
+  const ring = (id: string | null | undefined, state: 'hover' | 'focus' | 'keyboard') => {
+    const island = id ? islandById.get(id) : undefined;
+    if (!island || (scopeGroupId && island.id !== scopeGroupId)) return null;
+    const rect = screenRect(island), offset = state === 'hover' ? 2 : 3;
+    const radius = cornerRadius({ x: 0, y: 0, width: island.rx * 2, height: island.ry * 2 }, camera.zoom) + offset;
+    return <div key={`${state}:${island.id}`} className="island-ring" data-state={state} aria-hidden="true" style={{ transform: `translate(${rect.x - offset}px, ${rect.y - offset}px)`, width: rect.width + offset * 2, height: rect.height + offset * 2, borderRadius: radius }} />;
+  };
+  const tipIsland = islandTip && !hovered && !dragging ? islandById.get(islandTip.id) : undefined;
+  const tipStats = tipIsland ? islandStats.get(tipIsland.id) ?? NO_STATS : NO_STATS;
+  const tipGroup = tipIsland ? snapshot.groups.find(group => group.id === tipIsland.id) as (GraphData['groups'][number] & { path?: unknown; origin?: unknown }) | undefined : undefined;
+  const tipMeta = tipGroup ? [typeof tipGroup.path === 'string' && tipGroup.path && tipGroup.path !== tipGroup.label ? tipGroup.path : '', tipGroup.origin === 'manual' ? 'manual' : tipGroup.origin === 'rules' ? 'rules' : tipGroup.origin === 'ai' ? 'AI' : ''].filter(Boolean).join(' · ') : '';
+  /** Tooltips open below the top band's backing (it ends 6 px under the strip; the inset adds 12). */
+  const tipMinTop = Math.max(8, insets.top - 4);
+  const tipPosition = (() => {
+    if (!tipIsland || !islandTip) return { left: 0, top: 0 };
+    // Clamped to the map between the chrome bands, never under the top band or the bottom bar.
+    const maxLeft = Math.max(8, size.width - 308), maxTop = Math.max(tipMinTop, size.height - (insets.bottom - 12) - 8 - 96);
+    if (islandTip.via === 'pointer') return { left: clamp(islandTip.point.x + 16, 8, maxLeft), top: clamp(islandTip.point.y + 18, tipMinTop, maxTop) };
+    const rect = screenRect(tipIsland);
+    return rect.height < 60 ? { left: clamp(rect.x, 8, maxLeft), top: clamp(rect.y + rect.height + 6, tipMinTop, maxTop) } : { left: clamp(rect.x + 8, 8, maxLeft), top: clamp(rect.y + 8, tipMinTop, maxTop) };
+  })();
+  const showMinimap = !compact || minimapOpen;
+  const scopeStatus = `Showing ${scope.files.toLocaleString()} of ${scope.totalFiles.toLocaleString()} files · ${scope.edges.toLocaleString()} of ${scope.totalEdges.toLocaleString()} connections`;
+  // Worded apart from the bar's own lines so each sentence stays unique on the page.
+  const scopeNote = largeRepository ? `This map holds ${scope.totalFiles.toLocaleString()} files and ${scope.totalEdges.toLocaleString()} connections, more than the 2,000 files or 8,000 connections it is tuned for; ${scopeGroupId ? `the scope draws ${scope.files.toLocaleString()} files and ${scope.edges.toLocaleString()} connections` : 'all of them are drawn'}.` : undefined;
+  const detail = <output className="graph-detail-summary" aria-label="Graph detail" aria-live="off" title={showImports && suppressedEdges > 0 ? `Overview detail: ${suppressedEdges.toLocaleString()} of ${snapshot.edges.length.toLocaleString()} background import lines suppressed. All ${snapshot.nodes.length.toLocaleString()} files are retained. Zoom in or inspect a file for its connections.` : undefined}>{visibleFiles.toLocaleString()} / {snapshot.nodes.length.toLocaleString()} files in view{showImports && suppressedEdges > 0 ? ` · ${suppressedEdges.toLocaleString()} import lines hidden at this zoom` : ''}</output>;
 
   const viewport = { x: camera.x - size.width / camera.zoom / 2, y: camera.y - size.height / camera.zoom / 2, width: size.width / camera.zoom, height: size.height / camera.zoom };
-  return <div ref={hostRef} className={`constellation-graph ${dragging ? 'is-dragging' : ''} ${className}`} style={{ '--graph-inspector-width': `${inspectorWidth}px` } as CSSProperties} data-testid="graph-surface" data-layout-state={layoutState}>
-    <canvas ref={canvasRef} data-testid="graph-canvas" data-camera-x={camera.x} data-camera-y={camera.y} data-camera-scale={camera.zoom} data-visible-file-count={visibleFiles} data-selection-cue={selectedFileId ? 'corner-brackets' : 'none'} className="constellation-canvas" tabIndex={0} aria-label={`Repository file graph. ${snapshot.nodes.length} files in ${layout.islands.length} islands. Arrow keys pan. Plus and minus zoom. Zero fits all islands. Use the Files view for accessible file details.`} aria-describedby="graph-instructions" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={pointerUp} onPointerLeave={() => { if (!pointers.current.size) { hoverTriggerId.current = null; dismissedHoverId.current = null; leaveHover(); } }} onKeyDown={keyDown} />
-    <p id="graph-instructions" className="graph-sr-only">One circle is one file. Green circles changed in the selected sources; an outer ring means multiple sources. Corner brackets identify the selected file. Lines are directed imports. Drag to pan, scroll or pinch to zoom. Control or Command modified wheel and keyboard shortcuts retain browser zoom. Select a labeled island to focus it. Filename labels are prioritized to avoid collisions; the synchronized Files view retains every file.</p>
-    <div role="group" className="island-controls" aria-label="Repository islands">
-      {islandLabels.map(({ island, point, hidden }) => {
-        if (scopeGroupId && island.id !== scopeGroupId) return null;
-        const count = island.nodes.reduce((total, node) => total + Number(membership.has(node.id)), 0);
-        return <button type="button" key={island.id} className={`island-label ${focusGroupId === island.id ? 'is-focused' : ''}`} style={{ left: point.x, top: point.y, visibility: hidden ? 'hidden' : undefined, '--island-color': island.color } as CSSProperties} onClick={() => fitIsland(island.id)} aria-label={`Explore ${island.label} island, ${count} changed of ${island.nodes.length} files`}>
-          <span className="island-title"><i />{island.label}</span><span className="island-meta">{count} changed <b>/</b> {island.nodes.length} files</span>
-        </button>;
-      })}
+  return <div ref={hostRef} className={`constellation-graph ${dragging ? 'is-dragging' : ''} ${hoveredId || hoveredIslandId ? 'is-pointing' : ''} ${className}`} style={{ '--graph-inspector-width': `${inspectorWidth}px` } as CSSProperties} data-testid="graph-surface" data-layout-state={layoutState}>
+    <canvas ref={canvasRef} data-testid="graph-canvas" data-camera-x={camera.x} data-camera-y={camera.y} data-camera-scale={camera.zoom} data-visible-file-count={visibleFiles} data-selection-cue={selectedFileId ? 'corner-brackets' : 'none'} className="constellation-canvas" tabIndex={0} aria-label={`Repository file graph. ${snapshot.nodes.length} files in ${layout.islands.length} islands. Arrow keys pan. Plus and minus zoom. Zero fits all islands. Use the Files view for accessible file details.`} aria-describedby="graph-instructions" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onLostPointerCapture={pointerUp} onPointerLeave={() => { if (!pointers.current.size) { hoverTriggerId.current = null; dismissedHoverId.current = null; leaveHover(); leaveIsland(); } }} onKeyDown={keyDown} />
+    <p id="graph-instructions" className="graph-sr-only">One circle is one file. Islands are rectangles sized by file count; a green border and a count mark islands with changes. Hover or focus an island to see its name and counts; Enter or a click focuses it. Green circles changed in the selected sources; an outer ring means multiple sources. Corner brackets identify the selected file. Lines are directed imports. Drag to pan, scroll or pinch to zoom. Control or Command modified wheel and keyboard shortcuts retain browser zoom. The synchronized Files view retains every file.</p>
+    <div ref={islandControlsRef} role="group" className="island-controls" aria-label="Repository islands" style={{ transform: `translate(${size.width / 2 - camera.x * camera.zoom}px, ${size.height / 2 - camera.y * camera.zoom}px) scale(${camera.zoom})` }}>
+      {islandButtons}
     </div>
-    {exceedsGraphEnvelope(snapshot) && <div role="group" className="graph-scope-control" aria-label="Large repository scope">
-      <label htmlFor="graph-scope">Explore scope <select id="graph-scope" aria-label="Explore scope" value={scopeGroupId ?? ''} onChange={event => {
-        const id = event.target.value || null; setScopeGroupId(id); onFocusGroup?.(id);
-        const island = id ? layout.islands.find(group => group.id === id) : undefined;
-        moveCamera(fitBounds(island ? islandBounds(island) : layout.bounds));
-      }}><option value="">All islands</option>{snapshot.groups.map(group => <option value={group.id} key={group.id}>{group.label}</option>)}</select></label>
-      <span role="status">Showing {scope.files.toLocaleString()} of {scope.totalFiles.toLocaleString()} files · {scope.edges.toLocaleString()} of {scope.totalEdges.toLocaleString()} connections</span>
-      <small>Above the 2,000-file / 8,000-connection target. Scope filters affect drawing; Files retains all repository evidence.</small>
+    {ring(focusGroupId, keyboardIslandId && keyboardIslandId === focusGroupId ? 'keyboard' : 'focus')}
+    {keyboardIslandId !== focusGroupId && ring(keyboardIslandId, 'keyboard')}
+    {hoveredIslandId !== focusGroupId && hoveredIslandId !== keyboardIslandId && ring(hoveredIslandId, 'hover')}
+    {hovered && !dragging && <div ref={tooltipRef} className="graph-tooltip" data-kind="file" role="tooltip" onPointerEnter={() => { tooltipHovered.current = true; cancelHoverLeave(); }} onPointerLeave={() => { tooltipHovered.current = false; leaveHover(); }} style={{ left: clamp(hoverPosition.x + 20, 8, Math.max(8, size.width - 285)), top: clamp(hoverPosition.y - 48, tipMinTop, Math.max(tipMinTop, Math.min(size.height - 130, size.height - (insets.bottom - 12) - 8 - 122))) }}><strong>{basename(hovered.path)}</strong><span>{hovered.path}</span><small>{membership.get(hovered.id) ? `${membership.get(hovered.id)} selected source${membership.get(hovered.id) === 1 ? '' : 's'}` : 'Unchanged context'} · Select circle to inspect</small></div>}
+    {tipIsland && <div ref={tooltipRef} id="graph-island-tooltip" className="graph-tooltip graph-island-tooltip" data-kind="island" role="tooltip" onPointerEnter={() => { tooltipHovered.current = true; cancelIslandTimers(); }} onPointerLeave={() => { tooltipHovered.current = false; leaveIsland(); }} style={{ ...tipPosition, '--island-color': tipIsland.color } as CSSProperties}>
+      <strong><i aria-hidden="true" />{tipIsland.label}</strong>
+      <span className="tooltip-counts"><b className={tipStats.changed ? 'is-changed' : ''}>{tipStats.changed.toLocaleString()} changed</b> · {tipIsland.nodes.length.toLocaleString()} files{tipStats.overlap ? ` · ${tipStats.overlap.toLocaleString()} in multiple ${sourceKind === 'commit' ? 'commits' : 'PRs'}` : ''}</span>
+      {tipMeta && <span className="tooltip-path">{tipMeta}</span>}
+      <small>Click or Enter to focus island</small>
     </div>}
-    {hovered && !dragging && <div ref={tooltipRef} className="graph-tooltip" role="tooltip" onPointerEnter={() => { tooltipHovered.current = true; cancelHoverLeave(); }} onPointerLeave={() => { tooltipHovered.current = false; leaveHover(); }} style={{ left: clamp(hoverPosition.x + 20, 8, Math.max(8, size.width - 285)), top: clamp(hoverPosition.y - 48, 8, Math.max(8, size.height - 130)) }}><strong>{basename(hovered.path)}</strong><span>{hovered.path}</span><small>{membership.get(hovered.id) ? `${membership.get(hovered.id)} selected source${membership.get(hovered.id) === 1 ? '' : 's'}` : 'Unchanged context'} · Select circle to inspect</small></div>}
     {layoutState === 'pending' && <div className="graph-layout-status" role="status">Settling repository islands…</div>}
     {(canvasFailed || layoutState === 'failed') && <div className="graph-canvas-error" role="status"><strong>Graph rendering is unavailable</strong><p>{layoutError || 'Use Files to explore the complete repository and its connections.'}</p>{onOpenFiles && <button type="button" onClick={onOpenFiles}>Open file list</button>} {layoutState === 'failed' && <button type="button" onClick={resetLayout}>Retry layout</button>} {canvasFailed && <button type="button" onClick={() => { const available = !!canvasRef.current?.getContext('2d'); setCanvasFailed(!available); if (available) { setCanvasAttempt(value => value + 1); requestDraw(); } }}>Retry graph</button>}</div>}
-    {showImports && suppressedEdges > 0 && <div className="graph-detail-notice">Overview detail: {suppressedEdges.toLocaleString()} of {snapshot.edges.length.toLocaleString()} background import lines suppressed. All {snapshot.nodes.length.toLocaleString()} files are retained. Zoom in or inspect a file for its connections.</div>}
-    <div role="group" className="graph-navigation" aria-label="Graph navigation">
-      <button type="button" className="graph-reset-layout" onClick={resetLayout} disabled={layoutState === 'pending'}>Reset island layout</button>
-      <output className="graph-detail-summary" aria-label="Graph detail" aria-live="off">{visibleFiles.toLocaleString()} / {snapshot.nodes.length.toLocaleString()} files in view</output>
-      <span className="graph-pan-hint">Drag to pan · scroll to zoom</span>
-      <button className="graph-minimap" type="button" title="Repository minimap. Click to pan, arrows to move, Home to fit." aria-label="Repository minimap. Click to reposition. Arrow keys pan the graph." onClick={repositionMinimap} onKeyDown={minimapKeyDown}>
-        <svg viewBox={`${layout.bounds.x} ${layout.bounds.y} ${layout.bounds.width} ${layout.bounds.height}`} preserveAspectRatio="none" aria-hidden="true">{layout.islands.map(island => <ellipse key={island.id} cx={island.x} cy={island.y} rx={island.rx} ry={island.ry} fill={alpha(island.color, '77')} />)}<rect x={viewport.x} y={viewport.y} width={viewport.width} height={viewport.height} fill="none" stroke="#a2f4ba" strokeWidth={10} /></svg>
-      </button>
-      {selectedIslandId && <button className="graph-fit-island" type="button" onClick={() => fitIsland(selectedIslandId)} aria-label="Fit selected island">Fit selected island</button>}
-      <div className="graph-zoom-bar">
-        <button type="button" onClick={() => zoom(.8)} aria-label="Zoom out" title="Zoom out (−)">−</button><output aria-label="Graph zoom" data-testid="zoom-level">{Math.round(camera.zoom / fit.zoom * 100)}%</output><button type="button" onClick={() => zoom(1.25)} aria-label="Zoom in" title="Zoom in (+)">+</button><span className="graph-nav-divider" /><button type="button" className="graph-fit-button" onClick={fitAll} aria-label="Fit all islands" title="Fit all islands (0)"><FitIcon /> Fit</button><span className="graph-nav-divider" /><button type="button" onClick={() => pan(0, -80)} aria-label="Pan up" title="Pan up">↑</button><button type="button" onClick={() => pan(0, 80)} aria-label="Pan down" title="Pan down">↓</button><button type="button" onClick={() => pan(-80, 0)} aria-label="Pan left" title="Pan left">‹</button><button type="button" onClick={() => pan(80, 0)} aria-label="Pan right" title="Pan right">›</button>
+    {barHost && createPortal(<div ref={barRef} className={`graph-bottom-bar panel ${largeRepository ? 'has-scope' : ''}`} style={{ '--graph-inspector-width': `${inspectorWidth}px` } as CSSProperties}>
+      {legend ? legend(detail, scopeNote) : <div className="graph-legend">{detail}</div>}
+      {largeRepository && <div role="group" className="graph-scope-control" aria-label="Large repository scope">
+        <label htmlFor="graph-scope">Explore scope <select id="graph-scope" aria-label="Explore scope" title={`${scopeStatus}. Above the 2,000-file / 8,000-connection target.`} value={scopeGroupId ?? ''} onChange={event => {
+          const id = event.target.value || null; setScopeGroupId(id); onFocusGroup?.(id);
+          const island = id ? layout.islands.find(group => group.id === id) : undefined;
+          moveCamera(fitBounds(island ? islandBounds(island) : layout.bounds));
+        }}><option value="">All islands</option>{snapshot.groups.map(group => <option value={group.id} key={group.id}>{group.label}</option>)}</select></label>
+        {/* Below 1500 px (desktop) these two lines collapse into the select's title and the ? explanation. */}
+        <span role="status" className="graph-scope-status">{scopeStatus}</span>
+        <small className="graph-scope-target">Above the 2,000-file / 8,000-connection target.</small>
+      </div>}
+      <div role="group" className="graph-navigation" aria-label="Graph navigation">
+        <div className="graph-zoom-bar">
+          <button type="button" onClick={() => zoom(.8)} aria-label="Zoom out" title="Zoom out (−)">−</button><output aria-label="Graph zoom" data-testid="zoom-level">{Math.round(camera.zoom / fit.zoom * 100)}%</output><button type="button" onClick={() => zoom(1.25)} aria-label="Zoom in" title="Zoom in (+)">+</button>
+          <span className="graph-nav-divider" />
+          <button type="button" className="graph-fit-button" onClick={fitAll} aria-label="Fit all islands" title="Fit all islands (0)"><FitIcon /> Fit</button>
+          {selectedIslandId && <button className="graph-fit-island" type="button" onClick={() => fitIsland(selectedIslandId)} aria-label="Fit selected island" title="Fit selected island"><FitIslandIcon /></button>}
+          <span className="graph-nav-divider" />
+          <button type="button" onClick={() => pan(0, -80)} aria-label="Pan up" title="Pan up">↑</button><button type="button" onClick={() => pan(0, 80)} aria-label="Pan down" title="Pan down">↓</button><button type="button" className="graph-pan-x" onClick={() => pan(-80, 0)} aria-label="Pan left" title="Pan left">‹</button><button type="button" className="graph-pan-x" onClick={() => pan(80, 0)} aria-label="Pan right" title="Pan right">›</button>
+          <span className="graph-nav-divider" />
+          <button type="button" className="graph-reset-layout" onClick={resetLayout} disabled={layoutState === 'pending'} aria-label="Reset island layout" title="Reset island layout"><ResetIcon /></button>
+          {compact && <button type="button" className="graph-map-toggle" onClick={() => setMinimapOpen(open => !open)} aria-pressed={minimapOpen} aria-label="Minimap" title={minimapOpen ? 'Hide minimap' : 'Show minimap'}><MapIcon /> Map</button>}
+        </div>
       </div>
-    </div>
+      {showMinimap && <button className="graph-minimap" type="button" title="Repository minimap. Click to pan, arrows to move, Home to fit." aria-label="Repository minimap. Click to reposition. Arrow keys pan the graph." onClick={repositionMinimap} onKeyDown={minimapKeyDown}>
+        <svg viewBox={`${layout.bounds.x} ${layout.bounds.y} ${layout.bounds.width} ${layout.bounds.height}`} preserveAspectRatio="none" aria-hidden="true">{layout.islands.map(island => <rect key={island.id} x={island.x - island.rx} y={island.y - island.ry} width={island.rx * 2} height={island.ry * 2} rx={Math.min(island.rx, island.ry) * .12} fill={(islandStats.get(island.id)?.changed ?? 0) > 0 ? '#42b968cc' : alpha(island.color, '73')} />)}<rect className="graph-minimap-viewport" {...minimapFrame(viewport, layout.bounds, MINIMAP_PIXELS)} fill="#a2f4ba14" stroke="#a2f4ba" strokeWidth={1.25} vectorEffect="non-scaling-stroke" /></svg>
+      </button>}
+    </div>, barHost)}
   </div>;
 }
 
 function hashEdge(value: string) { let hash = 0; for (let i = 0; i < value.length; i++) hash = Math.imul(hash, 31) + value.charCodeAt(i); return hash >>> 0; }
 function intersects(a: Bounds, b: Bounds) { return a.x < b.x + b.width + 4 && a.x + a.width + 4 > b.x && a.y < b.y + b.height + 3 && a.y + a.height + 3 > b.y; }
 function FitIcon() { return <svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true"><path d="M6 3H3v3m9-3h3v3M3 12v3h3m9-3v3h-3" /></svg>; }
+function FitIslandIcon() { return <svg viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true"><path d="M6 3H3v3m9-3h3v3M3 12v3h3m9-3v3h-3" /><rect x="6.5" y="6.5" width="5" height="5" rx="1" /></svg>; }
+function ResetIcon() { return <svg viewBox="0 0 18 18" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3.5 9a5.5 5.5 0 1 0 1.7-4" /><path d="M3.5 3.2V6.5h3.3" /></svg>; }
+function MapIcon() { return <svg viewBox="0 0 18 18" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="11" rx="1.5" /><rect x="5" y="6" width="5" height="4" rx=".6" /></svg>; }

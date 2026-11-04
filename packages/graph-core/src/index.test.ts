@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createDemoSnapshot, createScaleFixture } from '../../fixtures/src/index';
-import { fitCamera, islandBounds, layoutGraph, neighborsOf, preserveLayout, screenToWorld, selectedMembership, worldToScreen, zoomAt } from './index';
+import { fitCamera, ISLAND_GEOMETRY, ISLAND_SLOT_INSET, islandBounds, islandIdentityColor, islandCapacity, islandTier, layoutGraph, layoutPitch, neighborsOf, packIslands, preserveLayout, screenToWorld, selectedMembership, worldToScreen, zoomAt } from './index';
+import type { GraphData } from './index';
 
 describe('Constellation layout and source semantics', () => {
   it('lays out each actual file exactly once and includes every file within its island', () => {
@@ -47,6 +48,194 @@ describe('Constellation layout and source semantics', () => {
     const stable = preserveLayout(before, layoutGraph(updated));
     for (const [id, node] of before.nodeById) { expect(stable.nodeById.get(id)?.x).toBe(node.x); expect(stable.nodeById.get(id)?.y).toBe(node.y); }
     expect(stable.nodeById.size).toBe(213); expect(stable.bounds).toEqual(before.bounds);
+  });
+});
+
+describe('rectangle islands sized by file count', () => {
+  const syntheticGraph = (sizes: number[]): GraphData => ({
+    groups: sizes.map((_, i) => ({ id: `g${String(i).padStart(3, '0')}`, label: `Group ${i}` })),
+    nodes: sizes.flatMap((count, i) => Array.from({ length: count }, (_, j) => ({ id: `g${i}-f${j}`, path: `g${i}/f${String(j).padStart(4, '0')}.ts`, groupId: `g${String(i).padStart(3, '0')}` }))),
+    edges: [],
+  });
+  it('tiers are the smallest square or one-wider landscape module block that holds every file', () => {
+    expect(islandTier(0)).toEqual({ w: 1, h: 1 });
+    expect(islandTier(4)).toEqual({ w: 1, h: 1 });
+    expect(islandTier(5)).toEqual({ w: 2, h: 1 });
+    expect(islandTier(13)).toEqual({ w: 2, h: 2 });
+    expect(islandTier(37)).toEqual({ w: 3, h: 2 });
+    expect(islandTier(900)).toEqual({ w: 8, h: 8 });
+    expect(islandTier(2000)).toEqual({ w: 12, h: 12 });
+    let previousArea = 0;
+    for (let files = 0; files <= 1200; files++) {
+      const { w, h } = islandTier(files);
+      expect(islandCapacity(w, h)).toBeGreaterThanOrEqual(Math.max(1, files));
+      expect(w).toBeGreaterThanOrEqual(h); expect(w).toBeLessThanOrEqual(h + 1);
+      expect(w * h).toBeGreaterThanOrEqual(previousArea); previousArea = w * h;
+    }
+  });
+  it('dense first-fit never overlaps and lets later small islands fill holes left by big ones', () => {
+    const packing = packIslands([{ w: 3, h: 3 }, { w: 2, h: 1 }, { w: 3, h: 3 }, { w: 1, h: 1 }, { w: 1, h: 1 }, { w: 1, h: 1 }]);
+    const cells = new Set<string>();
+    packing.cells.forEach(({ col, row }, i) => {
+      const tier = [{ w: 3, h: 3 }, { w: 2, h: 1 }, { w: 3, h: 3 }, { w: 1, h: 1 }, { w: 1, h: 1 }, { w: 1, h: 1 }][i];
+      expect(col + tier.w).toBeLessThanOrEqual(packing.columns);
+      for (let x = col; x < col + tier.w; x++) for (let y = row; y < row + tier.h; y++) { expect(cells.has(`${x}:${y}`)).toBe(false); cells.add(`${x}:${y}`); }
+    });
+    // ceil(sqrt(23 cells × 2.2)) = 8 columns: 3×3, 2×1 and 3×3 share row 0; the three
+    // 1×1 islands then fill the hole under the 2×1 instead of starting a new row.
+    expect(packing.columns).toBe(8);
+    expect(packing.cells.slice(0, 3)).toEqual([{ col: 0, row: 0 }, { col: 3, row: 0 }, { col: 5, row: 0 }]);
+    expect(packing.cells.slice(3)).toEqual([{ col: 3, row: 1 }, { col: 4, row: 1 }, { col: 3, row: 2 }]);
+    expect(packing.rows).toBe(3);
+  });
+  it('lays out rounded rectangles that never overlap, keep a gutter, and grow with their file count', () => {
+    const layout = layoutGraph(syntheticGraph([1, 3, 9, 40, 120, 600, 0, 5]));
+    const scale = layoutPitch(layout) / ISLAND_GEOMETRY.pitch;
+    for (const island of layout.islands) for (const other of layout.islands) if (island !== other) {
+      const gapX = Math.abs(island.x - other.x) - island.rx - other.rx, gapY = Math.abs(island.y - other.y) - island.ry - other.ry;
+      expect(Math.max(gapX, gapY)).toBeGreaterThanOrEqual(ISLAND_GEOMETRY.gutter * scale - 1e-9);
+    }
+    const area = (files: number) => { const island = layout.islands.find(group => group.nodes.length === files)!; return island.rx * island.ry; };
+    expect(area(1)).toBeLessThanOrEqual(area(3)); expect(area(3)).toBeLessThan(area(9));
+    expect(area(9)).toBeLessThan(area(40)); expect(area(40)).toBeLessThan(area(120)); expect(area(120)).toBeLessThan(area(600));
+    expect(layout.islands.find(island => !island.nodes.length)).toMatchObject({ rx: 36 * scale, ry: 36 * scale });
+    for (const island of layout.islands) for (const node of island.nodes) {
+      expect(Math.abs(node.x - island.x)).toBeLessThanOrEqual(island.rx - (ISLAND_GEOMETRY.padding + ISLAND_GEOMETRY.pitch / 2) * scale + 1e-9);
+      expect(Math.abs(node.y - island.y)).toBeLessThanOrEqual(island.ry - (ISLAND_GEOMETRY.padding + ISLAND_GEOMETRY.pitch / 2) * scale + 1e-9);
+    }
+  });
+  it('places files on one lattice pitch per layout and centres a small island\'s files as one row', () => {
+    const layout = layoutGraph(syntheticGraph([5, 50]));
+    const five = layout.islands.find(island => island.nodes.length === 5)!;
+    expect(new Set(five.nodes.map(node => node.y)).size).toBe(1);
+    expect(five.nodes[0].y).toBe(five.y);
+    expect((five.nodes[0].x + five.nodes[4].x) / 2).toBeCloseTo(five.x, 6);
+    const fifty = layout.islands.find(island => island.nodes.length === 50)!;
+    for (const node of fifty.nodes) {
+      expect(((node.x - fifty.grid!.originX) / layoutPitch(layout)) % 1).toBeCloseTo(0, 9);
+      expect(((node.y - fifty.grid!.originY) / layoutPitch(layout)) % 1).toBeCloseTo(0, 9);
+    }
+    expect(layoutPitch(layoutGraph(syntheticGraph(Array.from({ length: 200 }, () => 30))))).toBe(ISLAND_GEOMETRY.pitch);
+  });
+  it('scales the demo block up to fill the minimum 1600×936 world and fits a large repository without a minimum', () => {
+    const demo = layoutGraph(createDemoSnapshot());
+    expect(demo.bounds).toEqual({ x: 0, y: 0, width: 1600, height: 936 });
+    expect(layoutPitch(demo)).toBeGreaterThan(ISLAND_GEOMETRY.pitch * 1.5);
+    expect(layoutPitch(demo)).toBeLessThanOrEqual(ISLAND_GEOMETRY.pitch * 2.5);
+    const left = Math.min(...demo.islands.map(island => island.x - island.rx)), right = Math.max(...demo.islands.map(island => island.x + island.rx));
+    const top = Math.min(...demo.islands.map(island => island.y - island.ry)), bottom = Math.max(...demo.islands.map(island => island.y + island.ry));
+    expect(Math.max((right - left) / 1500, (bottom - top) / 816)).toBeCloseTo(1, 6);
+    expect(left - demo.bounds.x).toBeCloseTo(demo.bounds.x + demo.bounds.width - right, 6);
+    expect(top - demo.bounds.y).toBeCloseTo(demo.bounds.y + demo.bounds.height - bottom, 6);
+    const large = layoutGraph(syntheticGraph(Array.from({ length: 200 }, (_, i) => 1 + (i * 37) % 300)));
+    expect(Math.min(...large.islands.map(island => island.x - island.rx))).toBe(50);
+    expect(Math.min(...large.islands.map(island => island.y - island.ry))).toBe(60);
+    expect(large.bounds.width / large.bounds.height).toBeGreaterThan(1.4);
+  });
+  const overlappingPairs = (islands: readonly { x: number; y: number; rx: number; ry: number }[]) => {
+    let pairs = 0;
+    islands.forEach((a, i) => islands.slice(i + 1).forEach(b => { if (Math.abs(a.x - b.x) < a.rx + b.rx && Math.abs(a.y - b.y) < a.ry + b.ry) pairs++; }));
+    return pairs;
+  };
+  it('appends a source-only file to the next free lattice slot without moving any file or rectangle', () => {
+    const graph = syntheticGraph([10, 6]);
+    const before = layoutGraph(graph);
+    const roomy = before.islands.find(island => island.nodes.length === 10)!;
+    const added = { ...graph, nodes: [...graph.nodes, { id: 'extra', path: 'g0/zzzz.ts', groupId: roomy.id }] };
+    const stable = preserveLayout(before, layoutGraph(added));
+    for (const [id, node] of before.nodeById) expect(stable.nodeById.get(id)).toMatchObject({ x: node.x, y: node.y });
+    const kept = stable.islands.find(island => island.id === roomy.id)!, extra = stable.nodeById.get('extra')!;
+    expect(kept).toMatchObject({ x: roomy.x, y: roomy.y, rx: roomy.rx, ry: roomy.ry });
+    expect(new Set(stable.nodes.map(node => `${node.x}:${node.y}`)).size).toBe(stable.nodes.length);
+    expect(Math.abs(extra.x - kept.x)).toBeLessThanOrEqual(kept.rx - ISLAND_SLOT_INSET + 1e-9);
+    expect(Math.abs(extra.y - kept.y)).toBeLessThanOrEqual(kept.ry - ISLAND_SLOT_INSET + 1e-9);
+    expect(stable.bounds).toEqual(before.bounds);
+  });
+  it('re-packs the whole map when a source-only overlay overflows an island, so no island runs over a neighbour', () => {
+    // A 1 × 1 island (3 inventory files) receives 40 selection-only files. It must not become
+    // a 2-wide strip over its neighbours.
+    const graph = syntheticGraph([3, 30, 12, 60, 4, 4, 20, 9, 36, 5, 2, 14]);
+    const before = layoutGraph(graph);
+    const small = before.islands.find(island => island.id === 'g000')!;
+    const unit = (layout: typeof before) => layoutPitch(layout) / ISLAND_GEOMETRY.pitch;
+    expect(small.rx * 2).toBeCloseTo((ISLAND_GEOMETRY.module - ISLAND_GEOMETRY.gutter) * unit(before), 9);
+    const added = { ...graph, nodes: [...graph.nodes, ...Array.from({ length: 40 }, (_, i) => ({ id: `extra-${i}`, path: `g0/new-${String(i).padStart(2, '0')}.ts`, groupId: small.id }))] };
+    const fresh = layoutGraph(added);
+    const stable = preserveLayout(before, fresh);
+    expect(overlappingPairs(stable.islands)).toBe(0);
+    // It is exactly the map a direct load of the same files shows (path independent).
+    expect(stable).toBe(fresh);
+    const grown = stable.islands.find(island => island.id === small.id)!;
+    expect(grown.nodes).toHaveLength(43);
+    const module = (half: number) => Math.round((half * 2 / unit(stable) + ISLAND_GEOMETRY.gutter) / ISLAND_GEOMETRY.module);
+    expect({ w: module(grown.rx), h: module(grown.ry) }).toEqual(islandTier(43));
+    for (const island of stable.islands) for (const node of island.nodes) { expect(Math.abs(node.x - island.x)).toBeLessThan(island.rx); expect(Math.abs(node.y - island.y)).toBeLessThan(island.ry); }
+    expect(new Set(stable.nodes.map(node => `${node.x}:${node.y}`)).size).toBe(stable.nodes.length);
+  });
+  it('a 10k-file map receiving overflow in many islands at once stays free of overlaps', () => {
+    const graph = createScaleFixture(10_000, 0, 42);
+    const before = layoutGraph(graph);
+    const extra = before.islands.flatMap((island, i) => Array.from({ length: 40 + i * 7 }, (_, j) => ({ id: `overlay-${i}-${j}`, path: `overlay/${i}/${j}.ts`, groupId: island.id })));
+    const stable = preserveLayout(before, layoutGraph({ ...graph, nodes: [...graph.nodes, ...extra] }));
+    expect(overlappingPairs(stable.islands)).toBe(0);
+    expect(stable.nodes).toHaveLength(10_000 + extra.length);
+  });
+  it('re-packs when a new island\'s packed place is taken, instead of parking it beside the block', () => {
+    const graph = syntheticGraph(Array.from({ length: 40 }, (_, i) => 5 + (i * 13) % 60));
+    const before = layoutGraph(graph);
+    const extra = ['a-new', 'b-new', 'c-new']; // Sorted first, so a fresh packing puts them where survivors are.
+    const next = { ...graph, groups: [...graph.groups, ...extra.map(id => ({ id, label: id }))], nodes: [...graph.nodes, ...extra.flatMap(id => Array.from({ length: 8 }, (_, j) => ({ id: `${id}-${j}`, path: `${id}/f${j}.ts`, groupId: id })))] };
+    const fresh = layoutGraph(next);
+    const stable = preserveLayout(before, fresh);
+    expect(stable).toBe(fresh);
+    expect(overlappingPairs(stable.islands)).toBe(0);
+    // Every island stays inside the packed block: nothing sticks out to the right of it.
+    const right = Math.max(...stable.islands.map(island => island.x + island.rx));
+    expect(right).toBeLessThanOrEqual(stable.bounds.x + stable.bounds.width - 50 + 1e-9);
+  });
+  it('keeps the map when a new island\'s packed place is free', () => {
+    // Eight 5 × 5 islands (a world too large to be scaled up); a one-file group sorted last
+    // packs onto a free cell after them, so nothing moves.
+    const graph = syntheticGraph(Array.from({ length: 8 }, () => 300));
+    const before = layoutGraph(graph);
+    const next = { ...graph, groups: [...graph.groups, { id: 'zz-new', label: 'New' }], nodes: [...graph.nodes, { id: 'zz-0', path: 'zz/a.ts', groupId: 'zz-new' }] };
+    const fresh = layoutGraph(next);
+    const stable = preserveLayout(before, fresh);
+    expect(stable).not.toBe(fresh);
+    for (const [id, node] of before.nodeById) expect(stable.nodeById.get(id)).toMatchObject({ x: node.x, y: node.y });
+    const added = stable.islands.find(island => island.id === 'zz-new')!, packed = fresh.islands.find(island => island.id === 'zz-new')!;
+    expect(added).toMatchObject({ x: packed.x, y: packed.y, rx: packed.rx, ry: packed.ry });
+    expect(overlappingPairs(stable.islands)).toBe(0);
+    expect(stable.bounds.x + stable.bounds.width).toBeGreaterThanOrEqual(added.x + added.rx);
+  });
+});
+
+describe('island identity colours', () => {
+  const hue = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map(i => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+    const max = Math.max(r, g, b), delta = max - Math.min(r, g, b);
+    return (max === r ? ((g - b) / delta + 6) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60;
+  };
+  const CHANGED_HUE = hue('#42b968');
+  it('moves olive, yellow-green and green-teal identities away from the changed green', () => {
+    // The analysis palette (packages/analysis/src/groups.ts) and the layout fallback palette.
+    const palette = ['#66bfa0', '#9d8fd4', '#6a9ec7', '#b8a073', '#7796c3', '#839da0', '#ae8ca1', '#98ac7a'];
+    for (const color of palette) {
+      const shown = islandIdentityColor(color);
+      expect(shown).toMatch(/^#[0-9a-f]{6}$/);
+      expect(Math.abs(hue(shown) - CHANGED_HUE)).toBeGreaterThanOrEqual(30);
+      if (hue(color) < 60 || hue(color) > 170) expect(shown).toBe(color);
+    }
+    expect(hue(islandIdentityColor('#66bfa0'))).toBeGreaterThanOrEqual(172);
+    expect(hue(islandIdentityColor('#98ac7a'))).toBeLessThanOrEqual(200);
+    expect(islandIdentityColor('#98ac7a')).not.toBe(islandIdentityColor('#66bfa0'));
+    expect(islandIdentityColor('#7f7f7f')).toBe('#7f7f7f');
+    expect(islandIdentityColor('teal')).toBe('teal');
+  });
+  it('lays out islands whose identity colours are never green', () => {
+    const layout = layoutGraph(createScaleFixture(600, 0, 7));
+    for (const island of layout.islands) expect(Math.abs(hue(island.color) - CHANGED_HUE)).toBeGreaterThanOrEqual(30);
+    expect(layoutGraph(createDemoSnapshot()).islands.find(island => island.id === 'auth')!.color).toBe(islandIdentityColor('#66BFA0'));
   });
 });
 

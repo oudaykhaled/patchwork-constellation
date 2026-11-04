@@ -12,27 +12,116 @@ export interface Point { x: number; y: number }
 export interface Bounds { x: number; y: number; width: number; height: number }
 export interface Camera { x: number; y: number; zoom: number }
 export interface PositionedFile extends LayoutFile, Point {}
+/**
+ * Free-slot frame of an island's file lattice: slot k sits at origin + (k mod columns, floor(k / columns)) × pitch.
+ * The frame spans the rectangle's full lattice width on the same half-pitch alignment as the placed files, so a
+ * source-only file can take a free slot without moving or overlapping any existing file.
+ */
+export interface IslandGrid { originX: number; originY: number; columns: number; pitch: number }
 export interface Island extends LayoutGroup, Point {
-  rx: number; ry: number; nodes: PositionedFile[]; color: string;
+  /** Half-width and half-height of the island rectangle, centred on x/y. */
+  rx: number; ry: number; nodes: PositionedFile[]; color: string; grid?: IslandGrid;
 }
 export interface GraphLayout { nodes: PositionedFile[]; nodeById: Map<string, PositionedFile>; islands: Island[]; bounds: Bounds }
 export interface LayoutOptions { seed?: number }
 
+/** World-space geometry of the rectangle island treatment. */
+export const ISLAND_GEOMETRY = Object.freeze({
+  /** File lattice pitch, centre to centre. */ pitch: 24,
+  /** Module cell; an island is w × h modules. */ module: 96,
+  /** Gutter between island rectangles. */ gutter: 24,
+  /** Inset from the rectangle edge to the first file slot edge. */ padding: 12,
+});
+const { pitch: P, module: U, gutter: G, padding: PAD } = ISLAND_GEOMETRY;
+/** Inset from a rectangle edge to the centre of its outermost file slot. */
+export const ISLAND_SLOT_INSET = PAD + P / 2;
+const MIN_BOUNDS = { width: 1600, height: 936 };
+/** A packed block smaller than the minimum world is scaled up (at most this much) to fill it. */
+const MAX_SMALL_WORLD_SCALE = 2.5;
 const PALETTE = ['#66BFA0', '#9D8FD4', '#6A9EC7', '#B8A073', '#7796C3', '#839DA0'];
-const PRESETS: [RegExp, number, number, number, number][] = [
-  [/auth|identity|session/i, 335, 335, 210, 155],
-  [/bill|commerce|payment/i, 795, 264, 200, 148],
-  [/api|service|backend/i, 786, 586, 200, 155],
-  [/interface|frontend|^ui$|experience|web/i, 1280, 428, 206, 153],
-  [/shared|common|core|util/i, 350, 700, 190, 135],
-  [/infra|config|ops|deploy/i, 1205, 742, 185, 122],
-];
+
+/**
+ * Island identity colour. Green means "changed" on this map (#42b968, hue 139°), so identity
+ * hues from yellow-green to green-teal (60°–170°) move to the teal/blue end (172°–200°) with
+ * the same saturation and lightness; a 1 px unchanged border can then never read as a changed one.
+ * Other colours, near-greys and non-hex values pass through unchanged.
+ */
+export function islandIdentityColor(color: string): string {
+  const match = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!match) return color;
+  const value = Number.parseInt(match[1], 16);
+  const r = (value >> 16 & 255) / 255, g = (value >> 8 & 255) / 255, b = (value & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), lightness = (max + min) / 2, delta = max - min;
+  if (!delta) return color;
+  const saturation = delta / (1 - Math.abs(2 * lightness - 1));
+  const hue = (max === r ? ((g - b) / delta + 6) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60;
+  if (saturation < .08 || hue < 60 || hue > 170) return color;
+  // Mirrored, so green-teal lands on teal and olive on grey-blue: neighbours stay distinct.
+  const shifted = 200 - (hue - 60) * 28 / 110;
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation, x = chroma * (1 - Math.abs((shifted / 60) % 2 - 1)), m = lightness - chroma / 2;
+  const [red, green, blue] = shifted < 180 ? [0, chroma, x] : [0, x, chroma];
+  return '#' + [red, green, blue].map(channel => Math.round((channel + m) * 255).toString(16).padStart(2, '0')).join('');
+}
+
+/** World-space file pitch of a layout (scaled up for a small repository). */
+export function layoutPitch(layout: Pick<GraphLayout, 'islands'>): number {
+  return layout.islands.find(island => island.grid)?.grid?.pitch ?? P;
+}
 
 export function hashString(value: string): number {
   let hash = 2166136261;
   for (let i = 0; i < value.length; i++) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619);
   return hash >>> 0;
 }
+
+/** Files a w × h module island holds: a (4w − 2) × (4h − 2) lattice. */
+export function islandCapacity(w: number, h: number) { return (4 * w - 2) * (4 * h - 2); }
+
+/**
+ * Size tier of an island: the smallest w·h (square, or one module wider than tall) whose
+ * lattice holds every file. Pure and monotone in the file count; an empty island is 1 × 1.
+ */
+export function islandTier(files: number): { w: number; h: number } {
+  const need = Math.max(1, files);
+  for (let h = 1; ; h++) {
+    if (islandCapacity(h, h) >= need) return { w: h, h };
+    if (islandCapacity(h + 1, h) >= need) return { w: h + 1, h };
+  }
+}
+
+/**
+ * Dense first-fit packing of module rectangles in input order (CSS grid-auto-flow: dense):
+ * each island takes the first free w × h run scanning rows top-down, columns left-to-right.
+ */
+export function packIslands(tiers: readonly { w: number; h: number }[]): { columns: number; rows: number; cells: { col: number; row: number }[] } {
+  const cells = tiers.reduce((total, tier) => total + tier.w * tier.h, 0);
+  const columns = Math.max(1, ...tiers.map(tier => tier.w), Math.ceil(Math.sqrt(cells * 2.2)));
+  const occupancy: Uint8Array[] = [];
+  let firstOpenRow = 0, rows = 0;
+  // Returns the column of the first occupied cell in the candidate run, or -1 when it is free.
+  const blocked = (col: number, row: number, w: number, h: number) => {
+    for (let y = row; y < row + h; y++) {
+      const line = occupancy[y]; if (!line) continue;
+      for (let x = col + w - 1; x >= col; x--) if (line[x]) return x;
+    }
+    return -1;
+  };
+  const placed = tiers.map(({ w, h }) => {
+    for (let row = firstOpenRow; ; row++) {
+      for (let col = 0; col <= columns - w;) {
+        const hit = blocked(col, row, w, h);
+        if (hit >= 0) { col = hit + 1; continue; }
+        for (let y = row; y < row + h; y++) { const line = occupancy[y] ?? (occupancy[y] = new Uint8Array(columns)); line.fill(1, col, col + w); }
+        rows = Math.max(rows, row + h);
+        while (occupancy[firstOpenRow] && occupancy[firstOpenRow].every(Boolean)) firstOpenRow++;
+        return { col, row };
+      }
+    }
+  });
+  return { columns, rows, cells: placed };
+}
+
+const entryRank = (path: string) => /(^|\/)refresh\.ts$/.test(path) ? 0 : /(^|\/)handler\.ts$/.test(path) ? 1 : /(^|\/)index\.[cm]?[jt]sx?$/.test(path) ? 2 : 3;
 
 export function layoutGraph(graph: GraphData, options: LayoutOptions = {}): GraphLayout {
   const groups = [...graph.groups].sort((a, b) => a.id.localeCompare(b.id));
@@ -44,52 +133,50 @@ export function layoutGraph(graph: GraphData, options: LayoutOptions = {}): Grap
     const list = grouped.get(id) ?? [];
     list.push(node); grouped.set(id, list);
   }
-  // Large graphs get more world-space, not larger file circles or hidden files.
-  const density = Math.max(1, Math.sqrt(graph.nodes.length / 212));
-  const columns = Math.max(1, Math.ceil(Math.sqrt(groups.length * 1.4)));
-  const usePresets = groups.length <= 6;
-  const usedSlots = new Set<number>();
-  const nodes: PositionedFile[] = [];
-  const islands = groups.map((group, index): Island => {
-    let slot = usePresets ? PRESETS.findIndex(([pattern], i) => pattern.test(group.label) && !usedSlots.has(i)) : -1;
-    if (slot < 0 && usePresets) slot = PRESETS.findIndex((_, i) => !usedSlots.has(i));
-    if (slot >= 0) usedSlots.add(slot);
-    const preset = slot >= 0 ? PRESETS[slot] : undefined;
-    const x = (preset ? preset[1] : 280 + (index % columns) * 470) * density;
-    const y = (preset ? preset[2] : 320 + Math.floor(index / columns) * 360) * density;
-    const rx = (preset ? preset[3] : 205) * density;
-    const ry = (preset ? preset[4] : 145) * density;
-    const entryRank = (path: string) => /(^|\/)refresh\.ts$/.test(path) ? 0 : /(^|\/)handler\.ts$/.test(path) ? 1 : /(^|\/)index\.[cm]?[jt]sx?$/.test(path) ? 2 : 3;
+  // Area means files: every island is a rounded rectangle of w × h modules sized by
+  // its own file count, packed densely so edges align and small islands fill holes.
+  const ordered = groups.map(group => {
     const files = [...(grouped.get(group.id) ?? [])].sort((a, b) => entryRank(a.path) - entryRank(b.path) || a.path.localeCompare(b.path) || a.id.localeCompare(b.id));
-    const groupSeed = hashString(options.seed ? `${group.id}:${options.seed}` : group.id) / 0xffffffff * Math.PI * 2;
+    // A non-zero seed rotates the non-entry files through the lattice (deterministically);
+    // the application always lays out with seed 0, which keeps the documented order.
+    const entries = files.filter(file => entryRank(file.path) < 3).length;
+    const rest = files.length - entries;
+    if (options.seed && rest > 1) {
+      const shift = hashString(`${group.id}:${options.seed}`) % rest;
+      files.splice(entries, rest, ...files.slice(entries + shift), ...files.slice(entries, entries + shift));
+    }
+    return { group, files, tier: islandTier(files.length) };
+  });
+  const packing = packIslands(ordered.map(item => item.tier));
+  const blockColumns = ordered.length ? Math.max(...ordered.map((item, i) => packing.cells[i].col + item.tier.w)) : 0;
+  // A small repository (the demo) is scaled up uniformly to fill the minimum world, so
+  // the showcase is not a small block in the middle of the screen. Large repositories keep
+  // the base geometry, and the lattice pitch stays the same for every island of a layout.
+  const scale = ordered.length ? Math.min(MAX_SMALL_WORLD_SCALE, Math.max(1, Math.min((MIN_BOUNDS.width - 100) / (blockColumns * U - G), (MIN_BOUNDS.height - 120) / (packing.rows * U - G)))) : 1;
+  const u = U * scale, g = G * scale, p = P * scale, inset = (PAD + P / 2) * scale;
+  const blockWidth = ordered.length ? blockColumns * u - g : 0;
+  const blockHeight = ordered.length ? packing.rows * u - g : 0;
+  const width = Math.max(MIN_BOUNDS.width, blockWidth + 100), height = Math.max(MIN_BOUNDS.height, blockHeight + 120);
+  // The packed block keeps 50/60 world units of margin and is centred in the world.
+  const originX = (width - blockWidth) / 2 - g / 2, originY = (height - blockHeight) / 2 - g / 2;
+  const nodes: PositionedFile[] = [];
+  const islands = ordered.map(({ group, files, tier }, index): Island => {
+    const { col, row } = packing.cells[index];
+    const x0 = originX + col * u + g / 2, y0 = originY + row * u + g / 2;
+    const rectWidth = tier.w * u - g, rectHeight = tier.h * u - g;
+    const columns = 4 * tier.w - 2, rows = 4 * tier.h - 2;
+    const usedColumns = Math.max(1, Math.min(files.length, columns)), usedRows = Math.ceil(files.length / usedColumns);
+    // Centre the used block inside the lattice so a five-file island is one centred row.
+    const offsetColumns = (columns - usedColumns) / 2, offsetRows = Math.max(0, rows - usedRows) / 2;
+    const blockX = x0 + inset + offsetColumns * p, blockY = y0 + inset + offsetRows * p;
+    const grid: IslandGrid = { originX: blockX - Math.floor(offsetColumns) * p, originY: blockY - Math.floor(offsetRows) * p, columns: usedColumns + 2 * Math.floor(offsetColumns), pitch: p };
     const placed = files.map((node, i): PositionedFile => {
-      const angle = i * 2.399963229728653 + groupSeed;
-      const radius = i === 0 ? 0 : Math.sqrt(i / Math.max(1, files.length - 1));
-      // Reserve the top quarter for the island label and changed/file counts.
-      const position = { ...node, x: x + Math.cos(angle) * radius * rx * .69, y: y + ry * .25 + Math.sin(angle) * radius * ry * .55 };
+      const position = { ...node, x: blockX + (i % usedColumns) * p, y: blockY + Math.floor(i / usedColumns) * p };
       nodes.push(position); return position;
     });
-    return { ...group, x, y, rx, ry, color: group.color ?? PALETTE[slot >= 0 ? slot : index % PALETTE.length], nodes: placed };
+    return { ...group, x: x0 + rectWidth / 2, y: y0 + rectHeight / 2, rx: rectWidth / 2, ry: rectHeight / 2, color: islandIdentityColor(group.color ?? PALETTE[index % PALETTE.length]), nodes: placed, grid };
   });
-  // A dominant island receives enough space for its own files, rather than
-  // burying small islands inside a fixed-size cloud. Ordinary design/scale
-  // fixtures keep their established placement.
-  if (islands.some(island => island.nodes.length > 200 && island.nodes.length > graph.nodes.length * .8)) {
-    let right = 40;
-    for (const island of islands) {
-      const factor = Math.max(1, Math.sqrt(island.nodes.length / 80) / density);
-      const oldX = island.x, oldY = island.y;
-      island.rx *= factor; island.ry *= factor;
-      island.x = right + island.rx; island.y = 80 + island.ry;
-      for (const node of island.nodes) { node.x = island.x + (node.x - oldX) * factor; node.y = island.y + (node.y - oldY) * factor; }
-      right = island.x + island.rx + 120;
-    }
-  }
-  const minX = Math.min(0, ...islands.map(island => island.x - island.rx - 50));
-  const minY = Math.min(0, ...islands.map(island => island.y - island.ry - 60));
-  const maxX = Math.max(1600 * density, ...islands.map(island => island.x + island.rx + 50));
-  const maxY = Math.max(936 * density, ...islands.map(island => island.y + island.ry + 60));
-  return { nodes, nodeById: new Map(nodes.map(node => [node.id, node])), islands, bounds: { x: minX, y: minY, width: maxX - minX, height: maxY - minY } };
+  return { nodes, nodeById: new Map(nodes.map(node => [node.id, node])), islands, bounds: { x: 0, y: 0, width, height } };
 }
 
 export function selectedMembership(graph: GraphData, selectedSourceIds: readonly string[]): Map<string, number> {
@@ -105,32 +192,54 @@ export function selectedMembership(graph: GraphData, selectedSourceIds: readonly
   return new Map([...memberships].map(([id, entries]) => [id, entries.size]));
 }
 
-/** Preserve the current repository map as source-only files arrive in an overlay. */
+/**
+ * Preserve the current repository map as source-only files arrive in an overlay.
+ * Surviving files keep their coordinates, new files take free slots of their island's lattice
+ * and new islands take their freshly packed place. When any surviving island would need more
+ * room than its rectangle holds, or a new island's place is taken, the fresh dense packing
+ * (`next`) is returned instead: growing or parking islands would run them across their
+ * neighbours or off the block, and the fresh packing is exactly the map a direct load shows.
+ */
 export function preserveLayout(previous: GraphLayout, next: GraphLayout): GraphLayout {
   const previousIslands = new Map(previous.islands.map(island => [island.id, island]));
   const nodes: PositionedFile[] = [];
-  const occupied = next.islands.flatMap(island => {
-    const prior = previousIslands.get(island.id); return prior ? [prior] : [];
-  });
+  const slotKey = (x: number, y: number) => `${Math.round(x * 2)}:${Math.round(y * 2)}`;
+  const survivors = next.islands.flatMap(island => { const prior = previousIslands.get(island.id); return prior ? [prior] : []; });
+  const gap = G * layoutPitch(previous) / P;
+  const collides = (a: Island, b: Island) => Math.abs(a.x - b.x) < a.rx + b.rx + gap && Math.abs(a.y - b.y) < a.ry + b.ry + gap;
+  // A new island keeps its freshly packed place when that place is free. When it is taken by a
+  // surviving island, the fresh dense packing is returned instead (the same map a direct load
+  // shows) rather than parking new islands beside the block.
+  const kept: Island[] = [];
+  for (const island of next.islands) {
+    if (previousIslands.has(island.id)) continue;
+    if (survivors.some(other => collides(other, island)) || kept.some(other => collides(other, island))) return next;
+    kept.push(island);
+  }
+  let overflow = false;
   const islands = next.islands.map(island => {
     const prior = previousIslands.get(island.id);
-    if (!prior) {
-      // New islands cannot occupy surviving islands' remembered space.
-      const overlaps = occupied.some(other => Math.abs(other.x - island.x) < other.rx + island.rx + 60 && Math.abs(other.y - island.y) < other.ry + island.ry + 60);
-      const x = overlaps ? Math.max(0, ...occupied.map(other => other.x + other.rx)) + island.rx + 100 : island.x;
-      const placed = island.nodes.map(node => ({ ...node, x: node.x + x - island.x }));
-      const added = { ...island, x, nodes: placed };
-      occupied.push(added); nodes.push(...placed); return added;
-    }
+    if (!prior) { nodes.push(...island.nodes); return island; }
+    const survives = (node: PositionedFile) => { const old = previous.nodeById.get(node.id); return old && old.groupId === node.groupId ? old : undefined; };
+    const taken = new Set(island.nodes.flatMap(node => { const old = survives(node); return old ? [slotKey(old.x, old.y)] : []; }));
+    const grid = prior.grid ?? { originX: prior.x - prior.rx + ISLAND_SLOT_INSET, originY: prior.y - prior.ry + ISLAND_SLOT_INSET, columns: Math.max(1, Math.floor((prior.rx * 2 - PAD * 2) / P)), pitch: P };
+    const inset = ISLAND_SLOT_INSET * grid.pitch / P;
+    let slot = 0;
+    const right = prior.x + prior.rx + 1e-6, bottom = prior.y + prior.ry + 1e-6;
     const placed = island.nodes.map(node => {
-      const old = previous.nodeById.get(node.id);
-      if (old && old.groupId === node.groupId) return { ...node, x: old.x, y: old.y };
-      const seed = hashString(node.id), angle = seed / 0xffffffff * Math.PI * 2;
-      const radius = .2 + (hashString(node.id + ':radius') / 0xffffffff) * .75;
-      return { ...node, x: prior.x + Math.cos(angle) * radius * prior.rx * .69, y: prior.y + prior.ry * .25 + Math.sin(angle) * radius * prior.ry * .55 };
+      const old = survives(node);
+      if (old) return { ...node, x: old.x, y: old.y };
+      // A new file takes the next free lattice slot without moving any existing file.
+      let x: number, y: number;
+      do { x = grid.originX + (slot % grid.columns) * grid.pitch; y = grid.originY + Math.floor(slot / grid.columns) * grid.pitch; slot++; } while (taken.has(slotKey(x, y)));
+      taken.add(slotKey(x, y));
+      if (x + inset > right || y + inset > bottom) overflow = true;
+      return { ...node, x, y };
     });
-    nodes.push(...placed); return { ...island, x: prior.x, y: prior.y, rx: prior.rx, ry: prior.ry, nodes: placed };
+    nodes.push(...placed); return { ...island, x: prior.x, y: prior.y, rx: prior.rx, ry: prior.ry, nodes: placed, grid };
   });
+  // Past an island's capacity the whole map is re-packed; a camera resting at Fit all follows it.
+  if (overflow) return next;
   const newGroups = islands.some(island => !previousIslands.has(island.id));
   const minX = Math.min(previous.bounds.x, ...islands.map(island => island.x - island.rx - 50));
   const minY = Math.min(previous.bounds.y, ...islands.map(island => island.y - island.ry - 60));
@@ -154,7 +263,7 @@ export function neighborsOf(edges: readonly LayoutEdge[], fileId: string | null)
 
 export function fitCamera(bounds: Bounds, width: number, height: number, padding = 22): Camera {
   const zoom = Math.min((width - padding * 2) / Math.max(1, bounds.width), (height - padding * 2) / Math.max(1, bounds.height));
-  return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2, zoom: Math.max(.025, zoom) };
+  return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2, zoom: Math.max(.01, zoom) };
 }
 export function screenToWorld(point: Point, camera: Camera, width: number, height: number): Point {
   return { x: (point.x - width / 2) / camera.zoom + camera.x, y: (point.y - height / 2) / camera.zoom + camera.y };

@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { cpus, totalmem } from 'node:os';
 import { resolve } from 'node:path';
 import { createDemoSnapshot, createScaleFixture } from '../../packages/fixtures/src/index';
-import { layoutGraph } from '../../packages/graph-core/src/index';
+import { layoutGraph, layoutPitch } from '../../packages/graph-core/src/index';
 
 type Probe = {
   workersCreated: number; workersTerminated: number; workersLive: number; workersPeak: number;
@@ -124,6 +124,10 @@ test.describe('Integrated selection and retained-resource evidence @release-soak
       expect(after.heapUsedBytes - before.heapUsedBytes).toBeLessThan(Math.max(8_000_000, files * 1_600));
       expect(after.nodes - before.nodes).toBeLessThan(1_000);
       const node = layoutGraph(graph).nodes.find(file => file.id === graph.nodes[0]!.id)!;
+      // Files are pointer targets once their lattice is at least 10 px apart on screen; a dense
+      // overview hands hover to the island. Zoom in until single files are targetable.
+      const pitch = layoutPitch(layoutGraph(graph));
+      for (let i = 0; i < 8 && Number(await canvas.getAttribute('data-camera-scale')) * pitch < 10; i++) await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
       const hoverTimes: number[] = [];
       for (let i = 0; i < 12; i++) {
         await canvas.dispatchEvent('pointerleave', { pointerId: 1, pointerType: 'mouse' });

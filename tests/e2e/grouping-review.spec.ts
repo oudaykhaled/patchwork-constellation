@@ -111,7 +111,8 @@ test('why-this-group works from a file and from a focused island', async ({ page
   await expect(page.getByRole('dialog').getByRole('region', { name: 'Why this group?' })).toContainText('observed file paths');
   await page.keyboard.press('Escape');
   await page.getByTestId('file-inspector').getByRole('button', { name: 'Close file inspector' }).click();
-  await page.getByRole('button', { name: /Explore .* island, .* changed/ }).first().click();
+  await page.getByRole('button', { name: /Explore .* island, .* changed/ }).first().focus();
+  await page.keyboard.press('Enter');
   await page.locator('.focus-breadcrumb').getByRole('button', { name: 'Why this group?', exact: true }).click();
   await expect(page.getByRole('dialog').getByRole('region', { name: 'Why this group?' })).toContainText('deterministic grouping rules');
 });
