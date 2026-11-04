@@ -8,6 +8,14 @@ export const GitHubWebUrlSchema = z.string().url().refine(value => {
   try { const url = new URL(value); return url.protocol === 'https:' && url.hostname === 'github.com' && !url.port && !url.username && !url.password; }
   catch { return false; }
 }, 'Expected a credential-free HTTPS GitHub link');
+/**
+ * Opaque reference for a server-registered local Git repository. It never names a
+ * filesystem path or host, so a click can never leave the machine or reveal a mirror.
+ */
+export const LocalGitRefSchema = z.string().max(300).regex(/^local-git:\/\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}(?:\/(?:commit|pull)\/[A-Za-z0-9]{1,64})?$/, 'Expected a local-git:// repository reference');
+const SourceLinkSchema = z.union([GitHubWebUrlSchema, LocalGitRefSchema]);
+const isGitHubWebUrl = (value: unknown) => GitHubWebUrlSchema.safeParse(value).success;
+const isLocalGitRef = (value: unknown) => LocalGitRefSchema.safeParse(value).success;
 export const RepositoryPathSchema = z.string().min(1).max(1_024).refine(path => !path.startsWith('/') && !/[:\\\u0000-\u001f\u007f]/.test(path) && !path.split('/').some(segment => segment === '..' || segment === '.' || segment === ''), 'Expected repository-relative path');
 const FolderPathSchema = z.union([z.literal(''), RepositoryPathSchema]);
 export const CoverageStatusSchema = z.enum(['complete', 'partial', 'unsupported', 'failed', 'excluded']);
@@ -33,7 +41,7 @@ export const RepositorySchema = z.object({
   name: z.string().min(1),
   fullName: z.string().min(3),
   defaultBranch: z.string().min(1),
-  htmlUrl: GitHubWebUrlSchema,
+  htmlUrl: SourceLinkSchema,
 }).passthrough().refine(repository => repository.fullName.toLowerCase() === `${repository.owner}/${repository.name}`.toLowerCase(), { path: ['fullName'], message: 'Repository identity does not match owner/name' });
 export type Repository = z.infer<typeof RepositorySchema>;
 
@@ -235,8 +243,9 @@ export const ChangeSourceSchema = z.object({
   baseRefSha: GitShaSchema.optional(),
   comparisonResolved: z.boolean().optional(),
   loaded: z.boolean().optional(),
-  comparisonKind: z.enum(['merge-base', 'first-parent', 'empty-tree']).optional(),
-  url: GitHubWebUrlSchema,
+  /** recorded: the file list comes from an external footprint record, not a Git comparison (local-git only). */
+  comparisonKind: z.enum(['merge-base', 'first-parent', 'empty-tree', 'recorded']).optional(),
+  url: SourceLinkSchema,
   files: z.array(FileChangeSchema),
   coverage: CoverageSchema.optional(),
   importEdges: z.array(ImportEdgeSchema).optional(),
@@ -314,7 +323,7 @@ const GraphSnapshotBaseSchema = z.object({
   coverage: CoverageSchema,
   incremental: IncrementalAnalysisStatsSchema.optional(),
   createdAt: TimestampSchema,
-  mode: z.enum(['demo', 'github']),
+  mode: z.enum(['demo', 'github', 'local-git']),
 }).passthrough();
 
 export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot, ctx) => {
@@ -348,7 +357,11 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
       seen.add(parent); parent = groupById.get(parent)?.parentId ?? '';
     }
   });
-  if (snapshot.mode === 'github' && !GitShaSchema.safeParse(snapshot.contextSha).success) ctx.addIssue({ code: 'custom', path: ['contextSha'], message: 'Context must be pinned to an immutable SHA' });
+  if (snapshot.mode !== 'demo' && !GitShaSchema.safeParse(snapshot.contextSha).success) ctx.addIssue({ code: 'custom', path: ['contextSha'], message: 'Context must be pinned to an immutable SHA' });
+  // Each mode keeps its own link space: GitHub snapshots only link to github.com and
+  // local snapshots only carry opaque local-git:// references.
+  const linkAllowed = (value: unknown) => snapshot.mode === 'local-git' ? isLocalGitRef(value) : isGitHubWebUrl(value);
+  if (!linkAllowed(snapshot.repository.htmlUrl)) ctx.addIssue({ code: 'custom', path: ['repository', 'htmlUrl'], message: snapshot.mode === 'local-git' ? 'Local repository links must be local-git:// references' : 'Expected a credential-free HTTPS GitHub link' });
   const visiblePaths = new Set(snapshot.nodes.map(node => node.path));
   for (const membership of snapshot.hierarchy?.memberships ?? []) if (!visiblePaths.has(membership.path)) ctx.addIssue({ code: 'custom', path: ['hierarchy', 'memberships'], message: 'Hierarchy contains a foreign file path' });
   snapshot.edges.forEach((edge, index) => {
@@ -356,8 +369,8 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
     const evidence = edge.evidence;
     const fail = (message: string) => ctx.addIssue({ code: 'custom', path: ['edges', index, 'evidence'], message });
     if (edge.provenance === 'selected-head' || edge.sourceId || (typeof evidence === 'object' && evidence.sourceId)) fail('Selected-head imports must stay in their source layer');
-    if (snapshot.mode === 'github' && !['complete', 'partial'].includes(nodeById.get(edge.source)?.importCoverage ?? 'failed')) fail('Context imports require analyzed context-file coverage');
-    if (snapshot.mode === 'github' && (!evidence || typeof evidence === 'string' || !evidence.snapshotSha || !evidence.resolver)) fail('Observed import requires pinned evidence and resolver');
+    if (snapshot.mode !== 'demo' && !['complete', 'partial'].includes(nodeById.get(edge.source)?.importCoverage ?? 'failed')) fail('Context imports require analyzed context-file coverage');
+    if (snapshot.mode !== 'demo' && (!evidence || typeof evidence === 'string' || !evidence.snapshotSha || !evidence.resolver)) fail('Observed import requires pinned evidence and resolver');
     if (evidence && typeof evidence !== 'string') {
       if (evidence.snapshotId && evidence.snapshotId !== snapshot.id) fail('Foreign snapshot evidence');
       const source = evidence.sourceId ? sourceById.get(evidence.sourceId) : undefined;
@@ -370,14 +383,28 @@ export const GraphSnapshotSchema = GraphSnapshotBaseSchema.superRefine((snapshot
   });
   snapshot.sources.forEach((source, index) => {
     const fail = (message: string) => ctx.addIssue({ code: 'custom', path: ['sources', index], message });
-    const unresolvedPull = source.kind === 'pr' && source.comparisonResolved === false;
-    if (unresolvedPull) {
-      if (source.loaded !== false || source.files.length || source.baseSha !== undefined || !GitShaSchema.safeParse(source.baseRefSha).success || !source.coverage || !['partial', 'failed'].includes(source.coverage.status)) fail('Unresolved PR comparison must be unloaded, have no changes/base, and expose requested branch pins with incomplete coverage');
-    } else if (!source.baseSha) fail('Source comparison requires exact base/head and comparison kind');
-    if (!source.headSha || !source.comparisonKind) fail('Source comparison requires exact base/head and comparison kind');
-    if (snapshot.mode === 'github' && ((!unresolvedPull && !GitShaSchema.safeParse(source.baseSha).success) || !GitShaSchema.safeParse(source.headSha).success)) fail('Source comparison must use immutable SHAs');
-    if (source.kind === 'pr' && source.comparisonKind !== 'merge-base') fail('Pull request requires merge-base comparison');
-    if (source.kind === 'commit' && (!['first-parent', 'empty-tree'].includes(source.comparisonKind ?? '') || !source.sha || source.sha !== source.headSha)) fail('Commit requires parent/commit comparison');
+    if (!(snapshot.mode === 'local-git' ? isLocalGitRef(source.url) : isGitHubWebUrl(source.url))) fail(snapshot.mode === 'local-git' ? 'Local source links must be local-git:// references' : 'Expected a credential-free HTTPS GitHub link');
+    const recorded = source.comparisonKind === 'recorded';
+    if (recorded) {
+      // A recorded footprint is an externally supplied file list (for example an exported
+      // file listing). It never claims a Git comparison, so base/head are optional,
+      // but any SHA it does carry must be immutable, and it must say where it came from and
+      // what is missing.
+      if (snapshot.mode !== 'local-git') fail('Recorded footprints are only valid for local-git snapshots');
+      if (typeof source.recordedOrigin !== 'string' || !source.recordedOrigin.trim()) fail('Recorded footprint requires its origin');
+      if (!source.coverage || source.coverage.status === 'complete') fail('Recorded footprint requires explicit incomplete coverage');
+      for (const value of [source.baseSha, source.headSha, source.sha]) if (value !== undefined && !GitShaSchema.safeParse(value).success) fail('Recorded footprint SHAs must be immutable');
+      if (source.kind === 'commit' && (!source.sha || source.sha !== source.headSha)) fail('Commit requires parent/commit comparison');
+    } else {
+      const unresolvedPull = source.kind === 'pr' && source.comparisonResolved === false;
+      if (unresolvedPull) {
+        if (source.loaded !== false || source.files.length || source.baseSha !== undefined || !GitShaSchema.safeParse(source.baseRefSha).success || !source.coverage || !['partial', 'failed'].includes(source.coverage.status)) fail('Unresolved PR comparison must be unloaded, have no changes/base, and expose requested branch pins with incomplete coverage');
+      } else if (!source.baseSha) fail('Source comparison requires exact base/head and comparison kind');
+      if (!source.headSha || !source.comparisonKind) fail('Source comparison requires exact base/head and comparison kind');
+      if (snapshot.mode !== 'demo' && ((!unresolvedPull && !GitShaSchema.safeParse(source.baseSha).success) || !GitShaSchema.safeParse(source.headSha).success)) fail('Source comparison must use immutable SHAs');
+      if (source.kind === 'pr' && source.comparisonKind !== 'merge-base') fail('Pull request requires merge-base comparison');
+      if (source.kind === 'commit' && (!['first-parent', 'empty-tree'].includes(source.comparisonKind ?? '') || !source.sha || source.sha !== source.headSha)) fail('Commit requires parent/commit comparison');
+    }
     const fileIds = new Set<string>();
     source.files.forEach((file, fileIndex) => {
       if (!nodes.has(file.fileId)) ctx.addIssue({ code: 'custom', path: ['sources', index, 'files', fileIndex, 'fileId'], message: 'Unknown changed-file reference' });

@@ -29,6 +29,10 @@ export interface StoreConfig {
   maxJobs?: number;
   maxDeliveries?: number;
   retentionMs?: number;
+  /** Serialized snapshot ceiling in bytes. Defaults to 16 MiB; at most 64 MiB. */
+  maxSnapshotBytes?: number;
+  /** Ceiling for `local-git` snapshots only (registered local mirrors). Defaults to maxSnapshotBytes; at most 64 MiB. */
+  maxLocalSnapshotBytes?: number;
   /** Inject a clock for deterministic lease/expiry tests. */
   now?: () => number;
 }
@@ -77,8 +81,17 @@ function checkedJob(job: StoredJob): StoredJob {
   if (Buffer.byteLength(JSON.stringify(job)) > 1_048_576) throw new Error('Job exceeds 1 MiB storage limit');
   return structuredClone(job);
 }
-function checkedSnapshot(snapshot: GraphSnapshot): GraphSnapshot {
-  if (Buffer.byteLength(JSON.stringify(snapshot)) > 16_777_216) throw new Error('Snapshot exceeds 16 MiB storage limit');
+export const DEFAULT_MAX_SNAPSHOT_BYTES = 16_777_216;
+export const MAX_SNAPSHOT_BYTES_CEILING = 67_108_864;
+interface SnapshotCeilings { other: number; local: number; }
+function snapshotCeilings(config: StoreConfig): SnapshotCeilings {
+  const other = bounded(config.maxSnapshotBytes, DEFAULT_MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_BYTES_CEILING);
+  return { other, local: bounded(config.maxLocalSnapshotBytes, other, MAX_SNAPSHOT_BYTES_CEILING) };
+}
+/** A raised local ceiling never applies to GitHub or demo snapshots. */
+function checkedSnapshot(snapshot: GraphSnapshot, ceilings: SnapshotCeilings = { other: DEFAULT_MAX_SNAPSHOT_BYTES, local: DEFAULT_MAX_SNAPSHOT_BYTES }): GraphSnapshot {
+  const maxBytes = snapshot.mode === 'local-git' ? ceilings.local : ceilings.other;
+  if (Buffer.byteLength(JSON.stringify(snapshot)) > maxBytes) throw Object.assign(new Error(`Snapshot exceeds ${Math.round(maxBytes / 1_048_576)} MiB storage limit`), { status: 413, code: 'SNAPSHOT_LIMIT' });
   return validateGraphSnapshot(snapshot);
 }
 function bounded(value: number | undefined, fallback: number, max: number): number {
@@ -102,17 +115,19 @@ class MemoryStore implements SnapshotStore {
   private readonly maxSnapshots: number;
   private readonly maxJobs: number;
   private readonly maxDeliveries: number;
+  private readonly snapshotCeilings: SnapshotCeilings;
   constructor(config: StoreConfig) {
     this.now = config.now ?? Date.now;
     this.retention = bounded(config.retentionMs, 86_400_000, 2_592_000_000);
     this.maxSnapshots = bounded(config.maxSnapshots, 100, 100_000);
     this.maxJobs = bounded(config.maxJobs, 500, 100_000);
     this.maxDeliveries = bounded(config.maxDeliveries, 5_000, 1_000_000);
+    this.snapshotCeilings = snapshotCeilings(config);
   }
   private key(scope: StoreScope, id: string): string { const s = normalizeScope(scope); validateId(id); return JSON.stringify([s.ownerId, s.repository, id]); }
   private trim<T>(map: Map<string, T>, max: number): void { while (map.size > max) { const key = map.keys().next().value; if (key !== undefined) map.delete(key); } }
   async putSnapshot(scope: StoreScope, snapshot: GraphSnapshot): Promise<void> {
-    snapshot = checkedSnapshot(snapshot);
+    snapshot = checkedSnapshot(snapshot, this.snapshotCeilings);
     const s = normalizeScope(scope); if (snapshot.repository.fullName.toLowerCase() !== s.repository) throw new Error('Snapshot repository does not match scope');
     const key = this.key(s, snapshot.id); this.snapshots.delete(key); this.snapshots.set(key, { scope: s, value: structuredClone(snapshot), expires: this.now() + this.retention, storedOrder: ++this.snapshotWriteOrder }); this.trim(this.snapshots, this.maxSnapshots);
   }
@@ -209,11 +224,11 @@ class MemoryStore implements SnapshotStore {
 
 class PostgresStore implements SnapshotStore {
   readonly kind = 'postgres' as const;
-  constructor(private pool: PgPool, private retention: number) {}
+  constructor(private pool: PgPool, private retention: number, private snapshotCeilings: SnapshotCeilings = { other: DEFAULT_MAX_SNAPSHOT_BYTES, local: DEFAULT_MAX_SNAPSHOT_BYTES }) {}
   private params(scope: StoreScope): [string, string] { const s = normalizeScope(scope); return [s.ownerId, s.repository]; }
   private async transaction<T>(run: (client: PoolClient) => Promise<T>): Promise<T> { const client = await this.pool.connect(); try { await client.query('BEGIN'); const value = await run(client); await client.query('COMMIT'); return value; } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); } }
   async putSnapshot(scope: StoreScope, snapshot: GraphSnapshot): Promise<void> {
-    snapshot = checkedSnapshot(snapshot);
+    snapshot = checkedSnapshot(snapshot, this.snapshotCeilings);
     const p = this.params(scope); validateId(snapshot.id); if (snapshot.repository.fullName.toLowerCase() !== p[1]) throw new Error('Snapshot repository does not match scope');
     await this.pool.query('INSERT INTO patchwork_snapshots(owner_id, repository, id, payload, expires_at, stored_at) VALUES($1,$2,$3,$4::jsonb,NOW()+$5*INTERVAL \'1 millisecond\',clock_timestamp()) ON CONFLICT(owner_id,repository,id) DO UPDATE SET payload=EXCLUDED.payload, expires_at=EXCLUDED.expires_at, stored_at=EXCLUDED.stored_at', [...p, snapshot.id, JSON.stringify(snapshot), this.retention]);
   }
@@ -295,7 +310,7 @@ export async function createStore(config: StoreConfig = {}): Promise<SnapshotSto
       const client = await pool.connect();
       try { await client.query('BEGIN'); await client.query('SELECT pg_advisory_xact_lock(74219001)'); await client.query(sql); await client.query('COMMIT'); } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
     } else await pool.query('SELECT 1');
-    return new PostgresStore(pool, bounded(config.retentionMs, 86_400_000, 2_592_000_000));
+    return new PostgresStore(pool, bounded(config.retentionMs, 86_400_000, 2_592_000_000), snapshotCeilings(config));
   } catch (error) { await pool.end(); throw error; }
 }
 
