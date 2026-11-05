@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
-import { ISLAND_GEOMETRY, islandBounds, layoutPitch, neighborsOf, screenToWorld, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
+import { ISLAND_ALPHA, ISLAND_GEOMETRY, islandBounds, layoutPitch, MAP_BACKGROUND, neighborsOf, screenToWorld, selectedMembership, worldToScreen, zoomAt } from '../../../../packages/graph-core/src/index';
 import type { Bounds, Camera, GraphData, GraphLayout, Island, Point, PositionedFile } from '../../../../packages/graph-core/src/index';
 import { boundsIntersect, connectionInViewport, exceedsGraphEnvelope, scopeSummary, viewportBounds } from '../../../../packages/graph-core/src/render-policy';
 import { sceneTile, sceneTranslation, type SceneTile } from '../../../../packages/graph-core/src/scene-cache';
@@ -241,7 +241,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     const data = latest.current;
     screenContext.setTransform(ratio, 0, 0, ratio, 0, 0);
     screenContext.clearRect(0, 0, width, height);
-    screenContext.fillStyle = '#091216'; screenContext.fillRect(0, 0, width, height);
+    screenContext.fillStyle = MAP_BACKGROUND; screenContext.fillRect(0, 0, width, height);
     // Screen-space grid deliberately remains subtle throughout zooming.
     const grid = clamp(32 * c.zoom, 19, 42);
     const offsetX = ((width / 2 - c.x * c.zoom) % grid + grid) % grid;
@@ -293,10 +293,11 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       const changed = data.islandStats.get(island.id)?.changed ?? 0;
       const dimmed = !!selectedIslandId && island.id !== selectedIslandId;
       roundedRect(context, rect, cornerRadius(rect, c.zoom) * px);
-      context.fillStyle = alpha(island.color, dimmed ? '0a' : changed ? '17' : '0f'); context.fill();
+      context.fillStyle = alpha(island.color, dimmed ? ISLAND_ALPHA.dimmedFill : changed ? ISLAND_ALPHA.changedFill : ISLAND_ALPHA.fill); context.fill();
       context.globalAlpha = dimmed ? .6 : 1;
-      // Unchanged borders at 63% alpha keep at least 3:1 against the map for every palette colour.
-      context.strokeStyle = changed ? '#42b968f2' : alpha(island.color, 'a0'); context.lineWidth = (changed ? 1.5 : 1) * px; context.stroke();
+      // An undimmed unchanged border keeps at least 3:1 against the map and its own fill for every
+      // palette colour (ISLAND_ALPHA.border; asserted in graph-core tests).
+      context.strokeStyle = changed ? '#42b968f2' : alpha(island.color, ISLAND_ALPHA.border); context.lineWidth = (changed ? 1.5 : 1) * px; context.stroke();
       context.globalAlpha = 1;
       drawn.push({ island, rect, changed });
     }

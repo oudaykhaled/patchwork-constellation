@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { GROUP_PALETTE } from '../../analysis/src/groups';
 import { createDemoSnapshot, createScaleFixture } from '../../fixtures/src/index';
-import { fitCamera, ISLAND_GEOMETRY, ISLAND_SLOT_INSET, islandBounds, islandIdentityColor, islandCapacity, islandTier, layoutGraph, layoutPitch, neighborsOf, packIslands, preserveLayout, screenToWorld, selectedMembership, worldToScreen, zoomAt } from './index';
+import { fitCamera, ISLAND_ALPHA, ISLAND_GEOMETRY, ISLAND_SLOT_INSET, islandBounds, islandIdentityColor, islandCapacity, islandTier, layoutGraph, layoutPitch, MAP_BACKGROUND, neighborsOf, packIslands, preserveLayout, screenToWorld, selectedMembership, worldToScreen, zoomAt } from './index';
 import type { GraphData } from './index';
 
 describe('Constellation layout and source semantics', () => {
@@ -217,8 +218,8 @@ describe('island identity colours', () => {
     return (max === r ? ((g - b) / delta + 6) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60;
   };
   const CHANGED_HUE = hue('#42b968');
-  // The analysis palette (packages/analysis/src/groups.ts); the layout fallback palette is its first six.
-  const palette = ['#66bfa0', '#9d8fd4', '#6a9ec7', '#b8a073', '#b377c3', '#839da0', '#ae8ca1', '#98ac7a'];
+  // The analysis palette; the layout fallback palette is its first six.
+  const palette = GROUP_PALETTE;
   const saturation = (hex: string) => {
     const [r, g, b] = [1, 3, 5].map(i => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
     const max = Math.max(r, g, b), min = Math.min(r, g, b), lightness = (max + min) / 2;
@@ -247,6 +248,29 @@ describe('island identity colours', () => {
     const shown = palette.map(islandIdentityColor).filter(color => saturation(color) >= .15).map(hue);
     expect(shown).toHaveLength(7);
     for (const [index, a] of shown.entries()) for (const b of shown.slice(index + 1)) expect(Math.min(Math.abs(a - b), 360 - Math.abs(a - b))).toBeGreaterThanOrEqual(20);
+  });
+  it('keeps every unchanged island border at 3:1 or more against the map and its own fill', () => {
+    // WCAG 1.4.11 contrast of the canvas composite: border over the map, and border over the fill.
+    const rgb = (hex: string) => [1, 3, 5].map(i => Number.parseInt(hex.slice(i, i + 2), 16));
+    const over = (top: number[], opacity: string, under: number[]) => top.map((value, i) => value * Number.parseInt(opacity, 16) / 255 + under[i]! * (1 - Number.parseInt(opacity, 16) / 255));
+    const luminance = (color: number[]) => {
+      const [r, g, b] = color.map(value => value / 255).map(value => value <= .03928 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+      return .2126 * r! + .7152 * g! + .0722 * b!;
+    };
+    const contrast = (a: number[], b: number[]) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);
+    const map = rgb(MAP_BACKGROUND);
+    // Analysis palette, demo sample and layout fallback palette, as the map shows them.
+    const shown = new Set([
+      ...palette.map(islandIdentityColor),
+      ...layoutGraph(createDemoSnapshot()).islands.map(island => island.color),
+      ...layoutGraph(createScaleFixture(600, 0, 7)).islands.map(island => island.color)
+    ].map(color => color.toLowerCase()));
+    expect(shown.size).toBeGreaterThanOrEqual(8);
+    for (const color of shown) {
+      const island = rgb(color), fill = over(island, ISLAND_ALPHA.fill, map);
+      expect(contrast(over(island, ISLAND_ALPHA.border, map), map), `${color} against the map`).toBeGreaterThanOrEqual(3);
+      expect(contrast(over(island, ISLAND_ALPHA.border, fill), fill), `${color} against its fill`).toBeGreaterThanOrEqual(3);
+    }
   });
   it('lays out islands whose identity colours are never green', () => {
     const layout = layoutGraph(createScaleFixture(600, 0, 7));

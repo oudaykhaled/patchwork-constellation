@@ -38,6 +38,15 @@ export const ISLAND_SLOT_INSET = PAD + P / 2;
 const MIN_BOUNDS = { width: 1600, height: 936 };
 /** A packed block smaller than the minimum world is scaled up (at most this much) to fill it. */
 const MAX_SMALL_WORLD_SCALE = 2.5;
+/** Canvas background of the map (the `.constellation-graph` CSS uses the same colour). */
+export const MAP_BACKGROUND = '#091216';
+/**
+ * Two-digit hex alpha suffixes for island rectangles, appended to the identity colour.
+ * `border` (b8, 72%) is the unchanged-island outline: for every identity colour of the palettes it
+ * keeps at least 3:1 contrast against the map and against the island's own `fill`. A unit test
+ * asserts this; at a0 (63%) orchid and brick dropped to 2.9:1 and 2.7:1.
+ */
+export const ISLAND_ALPHA = Object.freeze({ fill: '0f', changedFill: '17', dimmedFill: '0a', border: 'b8' });
 /** Matches the analysis palette (packages/analysis/src/groups.ts); one blue is orchid so blues stay apart. */
 const PALETTE = ['#66BFA0', '#9D8FD4', '#6A9EC7', '#B8A073', '#B377C3', '#839DA0'];
 
