@@ -126,7 +126,8 @@ test('empty selection, keyboard search and island/minimap navigation recover to 
   await page.getByTestId('source-pr-256').click();
   await expect(page.getByTestId('changed-count')).toHaveText('68');
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: /Explore Authentication island/ }).click();
+  await page.getByRole('button', { name: /Explore Authentication island/ }).focus();
+  await page.keyboard.press('Enter');
   await expect(page.getByRole('button', { name: 'All islands', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'All islands', exact: true }).click();
   await page.getByRole('button', { name: 'Fit all islands', exact: true }).click();

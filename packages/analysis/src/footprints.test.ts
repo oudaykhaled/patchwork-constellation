@@ -2,7 +2,7 @@ import { authoredFileFacts } from '@patchwork/fixtures';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeSource, GraphSnapshot } from '@patchwork/contracts';
 import { clearGitHubCacheForTests } from '@patchwork/github';
-import { loadSourceChanges } from './footprints';
+import { loadSourceChanges, mergeChangesByIdentity } from './footprints';
 import { EMPTY_GIT_TREE } from './git-fallback';
 
 const A = 'a'.repeat(40), B = 'b'.repeat(40), C = 'c'.repeat(40), D = 'd'.repeat(40);
@@ -116,5 +116,24 @@ describe('independent source footprint semantics', () => {
     const incremental = await loadSourceChanges(first, 'pr', ['pr:1', 'pr:2'], { fetch });
     const together = await loadSourceChanges(snapshot([pr(1), pr(2)]), 'pr', ['pr:1', 'pr:2'], { fetch });
     expect(incremental.sources.map(source => source.files[0]?.fileId)).toEqual(together.sources.map(source => source.files[0]?.fileId));
+  });
+});
+
+describe('one change per file identity', () => {
+  const row = (path: string, status: 'added' | 'modified' | 'removed' | 'renamed', additions = 0, deletions = 0, extra: Record<string, unknown> = {}) => ({ fileId: 'file:b', path, status, additions, deletions, ...extra });
+  const current = () => 'src/B.ts';
+  it('leaves distinct identities untouched', () => {
+    const changes = [row('src/a.ts', 'modified'), { ...row('src/b.ts', 'added'), fileId: 'file:other' }];
+    expect(mergeChangesByIdentity(changes, current)).toEqual({ changes, merged: [] });
+  });
+  it('turns a removal plus a surviving path into a rename and explains every merge', () => {
+    const result = mergeChangesByIdentity([row('src/a.ts', 'modified', 1), row('src/b.ts', 'removed', 0, 4), { ...row('src/B.ts', 'added', 4), fileId: 'file:x' }, row('src/B.ts', 'added', 4, 0, { binary: true })], current);
+    expect(result.changes).toEqual([{ fileId: 'file:b', path: 'src/B.ts', previousPath: 'src/b.ts', status: 'renamed', additions: 5, deletions: 4, binary: true }, { fileId: 'file:x', path: 'src/B.ts', status: 'added', additions: 4, deletions: 0 }]);
+    expect(result.merged).toEqual([{ fileId: 'file:b', path: 'src/B.ts', status: 'renamed', paths: ['src/a.ts', 'src/b.ts', 'src/B.ts'], statuses: ['modified', 'removed', 'added'] }]);
+  });
+  it('keeps a shared status, reduces mixed ones to modified, and keeps removals without added lines', () => {
+    expect(mergeChangesByIdentity([row('src/b.ts', 'added', 2), row('src/B.ts', 'added', 3)], current).changes).toEqual([{ fileId: 'file:b', path: 'src/B.ts', status: 'added', additions: 5, deletions: 0 }]);
+    expect(mergeChangesByIdentity([row('src/b.ts', 'added', 2), row('src/B.ts', 'modified', 1, 1)], current).changes).toEqual([{ fileId: 'file:b', path: 'src/B.ts', status: 'modified', additions: 3, deletions: 1 }]);
+    expect(mergeChangesByIdentity([row('src/b.ts', 'removed', 0, 2), row('src/B.ts', 'removed', 0, 3)], current).changes).toEqual([{ fileId: 'file:b', path: 'src/B.ts', status: 'removed', additions: 0, deletions: 5 }]);
   });
 });

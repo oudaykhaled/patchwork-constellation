@@ -63,4 +63,14 @@ describe('file review evidence', () => {
     expect(importReferences([{ specifier: 'react', line: 4, reason: 'External package' }, { specifier: '../missing', line: -1 }, { specifier: { injected: true } }, null])).toEqual([{ specifier: 'react', line: 4, reason: 'External package' }, { specifier: '../missing' }]);
     expect(textReasons(['Source budget reached.', { invalid: true }])).toEqual(['Source budget reached.']);
   });
+
+  it('never builds github.com links for local repositories', async () => {
+    const local: GraphSnapshot = { ...live, mode: 'local-git', repository: { ...live.repository, owner: 'local', name: 'example-app', fullName: 'local/example-app', htmlUrl: 'local-git://local/example-app' } };
+    const localSource = { ...source, url: 'local-git://local/example-app/pull/1' };
+    expect(sourceLink(local, localSource)).toBeUndefined();
+    expect(await diffLink(local, localSource, change)).toBeUndefined();
+    expect(sourceFileLink(local, 'src/feature-a/main.ts', head, 3)).toBeUndefined();
+    expect(connectionEvidence(local, { id: 'e', source: 'a', target: 'b', kind: 'import', evidence: { path: 'a.ts', line: 1, snapshotSha: head, resolver: 'r' } }).url).toBeUndefined();
+    expect(fileAvailability(local, { ...live.nodes[0]!, path: 'logo.png' }, []).join(' ')).not.toContain('GitHub');
+  });
 });

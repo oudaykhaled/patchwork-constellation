@@ -4,13 +4,15 @@ import { ImportEdgeSchema } from '@patchwork/contracts';
 const sha = /^[a-f0-9]{40,64}$/i;
 const repositoryPart = /^[a-z0-9_.-]+$/i;
 export const basename = (path: string) => path.split('/').pop() || path;
+/** github.com links exist only for GitHub snapshots; demo and local repositories never link out. */
 export function githubRepositoryUrl(snapshot: GraphSnapshot): string | undefined {
+  if (snapshot.mode !== 'github') return undefined;
   const { owner, name } = snapshot.repository;
   if (!repositoryPart.test(owner) || !repositoryPart.test(name)) return undefined;
   return `https://github.com/${owner}/${name}`;
 }
 export function sourceLink(snapshot: GraphSnapshot, source: ChangeSource): string | undefined {
-  if (snapshot.mode === 'demo') return undefined;
+  if (snapshot.mode !== 'github') return undefined;
   const root = githubRepositoryUrl(snapshot);
   if (!root) return undefined;
   if (source.kind === 'pr' && source.number && Number.isSafeInteger(source.number) && source.number > 0) return `${root}/pull/${source.number}`;
@@ -19,11 +21,11 @@ export function sourceLink(snapshot: GraphSnapshot, source: ChangeSource): strin
 }
 export function sourceFileLink(snapshot: GraphSnapshot, path: string, ref = snapshot.contextSha, line?: number): string | undefined {
   const root = githubRepositoryUrl(snapshot);
-  if (snapshot.mode === 'demo' || !root || !sha.test(ref) || !path || path.split('/').some(part => part === '.' || part === '..')) return undefined;
+  if (snapshot.mode !== 'github' || !root || !sha.test(ref) || !path || path.split('/').some(part => part === '.' || part === '..')) return undefined;
   return `${root}/blob/${ref}/${path.split('/').map(encodeURIComponent).join('/')}${line && Number.isSafeInteger(line) && line > 0 ? `#L${line}` : ''}`;
 }
 export async function diffLink(snapshot: GraphSnapshot, source: ChangeSource, file: FileChange): Promise<string | undefined> {
-  if (snapshot.mode === 'demo') return undefined;
+  if (snapshot.mode !== 'github') return undefined;
   const root = githubRepositoryUrl(snapshot);
   const head = source.headSha || source.sha;
   if (!root || !head || !sha.test(head) || !file.path) return undefined;
@@ -62,7 +64,7 @@ export function fileAvailability(snapshot: GraphSnapshot, file: FileNode, change
   const statuses = new Set([file.status, ...changes.map(change => change.status)]);
   if (file.presence === 'deleted' || statuses.has('deleted') || statuses.has('removed')) messages.push('Removed file: this path is absent from a compared head. Its pinned diff still records the deletion.');
   if (file.presence === 'source-only') messages.push('Source-only file: this path is absent from the pinned context. Review the selected source diff.');
-  if (isBinaryFile(file) || changes.some(change => isBinaryFile(file, change))) messages.push('Binary or asset file: a text diff and static imports may be unavailable. GitHub may offer a binary preview.');
+  if (isBinaryFile(file) || changes.some(change => isBinaryFile(file, change))) messages.push(snapshot.mode === 'local-git' ? 'Binary or asset file: a text diff and static imports may be unavailable.' : 'Binary or asset file: a text diff and static imports may be unavailable. GitHub may offer a binary preview.');
   if (file.importCoverage === 'unsupported' || statuses.has('unparsed') || !/\.[cm]?[jt]sx?$/i.test(file.path)) messages.push('Unsupported parser for this file: dependency connections may be incomplete. No resolved imports does not mean no dependencies.');
   else if (file.importCoverage && file.importCoverage !== 'complete') messages.push(`Import analysis ${String(file.importCoverage)}: missing connections do not establish absence of dependencies.`);
   if (snapshot.stale === true || snapshot.coverage.reasons.some(reason => /stale|force.push|changed since|newer.*available/i.test(reason))) messages.push('Stale snapshot: these facts remain pinned to the displayed revision. Refresh the repository to analyze current changes.');

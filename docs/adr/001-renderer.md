@@ -10,6 +10,8 @@ Do not replace the renderer on the basis of a generic performance claim. An isol
 
 Canvas already provides the approved organic island treatment, hollow context circles, collision-bounded labels and semantic application controls. The bounded measurements below show both approaches can reach the required target on this machine. They do not establish a speed ranking: the Canvas sample used a production build and an earlier Chrome patch; the candidate sample uses Vite development and includes its deliberately simple overlay and full-list implementation. Migrating now adds WebGL/program lifecycle and coordinate synchronization cost without an established user benefit.
 
+Later change: the organic island treatment was replaced by rounded rectangles sized by file count (dense first-fit packing in `packages/graph-core`), with no island names on the canvas by default. Names appear in one hover/keyboard-focus tooltip; changed islands carry a green border and a count badge. The renderer stays Canvas 2D; island hover and focus rings are DOM so they never rebuild the cached scene. All measurements in this record, including the Canvas production figures it cites, were taken on the organic-island renderer before that change. The rectangle renderer has not been measured on its own yet; until it is, only the CI "Graph target budgets" run covers it.
+
 ## Measured candidate
 
 Recorded 2026-11-03T17:09:14Z; Windows x64, Intel Core Ultra 9 275HX, 24 logical CPUs, 33,752,997,888 RAM bytes; Chrome 156.0.8078.80; 1600×1000, DPR 1, seed 42. The renderer string reported `WebKit WebGL`; this identifies the API result, not a verified physical GPU model.

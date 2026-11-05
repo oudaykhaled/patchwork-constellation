@@ -27,6 +27,25 @@ describe('bounded memory storage', () => {
     expect((await store.getSnapshot(scope, snapshot.id))?.nodes[0]?.path).toBe('src/index.ts');
     expect(await store.getSnapshot({ ...scope, repository: 'example/repo' }, snapshot.id)).toBeDefined();
   });
+  it('keeps the 16 MiB default and applies a configured, bounded snapshot ceiling', async () => {
+    const big = { ...snapshot, coverage: { status: 'partial' as const, reasons: ['x'.repeat(17_000_000)] } };
+    await expect(store.putSnapshot(scope, big)).rejects.toMatchObject({ code: 'SNAPSHOT_LIMIT', status: 413 });
+    const larger = await createStore({ databaseUrl: '', maxSnapshotBytes: 32 * 1_048_576 });
+    await expect(larger.putSnapshot(scope, big)).resolves.toBeUndefined();
+    await expect(createStore({ databaseUrl: '', maxSnapshotBytes: 65 * 1_048_576 })).rejects.toThrow('Invalid storage bound');
+    await larger.close();
+  });
+  it('raises the ceiling for local-git snapshots only', async () => {
+    const reasons = ['x'.repeat(17_000_000)];
+    const local: GraphSnapshot = { ...snapshot, mode: 'local-git', contextSha: 'a'.repeat(40), repository: { ...snapshot.repository, htmlUrl: 'local-git://example/repo' }, coverage: { status: 'partial', reasons } };
+    const remote: GraphSnapshot = { ...snapshot, mode: 'github', contextSha: 'a'.repeat(40), coverage: { status: 'partial', reasons } };
+    const mixed = await createStore({ databaseUrl: '', maxLocalSnapshotBytes: 64 * 1_048_576 });
+    await expect(mixed.putSnapshot(scope, local)).resolves.toBeUndefined();
+    await expect(mixed.putSnapshot(scope, remote)).rejects.toMatchObject({ code: 'SNAPSHOT_LIMIT', status: 413 });
+    await expect(mixed.putSnapshot(scope, { ...snapshot, coverage: { status: 'partial', reasons } })).rejects.toMatchObject({ code: 'SNAPSHOT_LIMIT', status: 413 });
+    await expect(createStore({ databaseUrl: '', maxLocalSnapshotBytes: 65 * 1_048_576 })).rejects.toThrow('Invalid storage bound');
+    await mixed.close();
+  });
   it('rejects mismatched repositories and invalid graph references', async () => {
     await expect(store.putSnapshot({ ...scope, repository: 'other/repo' }, snapshot)).rejects.toThrow('does not match');
     await expect(store.putSnapshot(scope, { ...snapshot, nodes: [{ ...snapshot.nodes[0]!, groupId: 'missing' }] })).rejects.toThrow();

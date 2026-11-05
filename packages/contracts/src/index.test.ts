@@ -200,3 +200,41 @@ describe('analysis job contract', () => {
     for (const invalid of [{ ...job, schemaVersion: undefined }, { ...job, progress: 101 }, { ...job, snapshotId: undefined }, { ...job, status: 'failed' }, { ...job, updatedAt: '2025-01-01T00:00:00Z' }]) expect(AnalysisJobSchema.safeParse(invalid).success).toBe(false);
   });
 });
+
+describe('local-git snapshots', () => {
+  const sha = 'a'.repeat(40), base = 'b'.repeat(40), head = 'c'.repeat(40);
+  const local = {
+    ...valid, mode: 'local-git', contextSha: sha,
+    repository: { ...valid.repository, owner: 'local', name: 'repo', fullName: 'local/repo', htmlUrl: 'local-git://local/repo' },
+    edges: [{ ...valid.edges[0], evidence: { path: 'src/a.ts', line: 1, snapshotSha: sha, resolver: 'typescript-v1' } }],
+    sources: [{ ...valid.sources[0], baseSha: base, headSha: head, url: 'local-git://local/repo/pull/1' }],
+  } as GraphSnapshot;
+  it('accepts opaque local references and keeps the pinned-SHA rules of GitHub mode', () => {
+    expect(GraphSnapshotSchema.safeParse(local).success).toBe(true);
+    expect(GraphSnapshotSchema.safeParse({ ...local, contextSha: 'main' }).success).toBe(false);
+    expect(GraphSnapshotSchema.safeParse({ ...local, sources: [{ ...local.sources[0], headSha: 'head' }] }).success).toBe(false);
+    expect(GraphSnapshotSchema.safeParse({ ...local, edges: [{ ...local.edges[0], evidence: { path: 'src/a.ts' } }] }).success).toBe(false);
+  });
+  it('never mixes link spaces between modes', () => {
+    expect(GraphSnapshotSchema.safeParse({ ...local, repository: { ...local.repository, htmlUrl: 'https://github.com/local/repo' } }).success).toBe(false);
+    expect(GraphSnapshotSchema.safeParse({ ...local, sources: [{ ...local.sources[0], url: 'https://github.com/local/repo/pull/1' }] }).success).toBe(false);
+    const github = { ...local, mode: 'github', repository: { ...local.repository, htmlUrl: 'https://github.com/local/repo' }, sources: [{ ...local.sources[0], url: 'https://github.com/local/repo/pull/1' }] };
+    expect(GraphSnapshotSchema.safeParse(github).success).toBe(true);
+    expect(GraphSnapshotSchema.safeParse({ ...github, repository: { ...github.repository, htmlUrl: 'local-git://local/repo' } }).success).toBe(false);
+    expect(GraphSnapshotSchema.safeParse({ ...github, sources: [{ ...github.sources[0], url: 'local-git://local/repo/pull/1' }] }).success).toBe(false);
+    expect(GraphSnapshotSchema.safeParse({ ...valid, sources: [{ ...valid.sources[0], url: 'local-git://demo/repo/pull/1' }] }).success).toBe(false);
+  });
+  it('rejects local references that could carry a path, host or query', () => {
+    for (const htmlUrl of ['local-git:/abs/repo', 'local-git://local/abs/path/repo', 'local-git://local/repo/../x', 'local-git://local/repo?x=1', 'local-git://local/repo/blob/main', 'file:///tmp/repo']) expect(GraphSnapshotSchema.safeParse({ ...local, repository: { ...local.repository, htmlUrl } }).success).toBe(false);
+  });
+  it('accepts a recorded footprint only in local mode, with origin and incomplete coverage', () => {
+    const recorded = { ...local.sources[0], comparisonKind: 'recorded', baseSha: undefined, headSha: head, recordedOrigin: 'export file', coverage: { status: 'partial', reasons: ['Recorded list; no Git comparison.'] } };
+    expect(GraphSnapshotSchema.safeParse({ ...local, sources: [recorded] }).success).toBe(true);
+    expect(GraphSnapshotSchema.safeParse({ ...local, sources: [{ ...recorded, headSha: undefined }] }).success).toBe(true);
+    expect(GraphSnapshotSchema.safeParse({ ...local, sources: [{ ...recorded, recordedOrigin: undefined }] }).success).toBe(false);
+    expect(GraphSnapshotSchema.safeParse({ ...local, sources: [{ ...recorded, coverage: { status: 'complete', reasons: [] } }] }).success).toBe(false);
+    expect(GraphSnapshotSchema.safeParse({ ...local, sources: [{ ...recorded, headSha: 'not-a-sha' }] }).success).toBe(false);
+    const github = { ...local, mode: 'github', repository: { ...local.repository, htmlUrl: 'https://github.com/local/repo' }, sources: [{ ...recorded, url: 'https://github.com/local/repo/pull/1' }] };
+    expect(GraphSnapshotSchema.safeParse(github).success).toBe(false);
+  });
+});

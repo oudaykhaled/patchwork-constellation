@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GitHubError, parseRepository } from '@patchwork/github';
+import { trackGitProcess } from './git-processes';
 
 export const EMPTY_GIT_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 export interface GitDiffFile { filename: string; previous_filename?: string; status: string; additions: number; deletions: number; binary?: boolean; }
@@ -12,12 +13,32 @@ export interface GitFallbackLimits { timeoutMs?: number; maxDiskBytes?: number; 
 const shaPattern = /^[a-f0-9]{40}$/i;
 
 // No inherited Git config, credentials, proxy commands, diff drivers or executable hooks.
-function safeEnvironment(): NodeJS.ProcessEnv {
+export function safeEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const name of ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR']) if (process.env[name]) env[name] = process.env[name];
   return { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_TERMINAL_PROMPT: '0', GIT_LFS_SKIP_SMUDGE: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0' };
 }
-const config = ['-c', 'core.hooksPath=', '-c', 'credential.helper=', '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'http.followRedirects=false', '-c', 'fetch.recurseSubmodules=false', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', '-c', 'diff.renameLimit=1000'];
+/**
+ * Environment for reading an existing local mirror: the safe base plus switches that
+ * stop promisor-remote lazy fetching and user-initiated protocol use, so a read can
+ * never turn into a transfer even if a mirror were a partial clone.
+ */
+export function localSafeEnvironment(): NodeJS.ProcessEnv {
+  return { ...safeEnvironment(), GIT_NO_LAZY_FETCH: '1', GIT_PROTOCOL_FROM_USER: '0', GIT_ALLOW_PROTOCOL: 'none', GIT_LITERAL_PATHSPECS: '1', GIT_ASKPASS: '', SSH_ASKPASS: '', GIT_SSH_COMMAND: 'false' };
+}
+/**
+ * Inexact rename detection compares every removed file with every added file, so its cost
+ * grows with their product. Above this many files on either side Git skips it (and says
+ * so); local mode reports that as a coverage reason. 0 would mean "no limit".
+ */
+export const GIT_RENAME_LIMIT = 1000;
+/**
+ * Configuration for reading an existing local mirror. Unlike the remote fallback it
+ * enables no transport at all (protocol.allow=never with no https exception), so no
+ * object can ever be fetched.
+ */
+export const LOCAL_SAFE_GIT_CONFIG: readonly string[] = Object.freeze(['-c', 'core.hooksPath=', '-c', 'core.fsmonitor=false', '-c', 'protocol.allow=never', '-c', 'credential.helper=', '-c', `diff.renameLimit=${GIT_RENAME_LIMIT}`, '-c', 'maintenance.auto=false', '-c', 'gc.auto=0']);
+const config = ['-c', 'core.hooksPath=', '-c', 'credential.helper=', '-c', 'protocol.allow=never', '-c', 'protocol.https.allow=always', '-c', 'http.followRedirects=false', '-c', 'fetch.recurseSubmodules=false', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', '-c', `diff.renameLimit=${GIT_RENAME_LIMIT}`];
 
 async function diskUsage(path: string): Promise<number> {
   let size = 0;
@@ -40,6 +61,7 @@ async function runGit(args: string[], directory: string, limits: Required<GitFal
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawn('git', [...config, ...args], { cwd: directory, env: safeEnvironment(), shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    trackGitProcess(child);
     const output: Buffer[] = []; let bytes = 0; let failure: Error | undefined; let checking = false;
     const stop = (error: Error) => { failure ??= error; child.kill('SIGKILL'); };
     const aborted = () => stop(new GitHubError('Git fallback was canceled.', 499, 'ABORTED'));

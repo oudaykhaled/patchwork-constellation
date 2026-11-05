@@ -9,7 +9,7 @@ import { enrichSelectedSourceDependencies } from './source-dependencies';
 
 interface ApiCommit { sha: string; html_url?: string; commit: { message: string; committer?: { date?: string } }; parents: { sha: string }[]; files?: ApiFile[]; }
 interface ApiPull { number: number; title: string; html_url: string; state: string; updated_at?: string; changed_files?: number; base: { sha: string; ref: string }; head: { sha: string; ref: string }; }
-interface ApiFile { filename: string; previous_filename?: string; status: string; additions?: number; deletions?: number; sha?: string; binary?: boolean; }
+export interface ApiFile { filename: string; previous_filename?: string; status: string; additions?: number; deletions?: number; sha?: string; binary?: boolean; }
 interface ApiComparison { merge_base_commit: { sha: string }; files?: ApiFile[]; }
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const MAX_SELECTION = 20;
@@ -26,25 +26,51 @@ function permitsPinnedFallback(error: unknown): boolean {
   return error instanceof GitHubError && error.code !== 'AUTH_FAILED' && (error.status === 403 || error.status === 404 || error.status === 422 || error.status === 429 || error.status >= 500);
 }
 
-function toChanges(files: ApiFile[], snapshot: GraphSnapshot, sourceId: string): { changes: FileChange[]; nodes: FileNode[] } {
+/**
+ * How an already-mapped source-only file relates to the row being mapped, as proven by
+ * history: 'same' when it is this row's file (the row's own line of history touched it, for
+ * example a later commit that already modified the file this row adds), 'other' when it is a
+ * different file that uses the same path (another branch added it), and undefined when history
+ * does not tell, in which case the path rules below apply unchanged. Callers that pass no
+ * judge (GitHub mode) keep the path rules exactly.
+ */
+export type ChangeLineage = (node: FileNode, file: ApiFile) => 'same' | 'other' | undefined;
+export interface ToChangesOptions { lineage?: ChangeLineage; }
+
+export function toChanges(files: ApiFile[], snapshot: GraphSnapshot, sourceId: string, options: ToChangesOptions = {}): { changes: FileChange[]; nodes: FileNode[] } {
   const pathMap = new Map<string, FileNode[]>(); const extra: FileNode[] = [];
   const remember = (path: string, node: FileNode) => { const nodes = pathMap.get(path) ?? []; if (!nodes.includes(node)) nodes.push(node); pathMap.set(path, nodes); };
   for (const node of snapshot.nodes) { remember(node.path, node); if (Array.isArray(node.lineageAliases)) for (const alias of node.lineageAliases) if (typeof alias === 'string') remember(alias, node); }
-  const unambiguous = (path: string) => { const candidates = pathMap.get(path) ?? []; return candidates.length === 1 ? candidates[0] : undefined; };
+  const { lineage } = options;
+  const unambiguous = (path: string, file: ApiFile) => {
+    const candidates = pathMap.get(path) ?? [];
+    if (!lineage) return candidates.length === 1 ? candidates[0] : undefined;
+    // History decides between same-path identities first; without an answer the single remaining candidate is used.
+    const same = candidates.filter(candidate => lineage(candidate, file) === 'same');
+    if (same.length) return same.length === 1 ? same[0] : undefined;
+    const open = candidates.filter(candidate => lineage(candidate, file) !== 'other');
+    return open.length === 1 ? open[0] : undefined;
+  };
   const changes = files.map(file => {
     // A reported rename may map to a surviving context path, never an invented fuzzy rename.
-    let node = unambiguous(file.filename) ?? (file.status === 'renamed' && file.previous_filename ? unambiguous(file.previous_filename) : undefined);
+    let node = unambiguous(file.filename, file) ?? (file.status === 'renamed' && file.previous_filename ? unambiguous(file.previous_filename, file) : undefined);
     // Independent source-only additions are not proven to share lineage, even
     // when their path/content is identical. Content equality is not ancestry.
+    // Only history can join them: a same-path file that this row's own line of history
+    // already touched is this row's file, whichever of the two loaded first.
     const candidates = pathMap.get(file.filename) ?? [];
-    const ambiguousAddition = file.status === 'added' && candidates.some(candidate => candidate.presence === 'source-only' && !candidate.sourceIds.includes(sourceId));
+    const continued = Boolean(lineage && node && lineage(node, file) === 'same');
+    const separated = Boolean(lineage && !node && candidates.some(candidate => lineage(candidate, file) === 'other'));
+    const ambiguousAddition = !continued && file.status === 'added' && candidates.some(candidate => candidate.presence === 'source-only' && !candidate.sourceIds.includes(sourceId));
     if (!node || ambiguousAddition) {
       // A confirmed rename anchors a missing-context identity at its former path.
       // A later deletion of that former path then resolves through the retained alias.
       const base = nodeForPath(snapshot.repository.fullName, file.status === 'renamed' && file.previous_filename ? file.previous_filename : file.filename);
-      const candidateId = ambiguousAddition || file.status === 'added' ? `${base.id}@${hash(`${sourceId}:${file.sha ?? 'unknown-blob'}`).slice(0, 12)}` : base.id;
+      // A change that history places on another line than every same-path file gets its own
+      // source-scoped identity, so it can never fall back onto the other line's plain path ID.
+      const candidateId = ambiguousAddition || separated || file.status === 'added' ? `${base.id}@${hash(`${sourceId}:${file.sha ?? 'unknown-blob'}`).slice(0, 12)}` : base.id;
       node = snapshot.nodes.find(item => item.id === candidateId) ?? extra.find(item => item.id === candidateId);
-      if (!node) { node = { ...base, path: file.filename, groupId: nodeForPath(snapshot.repository.fullName, file.filename).groupId, id: candidateId, presence: file.status === 'removed' ? 'deleted' : 'source-only', status: 'unparsed', language: languageFor(file.filename), sourceIds: [sourceId], importCoverage: 'excluded', importReasons: ['This file has no inventoried context blob. Its source-specific status and dependency evidence remain in the source comparison layer.'], blobSha: file.sha, ...(ambiguousAddition ? { ambiguousLineage: true } : {}) }; extra.push(node); }
+      if (!node) { node = { ...base, path: file.filename, groupId: nodeForPath(snapshot.repository.fullName, file.filename).groupId, id: candidateId, presence: file.status === 'removed' ? 'deleted' : 'source-only', status: 'unparsed', language: languageFor(file.filename), sourceIds: [sourceId], importCoverage: 'excluded', importReasons: ['This file has no inventoried context blob. Its source-specific status and dependency evidence remain in the source comparison layer.'], blobSha: file.sha, ...(ambiguousAddition || separated ? { ambiguousLineage: true } : {}) }; extra.push(node); }
       remember(file.filename, node);
     }
     if (file.status === 'renamed' && file.previous_filename) {
@@ -54,6 +80,38 @@ function toChanges(files: ApiFile[], snapshot: GraphSnapshot, sourceId: string):
     return { fileId: node.id, path: file.filename, status: statusFor(file.status), additions: Math.max(0, file.additions ?? 0), deletions: Math.max(0, file.deletions ?? 0), ...(file.binary ? { binary: true } : {}), ...(file.previous_filename ? { previousPath: file.previous_filename } : {}) };
   });
   return { changes, nodes: extra };
+}
+
+export interface MergedChange { fileId: string; path: string; status: ChangeStatus; paths: string[]; statuses: ChangeStatus[]; }
+const gone = (status: ChangeStatus) => status === 'removed' || status === 'deleted';
+/**
+ * One file identity may only appear once per source. Rename lineage recorded by another
+ * loaded source can make two rows of a later footprint resolve to the same file, for
+ * example a case-only rename that an export lists as a removal plus an addition. Those
+ * rows become one change: a removal plus a surviving path is a rename from the removed
+ * path; otherwise the surviving row keeps its status (mixed statuses become modified).
+ * Line counts are summed. Every merge is returned so the caller can explain it.
+ */
+export function mergeChangesByIdentity(changes: FileChange[], currentPath: (fileId: string) => string | undefined): { changes: FileChange[]; merged: MergedChange[] } {
+  const groups = new Map<string, FileChange[]>();
+  for (const change of changes) { const group = groups.get(change.fileId); if (group) group.push(change); else groups.set(change.fileId, [change]); }
+  if (groups.size === changes.length) return { changes, merged: [] };
+  const result: FileChange[] = []; const merged: MergedChange[] = [];
+  for (const [fileId, rows] of groups) {
+    if (rows.length === 1) { result.push(rows[0]!); continue; }
+    const current = currentPath(fileId);
+    const present = rows.filter(row => !gone(row.status)), removed = rows.filter(row => gone(row.status));
+    const primary = present.find(row => row.path === current) ?? present.at(-1) ?? rows.find(row => row.path === current) ?? rows.at(-1)!;
+    let status: ChangeStatus = primary.status; let previousPath = primary.previousPath;
+    if (present.length && removed.length) { status = 'renamed'; previousPath ??= removed.find(row => row.path !== primary.path)?.path; }
+    else if (present.length && new Set(present.map(row => row.status)).size > 1) status = 'modified';
+    if (status === 'renamed' && (!previousPath || previousPath === primary.path)) { status = 'modified'; previousPath = undefined; }
+    const additions = gone(status) ? 0 : rows.reduce((sum, row) => sum + row.additions, 0);
+    const deletions = status === 'added' ? 0 : rows.reduce((sum, row) => sum + row.deletions, 0);
+    result.push({ fileId, path: primary.path, status, additions, deletions, ...(rows.some(row => row.binary) ? { binary: true } : {}), ...(previousPath && previousPath !== primary.path ? { previousPath } : {}) });
+    merged.push({ fileId, path: primary.path, status, paths: rows.map(row => row.path), statuses: rows.map(row => row.status) });
+  }
+  return { changes: result, merged };
 }
 
 export async function loadSourceChanges(snapshot: GraphSnapshot, kind: 'pr' | 'commit', ids: string[], options: AnalysisOptions = {}): Promise<GraphSnapshot> {

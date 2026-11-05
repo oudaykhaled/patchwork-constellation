@@ -1,4 +1,4 @@
-import { layoutGraph, preserveLayout } from './index';
+import { ISLAND_SLOT_INSET, layoutGraph, preserveLayout } from './index';
 import type { GraphData, GraphLayout, Point } from './index';
 
 export interface LayoutTask {
@@ -38,10 +38,10 @@ export function executeLayoutTask(task: LayoutTask): GraphLayout {
   const nodeById = new Map(nodes.map(node => [node.id, node]));
   const islands = layout.islands.map(island => {
     const placed = island.nodes.map(node => nodeById.get(node.id)!);
-    // Pins are world-space positions. Expand the hull instead of letting a
+    // Pins are world-space positions. Grow the rectangle instead of letting a
     // pinned file escape its island; do not move any surviving file.
-    const rx = Math.max(island.rx, ...placed.map(node => Math.abs(node.x - island.x) / .69 + 16));
-    const ry = Math.max(island.ry, ...placed.map(node => Math.abs(node.y - island.y) / .7 + 16));
+    const rx = Math.max(island.rx, ...placed.map(node => Math.abs(node.x - island.x) + ISLAND_SLOT_INSET));
+    const ry = Math.max(island.ry, ...placed.map(node => Math.abs(node.y - island.y) + ISLAND_SLOT_INSET));
     return { ...island, rx, ry, nodes: placed };
   });
   const minX = Math.min(layout.bounds.x, ...islands.map(island => island.x - island.rx - 50));

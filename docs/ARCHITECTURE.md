@@ -37,7 +37,7 @@ Jev makes typed membership decisions; a separately selected generative adapter p
 
 ## Rendering and capacity
 
-GRAPH-01 measures Sigma.js/Graphology for circles, rings, organic island backgrounds, labels and hit testing. Keep renderer/data/layout independent. Worker layout settles and preserves coordinates on selection. Culling/detail suppression must retain honest totals. WebGL failure offers a DOM list.
+GRAPH-01 measures Sigma.js/Graphology for circles, rings, organic island backgrounds, labels and hit testing. Keep renderer/data/layout independent. Worker layout settles and preserves coordinates on selection, unless selection-only files overflow an island's rectangle or a new island's packed place is taken, which re-packs the map (see graph-ux.md). Culling/detail suppression must retain honest totals. WebGL failure offers a DOM list.
 
 Target 2,000 files/8,000 edges with a 10,000/40,000 stress fixture. Hardware/browser/seed/cold-warm state are mandatory evidence; capacity is not established until measured.
 
