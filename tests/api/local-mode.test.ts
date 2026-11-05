@@ -64,7 +64,7 @@ describe('local repository mode over HTTP', () => {
     expect(config.status).toBe(200);
     expect(config.body.local).toMatchObject({ enabled: true, only: true, repositories: [{ fullName: 'local/fixture', label: 'Fixture', defaultRef: 'main' }] });
     expect(config.body.github.publicRepositories).toBe(false);
-    // The worker launcher sizes local tasks from the registry the server loaded at startup.
+    // The server loaded the registry once at startup (the worker heap per task is tested in worker-lifecycle.test.ts).
     expect(currentLocalGitRegistry()?.limits).toMatchObject({ workerHeapMb: 512, maxSnapshotBytes: 32 * 1_048_576 });
     expect(JSON.stringify(config.body)).not.toContain(root);
     const hostile = await new Promise<number>((resolve, reject) => { const outgoing = request({ host: '127.0.0.1', port, path: '/api/config', headers: { Host: 'attacker.example' } }, incoming => { incoming.resume(); resolve(incoming.statusCode!); }); outgoing.on('error', reject); outgoing.end(); });
