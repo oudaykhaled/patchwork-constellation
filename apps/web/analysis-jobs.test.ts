@@ -38,6 +38,29 @@ describe('durable analysis coordination', () => {
     await jobs.close(); await store.close();
   });
 
+  it('never reuses a stored local job after the local configuration changed', async () => {
+    // One durable store outlives two coordinators, as Postgres outlives a server restart.
+    const store = await createStore({ databaseUrl: '' });
+    const run: typeof runAnalysisInWorker = vi.fn(async () => structuredClone(demoSnapshot));
+    const save = async (snapshot: typeof demoSnapshot, owner: StoreScope) => { await store.putSnapshot(owner, snapshot); return snapshot; };
+    const before = { ...input, localFingerprint: 'a'.repeat(20) }, after = { ...input, localFingerprint: 'b'.repeat(20) };
+    expect(analysisJobId(scope, before)).not.toBe(analysisJobId(scope, after));
+    // A GitHub job for the same name and commit is a different job as well.
+    expect(analysisJobId(scope, before)).not.toBe(analysisJobId(scope, input));
+    expect(() => analysisJobId(scope, { ...input, localFingerprint: '../x' })).toThrow('Invalid local repository fingerprint.');
+    const first = new AnalysisJobs(store, new WorkerAdmission(2), run, save);
+    const original = await first.submit(scope, before);
+    await vi.waitFor(async () => expect((await first.get(original.jobId))?.status).toBe('ready'));
+    await first.close();
+    const restarted = new AnalysisJobs(store, new WorkerAdmission(2), run, save);
+    expect((await restarted.submit(scope, before)).reused).toBe(true);
+    const changed = await restarted.submit(scope, after);
+    expect(changed).toMatchObject({ reused: false });
+    expect(changed.jobId).not.toBe(original.jobId);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    await restarted.close(); await store.close();
+  });
+
   it('reclaims an expired crashed-worker lease, retaining pinned input and monotonic progress', async () => {
     let clock = Date.now(); const store = await createStore({ databaseUrl: '', now: () => clock });
     const job = newJob({ ...input, analysisVersion: 'static-v2', groupingVersion: 'baseline-v1' }, { id: analysisJobId(scope, input), now: clock });

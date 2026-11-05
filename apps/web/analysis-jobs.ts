@@ -9,7 +9,11 @@ import { publicErrorCode, publicErrorMessage } from './public-errors';
 
 export const ANALYSIS_VERSION = ANALYZER_VERSION;
 export const GROUPING_VERSION = GROUPING_RULES_VERSION;
-export interface PinnedAnalysisInput extends AnalyzeInput { displayContextRef?: string; /** Server-created refresh generation; never accepted from public analysis input. */ refreshVersion?: string }
+export interface PinnedAnalysisInput extends AnalyzeInput {
+  displayContextRef?: string;
+  /** Server-created refresh generation; never accepted from public analysis input. */ refreshVersion?: string;
+  /** Registry fingerprint of a local repository (server-created); marks a local job. */ localFingerprint?: string;
+}
 export type AnalysisJobView = AnalysisJob & { stage: StoredJob['status']; version: string; graphUrl?: string; snapshot?: GraphSnapshot; code?: string; retryable?: boolean };
 const terminal = (job: StoredJob) => ['ready', 'partial', 'failed', 'cancelled'].includes(job.status);
 const errorMessage = publicErrorMessage;
@@ -23,7 +27,10 @@ const failureCode = (error: unknown, status: number) => { const code = publicErr
 
 export function analysisJobId(scope: StoreScope, input: PinnedAnalysisInput) {
   if (input.refreshVersion !== undefined && (!/^[A-Za-z0-9-]{8,100}$/.test(input.refreshVersion))) throw Object.assign(new Error('Invalid refresh generation.'), { status: 400 });
-  return createHash('sha256').update(JSON.stringify([scope.ownerId, scope.repository.toLowerCase(), input.contextRef, input.mode ?? 'pr', ANALYSIS_VERSION, GROUPING_VERSION, ...(input.refreshVersion ? [input.refreshVersion] : [])])).digest('hex');
+  if (input.localFingerprint !== undefined && !/^[a-f0-9]{8,64}$/.test(input.localFingerprint)) throw Object.assign(new Error('Invalid local repository fingerprint.'), { status: 400 });
+  // A local job is keyed by its registry fingerprint as well, so a changed configuration (or a
+  // GitHub job for the same name and commit) never reuses its stored snapshot.
+  return createHash('sha256').update(JSON.stringify([scope.ownerId, scope.repository.toLowerCase(), input.contextRef, input.mode ?? 'pr', ANALYSIS_VERSION, GROUPING_VERSION, ...(input.refreshVersion ? [input.refreshVersion] : []), ...(input.localFingerprint ? [`local-git:${input.localFingerprint}`] : [])])).digest('hex');
 }
 
 /** Resolve mutable refs once; the durable input contains only the resulting immutable SHA. */
