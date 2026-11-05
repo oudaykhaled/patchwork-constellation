@@ -4,6 +4,7 @@ import { request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Worker } from 'node:worker_threads';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { GraphSnapshot } from '@patchwork/contracts';
 import { createGitHistoryFixture, type GitHistoryFixture } from '../../packages/fixtures/src/git-history';
@@ -107,5 +108,47 @@ describe('local repository mode over HTTP', () => {
     expect(JSON.stringify(recorded.body)).not.toContain(root);
     expect(JSON.stringify(recorded.body)).not.toMatch(/https:\/\/github\.com\/local/);
     expect(outbound).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Runs the real analysis thread with a preload that reports and blocks every network attempt
+ * inside the thread. Stubbing fetch in this test process cannot see the worker's own globals.
+ */
+function runGuardedThread(workerData: unknown): Promise<{ attempts: string[]; result?: GraphSnapshot; error?: string }> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('../../apps/worker/src/thread.ts', import.meta.url), { workerData, execArgv: ['--import', 'tsx', '--import', new URL('./worker-network-guard.ts', import.meta.url).href] });
+    const outcome: { attempts: string[]; result?: GraphSnapshot; error?: string } = { attempts: [] };
+    const timer = setTimeout(() => { void worker.terminate(); reject(new Error('guarded worker did not finish')); }, 40_000);
+    worker.on('message', (message: { type: string; kind?: string; snapshot?: GraphSnapshot; error?: { message: string } }) => {
+      if (message.type === 'network-attempt') outcome.attempts.push(message.kind!);
+      else if (message.type === 'result') outcome.result = message.snapshot;
+      else if (message.type === 'error') outcome.error = message.error?.message;
+    });
+    worker.once('error', error => { clearTimeout(timer); reject(error); });
+    // The thread exits by itself once its work and its Git processes are done.
+    worker.once('exit', () => { clearTimeout(timer); resolve(outcome); });
+  });
+}
+
+describe('the analysis worker thread in local mode', () => {
+  it('makes no network attempt while analyzing and loading a local repository', { timeout: 60_000 }, async () => {
+    const repository = currentLocalGitRegistry()!.get('local/fixture')!;
+    const local = { only: true, maxSnapshotBytes: 32 * 1_048_576, repository };
+    const analyzed = await runGuardedThread({ task: { kind: 'repository', input: { repository: 'local/fixture' } }, options: {}, local });
+    expect(analyzed.error).toBeUndefined();
+    expect(analyzed.result).toMatchObject({ mode: 'local-git', contextSha: fixture.refs.merge });
+    const loaded = await runGuardedThread({ task: { kind: 'sources', snapshot: analyzed.result, sourceKind: 'commit', ids: [`commit:${fixture.refs.merge}`] }, options: {}, local });
+    expect(loaded.error).toBeUndefined();
+    expect(loaded.result!.sources.find(source => source.id === `commit:${fixture.refs.merge}`)).toMatchObject({ loaded: true, fileEvidence: 'local-git-diff' });
+    expect([...analyzed.attempts, ...loaded.attempts]).toEqual([]);
+  });
+
+  it('has a guard that does see network use inside the thread', { timeout: 60_000 }, async () => {
+    // A GitHub repository in mixed mode goes to GitHub, so the guard must report it.
+    const github = await runGuardedThread({ task: { kind: 'repository', input: { repository: 'acme/app' } }, options: { maxRetries: 0 }, local: { only: false, maxSnapshotBytes: 32 * 1_048_576 } });
+    expect(github.attempts.length).toBeGreaterThan(0);
+    expect(github.result).toBeUndefined();
+    expect(github.error).toBeDefined();
   });
 });
