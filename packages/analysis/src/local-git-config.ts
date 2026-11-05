@@ -125,12 +125,14 @@ const notesOf = (value: unknown) => Array.isArray(value) ? value.flatMap(item =>
  * - views: { id, title?, description?, sources: [{ kind: 'pr' | 'commit', ...a pull or commit }] };
  *   a source may also reference a listed pull or commit by number or sha alone.
  * Records are validated and de-duplicated across lists and views; anything dropped is
- * counted in problems, never silently ignored.
+ * counted in problems, never silently ignored. A record keeps at most maxFiles file rows,
+ * the same changed-file limit that a Git comparison of the repository obeys.
  */
-export function normalizeFootprints(input: unknown, repoFilter?: string[], maxRecords: number = LOCAL_LIMIT_DEFAULTS.maxListedSources): LocalFootprints {
+export function normalizeFootprints(input: unknown, repoFilter?: string[], maxRecords: number = LOCAL_LIMIT_DEFAULTS.maxListedSources, maxFiles: number = LOCAL_LIMIT_DEFAULTS.maxChangedFiles): LocalFootprints {
+  const fileLimit = Math.max(1, Math.min(maxFiles, LOCAL_LIMIT_CEILINGS.maxChangedFiles));
   if (!isRecord(input)) throw new Error('not an object');
   const records = new Map<string, FootprintRecord>(); const views: FootprintView[] = []; const problems: string[] = [];
-  let invalidRecords = 0, invalidFiles = 0, filtered = 0, overflow = 0;
+  let invalidRecords = 0, invalidFiles = 0, filtered = 0, overflow = 0, overLimitRecords = 0;
   const matchesRepo = (repo: unknown) => !repoFilter?.length || (typeof repo === 'string' && repoFilter.some(rule => rule.endsWith('*') ? repo.startsWith(rule.slice(0, -1)) : repo === rule));
   const add = (raw: Record<string, unknown>, kindHint: unknown, view?: string): string | undefined => {
     const kind = kindHint === 'pr' ? 'pr' : kindHint === 'commit' ? 'commit' : undefined;
@@ -150,12 +152,12 @@ export function normalizeFootprints(input: unknown, repoFilter?: string[], maxRe
     let files: FootprintFile[] | undefined;
     if (Array.isArray(raw.files)) {
       const seen = new Set<string>(); files = [];
-      for (const item of raw.files.slice(0, LOCAL_LIMIT_CEILINGS.maxChangedFiles)) {
+      for (const item of raw.files.slice(0, fileLimit)) {
         const file = normalizeFile(item);
         if (!file || seen.has(file.path)) { invalidFiles++; continue; }
         seen.add(file.path); files.push(file);
       }
-      if (raw.files.length > LOCAL_LIMIT_CEILINGS.maxChangedFiles) invalidFiles += raw.files.length - LOCAL_LIMIT_CEILINGS.maxChangedFiles;
+      if (raw.files.length > fileLimit) { invalidFiles += raw.files.length - fileLimit; overLimitRecords++; }
     }
     const headCandidate = kind === 'pr' ? raw.headSha : sha;
     records.set(key, {
@@ -188,6 +190,7 @@ export function normalizeFootprints(input: unknown, repoFilter?: string[], maxRe
   if (!Array.isArray(input.views) && !Array.isArray(input.pulls) && !Array.isArray(input.commits)) throw new Error('no records');
   if (invalidRecords) problems.push(`${invalidRecords} footprint records were invalid and are not listed.`);
   if (invalidFiles) problems.push(`${invalidFiles} footprint file rows were invalid, duplicated or over the per-record limit and are not shown.`);
+  if (overLimitRecords) problems.push(`${overLimitRecords} footprint records list more than ${fileLimit} files (maxChangedFiles); only their first ${fileLimit} rows are shown.`);
   if (overflow) problems.push(`${overflow} footprint records exceed the listing limit of ${maxRecords} and are not listed.`);
   if (filtered && !records.size) problems.push('No footprint records matched this repository.');
   return { records: [...records.values()], views, problems };
@@ -216,10 +219,11 @@ async function loadRepository(raw: unknown, index: number, base: string, globalL
   }
   let footprints: LocalFootprints | undefined, footprintHash = '';
   if (entry.footprints) {
-    try { const bytes = await readBounded(expandPath(entry.footprints, base), MAX_FOOTPRINT_BYTES); footprints = normalizeFootprints(JSON.parse(bytes.toString('utf8')), entry.footprintRepos, limits.maxListedSources); footprintHash = hash(bytes); }
+    try { const bytes = await readBounded(expandPath(entry.footprints, base), MAX_FOOTPRINT_BYTES); footprints = normalizeFootprints(JSON.parse(bytes.toString('utf8')), entry.footprintRepos, limits.maxListedSources, limits.maxChangedFiles); footprintHash = hash(bytes); }
     catch { problems.push(`${label}: the footprint file is unreadable or has no pull or commit records.`); return undefined; }
   }
-  const fingerprint = hash(JSON.stringify([address.fullName, limits, entry.include, entry.exclude, mappingHash, footprintHash, entry.footprintRepos ?? []]));
+  // Everything that shapes a local snapshot except the commit: the mirror, its label and scope.
+  const fingerprint = hash(JSON.stringify([address.fullName, gitDir, entry.label, limits, entry.include, entry.exclude, mappingHash, footprintHash, entry.footprintRepos ?? []]));
   return { fullName: address.fullName, owner: address.owner, name: address.name, label: entry.label, gitDir, defaultRef: entry.defaultRef, include: entry.include, exclude: entry.exclude, ...(mapping !== undefined ? { mapping } : {}), ...(footprints ? { footprints } : {}), limits, fingerprint };
 }
 

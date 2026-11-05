@@ -154,7 +154,7 @@ describe('local-git source', () => {
 
   it('pages first-parent commits and pins refs only through the mirror', async () => {
     const pinned = await pinLocalAnalysisInput({ repository: 'local/fixture', contextRef: 'feature-b' }, repository());
-    expect(pinned).toEqual({ repository: 'local/fixture', contextRef: fixture.refs.featureB, displayContextRef: 'feature-b', mode: undefined });
+    expect(pinned).toEqual({ repository: 'local/fixture', contextRef: fixture.refs.featureB, displayContextRef: 'feature-b', mode: undefined, localFingerprint: repository().fingerprint });
     const page = await listLocalRepositorySources(repository(), 'commit', 1, fixture.refs.merge);
     expect(page.sources.map(source => source.sha)).toEqual([fixture.refs.merge, fixture.refs.root]);
     expect(page.nextPage).toBeNull();
@@ -183,6 +183,92 @@ describe('local-git source', () => {
 
   it('fails explicitly instead of storing a snapshot over the configured size limit', async () => {
     await expect(analyzeLocalRepository({ repository: 'local/fixture' }, repository(), { maxSnapshotBytes: 2_000 })).rejects.toMatchObject({ code: 'LOCAL_SNAPSHOT_LIMIT', status: 413 });
+  });
+
+  it('compares each source with one diff-tree run under a bounded rename limit', async () => {
+    const snapshot = await analyzeLocalRepository({ repository: 'local/fixture' }, repository());
+    spawned.length = 0;
+    await loadLocalSourceChanges(snapshot, 'commit', [`commit:${fixture.refs.merge}`], repository());
+    const diffs = spawned.filter(call => call.args.includes('diff-tree'));
+    expect(diffs).toHaveLength(1);
+    expect(diffs[0]!.args).toEqual(expect.arrayContaining(['--raw', '--numstat', 'diff.renameLimit=1000']));
+    for (const call of spawned) expect(call.args).not.toContain('diff.renameLimit=0');
+  });
+
+  it('lists many footprint records with one Git read, and only for the requested kind', async () => {
+    const pulls = Array.from({ length: 300 }, (_, index) => index % 3 === 2
+      ? { number: 1_000 + index, title: `Missing ${index}`, baseSha: 'e'.repeat(40), headSha: fixture.refs.featureA }
+      : { number: 1_000 + index, title: `Present ${index}`, baseSha: fixture.refs.root, headSha: fixture.refs.featureA });
+    writeFileSync(join(root, 'many-footprints.json'), JSON.stringify({ schemaVersion: 1, pulls }));
+    const many = (await loadLocalGitConfig(writeConfig('many', { footprints: join(root, 'many-footprints.json') }))).get('local/fixture')!;
+    spawned.length = 0;
+    const page = await listLocalRepositorySources(many, 'pr', 1);
+    expect(page.sources).toHaveLength(300);
+    expect(page.sources.filter(source => source.comparisonKind === 'merge-base')).toHaveLength(200);
+    expect(page.sources.filter(source => source.comparisonKind === 'recorded')).toHaveLength(100);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]!.args).toContain('--no-walk=unsorted');
+    // Commits: no record of that kind, so no record is checked; only the ref and one log page are read.
+    spawned.length = 0;
+    await listLocalRepositorySources(many, 'commit', 1);
+    expect(spawned.filter(call => call.args.includes('--no-walk=unsorted'))).toHaveLength(0);
+    expect(spawned.length).toBeLessThanOrEqual(2);
+    expectOfflineGit(many.gitDir);
+  });
+});
+
+// Two commits on top of a base: a small one, and a wide one that removes 1,001 files and adds
+// 1,001 different ones. The wide one is past Git's rename limit, and past a lowered maxChangedFiles.
+describe('local comparisons that hit a limit', () => {
+  let wideGitDir: string;
+  const refs = { small: '', wide: '' };
+  const registryWith = async (name: string, limits: Record<string, unknown>) => (await loadLocalGitConfig((() => {
+    const path = join(root, `${name}.json`);
+    writeFileSync(path, JSON.stringify({ version: 1, repositories: [{ id: 'local/wide', label: 'Wide', gitDir: wideGitDir, defaultRef: 'main', limits }] }));
+    return path;
+  })())).get('local/wide')!;
+  beforeAll(() => {
+    const work = join(root, 'wide-work'); wideGitDir = join(root, 'wide.git');
+    const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid' };
+    // No background gc or maintenance: it would repack the loose objects while the mirror copies them.
+    const git = (args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', ...args], { cwd: work, env, encoding: 'utf8' }).trim();
+    execFileSync('mkdir', ['-p', join(work, 'old'), join(work, 'next')]);
+    git(['init', '--quiet', '--object-format=sha1', '--initial-branch=main', '.']);
+    const names = Array.from({ length: 1_001 }, (_, index) => String(index).padStart(4, '0'));
+    for (const name of names) writeFileSync(join(work, 'old', `item-${name}.txt`), `item ${name}\nline two\nline three\n`);
+    writeFileSync(join(work, 'README.md'), 'base\n');
+    git(['add', '--all']); git(['commit', '--quiet', '-m', 'base']);
+    writeFileSync(join(work, 'README.md'), 'base\nsmall change\n');
+    git(['add', '--all']); git(['commit', '--quiet', '-m', 'small']); refs.small = git(['rev-parse', 'HEAD']);
+    execFileSync('rm', ['-r', join(work, 'old')]);
+    for (const name of names) writeFileSync(join(work, 'next', `entry-${name}.txt`), `item ${name}\nline two changed\nline three\n`);
+    git(['add', '--all']); git(['commit', '--quiet', '-m', 'wide']); refs.wide = git(['rev-parse', 'HEAD']);
+    execFileSync('git', ['clone', '--quiet', '--mirror', '--no-hardlinks', work, wideGitDir], { env });
+  });
+
+  it('says when Git skipped rename detection instead of spending minutes on it', async () => {
+    const wide = await registryWith('wide-default', {});
+    const snapshot = await analyzeLocalRepository({ repository: 'local/wide' }, wide);
+    const loaded = await loadLocalSourceChanges(snapshot, 'commit', [`commit:${refs.wide}`], wide);
+    const source = loaded.sources.find(item => item.id === `commit:${refs.wide}`)!;
+    expect(source).toMatchObject({ loaded: true, coverage: { status: 'partial' } });
+    expect(source.files).toHaveLength(2_002);
+    expect(source.files.filter(file => file.status === 'renamed')).toHaveLength(0);
+    expect(source.coverage!.reasons.join(' ')).toMatch(/Git skipped rename detection because the change adds and removes too many files to pair \(about 1,000 of each at most\)/);
+    expect(loaded.coverage.reasons.join(' ')).toContain('Git skipped rename detection');
+  });
+
+  it('fails only the source over maxChangedFiles and still loads the others', async () => {
+    const narrow = await registryWith('wide-narrow', { maxChangedFiles: 100 });
+    const snapshot = await analyzeLocalRepository({ repository: 'local/wide' }, narrow);
+    const loaded = await loadLocalSourceChanges(snapshot, 'commit', [`commit:${refs.small}`, `commit:${refs.wide}`], narrow);
+    expect(loaded.sources.find(item => item.id === `commit:${refs.small}`)).toMatchObject({ loaded: true, coverage: { status: 'complete' }, files: [{ path: 'README.md', status: 'modified' }] });
+    const wide = loaded.sources.find(item => item.id === `commit:${refs.wide}`)!;
+    expect(wide).toMatchObject({ loaded: false, files: [], coverage: { status: 'failed' } });
+    expect(wide.coverage!.reasons).toEqual([`${refs.wide.slice(0, 7)}: the comparison changes more than 100 files (the configured maxChangedFiles limit), so this change is not loaded.`]);
+    expect(loaded.coverage.reasons).toContain(wide.coverage!.reasons[0]);
+    expect(loaded.nodes.find(node => node.path === 'README.md')!.sourceIds).toEqual([`commit:${refs.small}`]);
+    expectOfflineGit(narrow.gitDir);
   });
 });
 

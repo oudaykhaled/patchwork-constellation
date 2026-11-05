@@ -13,7 +13,9 @@ import type { AnalysisProgress, AnalyzeInput } from './index';
 import { deriveGroups } from './groups';
 import { ANALYZER_VERSION } from './incremental';
 import { buildStaticGraph, type SnapshotReader, type TreeEntry } from './static-graph';
-import { EMPTY_GIT_TREE, LOCAL_SAFE_GIT_CONFIG, localSafeEnvironment, parseGitDiff, type GitDiffFile } from './git-fallback';
+import { GitHubError } from '@patchwork/github';
+import { EMPTY_GIT_TREE, GIT_RENAME_LIMIT, LOCAL_SAFE_GIT_CONFIG, localSafeEnvironment, parseGitDiff, type GitDiffFile } from './git-fallback';
+import { trackGitProcess } from './git-processes';
 import { mergeChangesByIdentity, toChanges, type ApiFile, type ChangeLineage } from './footprints';
 import { enrichSelectedSourceDependencies } from './source-dependencies';
 import type { FootprintRecord, LocalRepository } from './local-git-config';
@@ -34,7 +36,12 @@ const count = (value: number) => value.toLocaleString('en-US');
 export class LocalGitError extends Error {
   constructor(message: string, public status = 502, public code = 'LOCAL_GIT_FAILED') { super(message); this.name = 'LocalGitError'; }
 }
-export interface LocalGitRunOptions { signal?: AbortSignal; timeoutMs?: number; maxOutputBytes?: number; }
+export interface LocalGitRunOptions {
+  signal?: AbortSignal; timeoutMs?: number; maxOutputBytes?: number;
+  /** Called when Git says it skipped rename detection. Git's own text is never surfaced. */
+  onRenameLimit?: () => void;
+}
+const RENAME_LIMIT_WARNING = /rename detection was skipped|found copies from modified paths due to too many files/;
 
 /** The only process entry point for local mode. */
 export function runLocalGit(gitDir: string, args: string[], options: LocalGitRunOptions = {}): Promise<Buffer> {
@@ -44,19 +51,21 @@ export function runLocalGit(gitDir: string, args: string[], options: LocalGitRun
     if (options.signal?.aborted) return reject(new LocalGitError('The local read was cancelled.', 499, 'ABORTED'));
     const limit = options.maxOutputBytes ?? 64 * 1_048_576;
     const child = spawn('git', [`--git-dir=${gitDir}`, '--no-replace-objects', '--literal-pathspecs', ...LOCAL_SAFE_GIT_CONFIG, ...args], { cwd: gitDir, env: localSafeEnvironment(), shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const output: Buffer[] = []; let bytes = 0; let failure: LocalGitError | undefined;
+    trackGitProcess(child);
+    const output: Buffer[] = []; let bytes = 0; let failure: LocalGitError | undefined; let diagnostics = '';
     const stop = (error: LocalGitError) => { failure ??= error; child.kill('SIGKILL'); };
     const abort = () => stop(new LocalGitError('The local read was cancelled.', 499, 'ABORTED'));
     options.signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => stop(new LocalGitError('A local Git read exceeded its time budget.', 504, 'LOCAL_GIT_LIMIT')), options.timeoutMs ?? 60_000);
     child.stdout.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > limit) stop(new LocalGitError('A local Git read exceeded its output budget.', 413, 'LOCAL_GIT_LIMIT')); else output.push(chunk); });
-    child.stderr.on('data', () => { /* Never surface Git diagnostics: they can contain paths. */ });
+    // Never surface Git diagnostics: they can contain paths. Only a fixed warning is matched.
+    child.stderr.on('data', (chunk: Buffer) => { if (options.onRenameLimit) diagnostics = (diagnostics + chunk.toString('latin1')).slice(-4_096); });
     child.on('error', () => { failure ??= new LocalGitError('Git is not available on this host.', 502, 'LOCAL_GIT_FAILED'); });
     child.on('close', code => {
       clearTimeout(timer); options.signal?.removeEventListener('abort', abort);
       if (failure) reject(failure);
       else if (code !== 0) reject(new LocalGitError('The local mirror could not be read at the requested revision.', 502, 'LOCAL_GIT_FAILED'));
-      else resolve(Buffer.concat(output));
+      else { if (RENAME_LIMIT_WARNING.test(diagnostics)) options.onRenameLimit?.(); resolve(Buffer.concat(output)); }
     });
   });
 }
@@ -73,7 +82,6 @@ export async function resolveLocalCommit(repository: LocalRepository, ref: strin
   if (!sha || !SHA.test(sha)) throw new LocalGitError('That branch or commit is not in the local mirror.', 404, 'LOCAL_REF');
   return sha;
 }
-const commitExists = async (repository: LocalRepository, sha: string, signal?: AbortSignal) => SHA.test(sha) && (await tryGit(repository, ['rev-parse', '--verify', '--quiet', `${sha}^{commit}`], { signal, maxOutputBytes: 256 }))?.toString('utf8').trim().toLowerCase() === sha.toLowerCase();
 
 /** Pinned tree and blob access backed by ls-tree/cat-file. */
 export class LocalSnapshotReader implements SnapshotReader {
@@ -120,6 +128,24 @@ async function readCommit(repository: LocalRepository, sha: string, signal?: Abo
   const output = await tryGit(repository, ['log', '--no-walk', '--no-show-signature', '--no-color', '-z', LOG_FORMAT, sha], { signal, maxOutputBytes: 1_048_576 });
   return output ? parseLog(output)[0] : undefined;
 }
+/** Commits per Git call; keeps the argument list far below any platform limit. */
+const COMMIT_BATCH = 500;
+/**
+ * Reads many commits with one Git process per batch. Missing objects, trees and blobs are
+ * skipped (--ignore-missing), so the result holds exactly the SHAs that name commits in the
+ * mirror. A batch Git cannot read at all falls back to one read per SHA.
+ */
+async function readCommits(repository: LocalRepository, shas: (string | undefined)[], signal?: AbortSignal): Promise<Map<string, LocalCommit>> {
+  const wanted = unique(shas.filter((sha): sha is string => typeof sha === 'string' && SHA.test(sha)).map(sha => sha.toLowerCase()));
+  const found = new Map<string, LocalCommit>();
+  for (let start = 0; start < wanted.length; start += COMMIT_BATCH) {
+    const batch = wanted.slice(start, start + COMMIT_BATCH);
+    const output = await tryGit(repository, ['log', '--no-walk=unsorted', '--ignore-missing', '--no-show-signature', '--no-color', '-z', LOG_FORMAT, ...batch], { signal, maxOutputBytes: 16 * 1_048_576 });
+    if (output) { for (const commit of parseLog(output)) found.set(commit.sha, commit); continue; }
+    for (const sha of batch) { const commit = await readCommit(repository, sha, signal); if (commit?.sha === sha) found.set(sha, commit); }
+  }
+  return found;
+}
 
 const repositoryRef = (repository: LocalRepository, suffix = '') => `local-git://${repository.fullName}${suffix}`;
 function commitSource(repository: LocalRepository, commit: LocalCommit, extra: Partial<ChangeSource> = {}): ChangeSource {
@@ -152,16 +178,19 @@ function recordedSource(repository: LocalRepository, record: FootprintRecord): C
  * commits are in the mirror, the recorded file list otherwise, and an unloaded entry
  * with an explicit reason when neither exists.
  */
-async function footprintSources(repository: LocalRepository, signal?: AbortSignal): Promise<ChangeSource[]> {
+async function footprintSources(repository: LocalRepository, signal?: AbortSignal, kind?: 'pr' | 'commit'): Promise<ChangeSource[]> {
   const sources: ChangeSource[] = [];
-  for (const record of repository.footprints?.records ?? []) {
+  const records = (repository.footprints?.records ?? []).filter(record => !kind || record.kind === kind);
+  // One Git process answers every record (per batch), instead of one or two per record.
+  const commits = await readCommits(repository, records.flatMap(record => record.kind === 'commit' ? [record.sha] : [record.baseSha, record.headSha]), signal);
+  for (const record of records) {
     signal?.throwIfAborted();
     const extra = { footprintViews: record.views, footprintOrigin: record.origin };
     if (record.kind === 'commit' && record.sha) {
-      const commit = await readCommit(repository, record.sha, signal);
+      const commit = commits.get(record.sha);
       if (commit) { sources.push(commitSource(repository, commit, { ...extra, ...(record.title !== record.key ? { title: record.title } : {}) })); continue; }
     }
-    if (record.kind === 'pr' && record.baseSha && record.headSha && await commitExists(repository, record.baseSha, signal) && await commitExists(repository, record.headSha, signal)) {
+    if (record.kind === 'pr' && record.baseSha && record.headSha && commits.has(record.baseSha) && commits.has(record.headSha)) {
       sources.push({ id: record.key, kind: 'pr', number: record.number, title: record.title, label: `#${record.number}`, url: repositoryRef(repository, `/pull/${record.number}`), baseSha: record.baseSha, baseRefSha: record.baseSha, headSha: record.headSha, comparisonKind: 'merge-base', files: [], loaded: false, ...(record.state ? { state: record.state } : {}), ...(record.updatedAt ? { sourceUpdatedAt: record.updatedAt } : {}), ...extra });
       continue;
     }
@@ -179,7 +208,7 @@ async function gitCommitPage(repository: LocalRepository, contextSha: string, pa
 /** Bounded source listing. PR footprints are listed whole; first-parent commits are paged. */
 export async function listLocalRepositorySources(repository: LocalRepository, kind: 'pr' | 'commit', page = 1, contextSha?: string, options: { signal?: AbortSignal } = {}): Promise<{ sources: ChangeSource[]; nextPage: number | null }> {
   if (!Number.isSafeInteger(page) || page < 1 || page > 100) throw new LocalGitError('The requested page is invalid.', 400, 'INVALID_PAGINATION');
-  const recorded = page === 1 ? (await footprintSources(repository, options.signal)).filter(source => source.kind === kind) : [];
+  const recorded = page === 1 ? await footprintSources(repository, options.signal, kind) : [];
   if (kind === 'pr') return { sources: recorded, nextPage: null };
   const context = contextSha && SHA.test(contextSha) ? contextSha : await resolveLocalCommit(repository, repository.defaultRef, options.signal);
   const { commits, nextPage } = await gitCommitPage(repository, context, page, options.signal);
@@ -187,11 +216,16 @@ export async function listLocalRepositorySources(repository: LocalRepository, ki
   return { sources: [...commits.map(commit => commitSource(repository, commit)).filter(source => !ids.has(source.id)), ...recorded], nextPage };
 }
 
-/** Resolve the context once on the server; the durable job input carries only the SHA. */
-export async function pinLocalAnalysisInput(input: AnalyzeInput, repository: LocalRepository, signal?: AbortSignal): Promise<AnalyzeInput & { displayContextRef: string }> {
+/**
+ * Resolve the context once on the server; the durable job input carries only the SHA and the
+ * registry fingerprint. The fingerprint marks the job as local and changes whenever the
+ * configured scope, mapping, footprints or limits change, so a stored job is never reused
+ * for a different configuration.
+ */
+export async function pinLocalAnalysisInput(input: AnalyzeInput, repository: LocalRepository, signal?: AbortSignal): Promise<AnalyzeInput & { displayContextRef: string; localFingerprint: string }> {
   const displayContextRef = input.contextRef?.trim() || repository.defaultRef;
   const sha = await resolveLocalCommit(repository, displayContextRef, signal);
-  return { repository: repository.fullName, mode: input.mode, contextRef: sha, displayContextRef };
+  return { repository: repository.fullName, mode: input.mode, contextRef: sha, displayContextRef, localFingerprint: repository.fingerprint };
 }
 
 export interface LocalAnalysisOptions { signal?: AbortSignal; onProgress?: (progress: AnalysisProgress) => void; incrementalBaseline?: unknown; maxSnapshotBytes?: number; }
@@ -255,14 +289,55 @@ export async function analyzeLocalRepository(input: AnalyzeInput, repository: Lo
   return validated;
 }
 
-async function localDiff(repository: LocalRepository, base: string | undefined, head: string, signal?: AbortSignal): Promise<GitDiffFile[]> {
-  const common = ['-r', '-z', '--no-commit-id', '--no-ext-diff', '--no-textconv', '-M50%'];
-  const range = base && base !== EMPTY_GIT_TREE ? [base, head] : ['--root', head];
-  const options = { signal, maxOutputBytes: 128 * 1_048_576, timeoutMs: 120_000 };
-  const names = await runLocalGit(repository.gitDir, ['diff-tree', ...common, '--name-status', ...range], options);
-  const stats = await runLocalGit(repository.gitDir, ['diff-tree', ...common, '--numstat', ...range], options);
-  return parseGitDiff(names, stats, repository.limits.maxChangedFiles);
+/**
+ * Splits one `diff-tree -z --raw --numstat` output into the name-status and numstat streams
+ * that parseGitDiff reads. Raw records come first and always start with ':'; numstat
+ * records start with a digit or '-'. Only record starts are inspected, never paths.
+ */
+function splitRawNumstat(output: Buffer): { names: Buffer; stats: Buffer } {
+  const names: Buffer[] = []; const separator = Buffer.alloc(1);
+  let start = 0;
+  const next = () => {
+    const end = output.indexOf(0, start);
+    if (end === -1) throw new LocalGitError('Git returned an incomplete comparison.', 502, 'LOCAL_GIT_FAILED');
+    const field = output.subarray(start, end); start = end + 1; return field;
+  };
+  while (start < output.length && output[start] === 0x3a) {
+    const header = next(); const status = header.subarray(header.lastIndexOf(0x20) + 1);
+    // Renames and copies (R100, C075) name the old path and then the new one.
+    const paths = status[0] === 0x52 || status[0] === 0x43 ? 2 : 1;
+    names.push(status, separator);
+    for (let index = 0; index < paths; index++) names.push(next(), separator);
+  }
+  return { names: Buffer.concat(names), stats: output.subarray(start) };
 }
+interface LocalDiff { files: GitDiffFile[]; renamesLimited: boolean; }
+/**
+ * One diff-tree run per source: rename detection (bounded by GIT_RENAME_LIMIT) runs once and
+ * yields both the statuses and the line counts.
+ */
+async function localDiff(repository: LocalRepository, base: string | undefined, head: string, signal?: AbortSignal): Promise<LocalDiff> {
+  const range = base && base !== EMPTY_GIT_TREE ? [base, head] : ['--root', head];
+  let renamesLimited = false;
+  const output = await runLocalGit(repository.gitDir, ['diff-tree', '-r', '-z', '--no-commit-id', '--no-ext-diff', '--no-textconv', '-M50%', '--raw', '--numstat', ...range], { signal, maxOutputBytes: 128 * 1_048_576, timeoutMs: 120_000, onRenameLimit: () => { renamesLimited = true; } });
+  const { names, stats } = splitRawNumstat(output);
+  try { return { files: parseGitDiff(names, stats, repository.limits.maxChangedFiles), renamesLimited }; }
+  catch (error) {
+    // The shared parser speaks for the GitHub fallback; local mode reports its own codes.
+    if (!(error instanceof GitHubError)) throw error;
+    if (error.code === 'GIT_FALLBACK_LIMIT') throw new LocalGitError(`The comparison changes more than ${count(repository.limits.maxChangedFiles)} files, the configured maxChangedFiles limit.`, 413, 'LOCAL_DIFF_LIMIT');
+    if (error.code === 'INVALID_SOURCE_PATH') throw new LocalGitError('The comparison has file names that are not valid UTF-8 or are unsafe.', 502, 'LOCAL_INVALID_PATH');
+    throw new LocalGitError('Git returned a comparison that could not be read.', 502, 'LOCAL_GIT_FAILED');
+  }
+}
+/** Why one source's comparison failed, in words that name no path. */
+function diffFailure(label: string, error: LocalGitError, repository: LocalRepository): string {
+  if (error.code === 'LOCAL_DIFF_LIMIT') return `${label}: the comparison changes more than ${count(repository.limits.maxChangedFiles)} files (the configured maxChangedFiles limit), so this change is not loaded.`;
+  if (error.code === 'LOCAL_GIT_LIMIT') return `${label}: the local Git comparison exceeded its time or output budget, so this change is not loaded.`;
+  if (error.code === 'LOCAL_INVALID_PATH') return `${label}: the comparison has file names that are not valid UTF-8 or are unsafe, so this change is not loaded.`;
+  return `${label}: the local mirror could not compare this change, so it is not loaded.`;
+}
+const renameLimitReason = (label: string) => `${label}: Git skipped rename detection because the change adds and removes too many files to pair (about ${count(GIT_RENAME_LIMIT)} of each at most); renamed files may show as a removal and an addition.`;
 const asApiFiles = (files: GitDiffFile[]): ApiFile[] => files.map(file => ({ filename: file.filename, ...(file.previous_filename ? { previous_filename: file.previous_filename } : {}), status: file.status, additions: file.additions, deletions: file.deletions, ...(file.binary ? { binary: true } : {}) }));
 
 export interface LocalSourceOptions { signal?: AbortSignal; onProgress?: (progress: AnalysisProgress) => void; }
@@ -372,6 +447,20 @@ export async function loadLocalSourceChanges(snapshot: GraphSnapshot, kind: 'pr'
     if (source.loaded) continue;
     options.onProgress?.({ stage: 'sources', progress: Math.round((index / Math.max(selection.length, 1)) * 100), message: `Loading ${source.label}` });
     let files: ApiFile[]; let sourceReasons: string[] = [];
+    // One source's oversized or unreadable comparison fails that source only; the others still load.
+    const compare = async (base: string | undefined, head: string): Promise<ApiFile[] | undefined> => {
+      try {
+        const diff = await localDiff(repository, base, head, options.signal);
+        if (diff.renamesLimited) { const reason = renameLimitReason(source.label); sourceReasons.push(reason); reasons.push(reason); }
+        return asApiFiles(diff.files);
+      } catch (error) {
+        if (!(error instanceof LocalGitError) || error.code === 'ABORTED') throw error;
+        source.loaded = false; source.files = [];
+        source.coverage = { status: 'failed', reasons: [diffFailure(source.label, error, repository)] };
+        reasons.push(...source.coverage.reasons);
+        return undefined;
+      }
+    };
     if (source.comparisonKind === 'recorded') {
       const record = records.get(source.id);
       if (!record?.files) {
@@ -389,8 +478,9 @@ export async function loadLocalSourceChanges(snapshot: GraphSnapshot, kind: 'pr'
       const commit = await readCommit(repository, source.sha, options.signal);
       if (!commit) throw new LocalGitError('The selected commit is not in the local mirror.', 404, 'LOCAL_REF');
       source.baseSha = commit.parents[0] ?? EMPTY_GIT_TREE; source.headSha = commit.sha; source.comparisonKind = commit.parents.length ? 'first-parent' : 'empty-tree'; source.mergeCommit = commit.parents.length > 1;
-      files = asApiFiles(await localDiff(repository, commit.parents[0], commit.sha, options.signal));
-      source.fileEvidence = 'local-git-diff';
+      const compared = await compare(commit.parents[0], commit.sha);
+      if (!compared) continue;
+      files = compared; source.fileEvidence = 'local-git-diff';
     } else {
       const record = records.get(source.id);
       const base = source.baseRefSha ?? record?.baseSha, head = source.headSha ?? record?.headSha;
@@ -403,8 +493,9 @@ export async function loadLocalSourceChanges(snapshot: GraphSnapshot, kind: 'pr'
         continue;
       }
       source.baseRefSha = base; source.baseSha = forkPoint; source.headSha = head; source.comparisonKind = 'merge-base'; source.comparisonResolved = true;
-      files = asApiFiles(await localDiff(repository, forkPoint, head, options.signal));
-      source.fileEvidence = 'local-git-diff';
+      const compared = await compare(forkPoint, head);
+      if (!compared) continue;
+      files = compared; source.fileEvidence = 'local-git-diff';
     }
     source.comparisonAttemptedAt = new Date().toISOString(); source.comparedAt = source.comparisonAttemptedAt;
     source.version = `source:${hash(`${source.id}:${source.baseSha ?? ''}:${source.headSha ?? ''}:${source.comparisonKind}`)}`;

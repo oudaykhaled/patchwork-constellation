@@ -120,4 +120,16 @@ describe('footprint normalization', () => {
     expect(shared.views).toEqual([{ id: 'review-a', title: 'review-a', kind: 'pr', sourceIds: ['pr:7'], omitted: 0 }]);
     expect(() => normalizeFootprints({ other: [] })).toThrow();
   });
+  it('keeps at most the repository maxChangedFiles rows per recorded footprint', async () => {
+    const files = Array.from({ length: 5 }, (_, index) => ({ path: `src/feature-a/f${index}.ts`, status: 'modified' }));
+    const direct = normalizeFootprints({ pulls: [{ number: 7, files }] }, undefined, 10, 2);
+    expect(direct.records[0]!.files!.map(file => file.path)).toEqual(['src/feature-a/f0.ts', 'src/feature-a/f1.ts']);
+    expect(direct.problems).toContain('1 footprint records list more than 2 files (maxChangedFiles); only their first 2 rows are shown.');
+    // Through the registry: the configured limit applies, not the 50,000 ceiling.
+    write('wide-prints.json', { schemaVersion: 1, pulls: [{ number: 7, files }] });
+    const registry = await loadLocalGitConfig(write('wide-registry.json', { version: 1, repositories: [repo({ footprints: 'wide-prints.json', limits: { maxChangedFiles: 3 } })] }));
+    const entry = registry.get('local/sample')!;
+    expect(entry.footprints!.records[0]!.files).toHaveLength(3);
+    expect(entry.footprints!.problems).toContain('1 footprint records list more than 3 files (maxChangedFiles); only their first 3 rows are shown.');
+  });
 });
