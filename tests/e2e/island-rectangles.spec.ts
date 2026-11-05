@@ -379,4 +379,3 @@ test('a phone lands on whole changed islands inside the map area', async ({ page
   await page.getByRole('button', { name: 'Fit all islands', exact: true }).click();
   expect((await camera(page)).zoom).toBeLessThan(landed.zoom);
 });
-
