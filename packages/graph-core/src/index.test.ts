@@ -217,20 +217,36 @@ describe('island identity colours', () => {
     return (max === r ? ((g - b) / delta + 6) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60;
   };
   const CHANGED_HUE = hue('#42b968');
+  // The analysis palette (packages/analysis/src/groups.ts); the layout fallback palette is its first six.
+  const palette = ['#66bfa0', '#9d8fd4', '#6a9ec7', '#b8a073', '#b377c3', '#839da0', '#ae8ca1', '#98ac7a'];
+  const saturation = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map(i => Number.parseInt(hex.slice(i, i + 2), 16) / 255);
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), lightness = (max + min) / 2;
+    return (max - min) / (1 - Math.abs(2 * lightness - 1));
+  };
   it('moves olive, yellow-green and green-teal identities away from the changed green', () => {
-    // The analysis palette (packages/analysis/src/groups.ts) and the layout fallback palette.
-    const palette = ['#66bfa0', '#9d8fd4', '#6a9ec7', '#b8a073', '#7796c3', '#839da0', '#ae8ca1', '#98ac7a'];
     for (const color of palette) {
       const shown = islandIdentityColor(color);
       expect(shown).toMatch(/^#[0-9a-f]{6}$/);
       expect(Math.abs(hue(shown) - CHANGED_HUE)).toBeGreaterThanOrEqual(30);
       if (hue(color) < 60 || hue(color) > 170) expect(shown).toBe(color);
+      expect(saturation(shown)).toBeCloseTo(saturation(color), 1);
     }
     expect(hue(islandIdentityColor('#66bfa0'))).toBeGreaterThanOrEqual(172);
-    expect(hue(islandIdentityColor('#98ac7a'))).toBeLessThanOrEqual(200);
+    expect(hue(islandIdentityColor('#66bfa0'))).toBeLessThanOrEqual(180);
+    // Olive goes warm (brick red), not into the cool blues.
+    const olive = hue(islandIdentityColor('#98ac7a'));
+    expect(olive >= 345 || olive <= 15).toBe(true);
     expect(islandIdentityColor('#98ac7a')).not.toBe(islandIdentityColor('#66bfa0'));
     expect(islandIdentityColor('#7f7f7f')).toBe('#7f7f7f');
     expect(islandIdentityColor('teal')).toBe('teal');
+  });
+  it('keeps the shown palette hues apart, so neighbouring islands are told apart', () => {
+    // Coloured identities are at least 20° apart. The near-grey (#839da0, saturation 0.13) is
+    // told apart by its greyness, not its hue.
+    const shown = palette.map(islandIdentityColor).filter(color => saturation(color) >= .15).map(hue);
+    expect(shown).toHaveLength(7);
+    for (const [index, a] of shown.entries()) for (const b of shown.slice(index + 1)) expect(Math.min(Math.abs(a - b), 360 - Math.abs(a - b))).toBeGreaterThanOrEqual(20);
   });
   it('lays out islands whose identity colours are never green', () => {
     const layout = layoutGraph(createScaleFixture(600, 0, 7));

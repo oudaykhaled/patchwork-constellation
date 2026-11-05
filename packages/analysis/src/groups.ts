@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { unparsedFileFacts, type FileNode, type Group } from '@patchwork/contracts';
 
-const palette = ['#66bfa0', '#9d8fd4', '#6a9ec7', '#b8a073', '#7796c3', '#839da0', '#ae8ca1', '#98ac7a'];
+// Eight identity hues kept apart on the map; the client moves greens away from the changed green.
+const palette = ['#66bfa0', '#9d8fd4', '#6a9ec7', '#b8a073', '#b377c3', '#839da0', '#ae8ca1', '#98ac7a'];
 export const GROUPING_RULES_VERSION = 'hierarchy-v1';
 const ordered = (values: Iterable<string>) => [...new Set(values)].sort();
 const digest = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 20);

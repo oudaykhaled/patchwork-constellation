@@ -38,12 +38,16 @@ export const ISLAND_SLOT_INSET = PAD + P / 2;
 const MIN_BOUNDS = { width: 1600, height: 936 };
 /** A packed block smaller than the minimum world is scaled up (at most this much) to fill it. */
 const MAX_SMALL_WORLD_SCALE = 2.5;
-const PALETTE = ['#66BFA0', '#9D8FD4', '#6A9EC7', '#B8A073', '#7796C3', '#839DA0'];
+/** Matches the analysis palette (packages/analysis/src/groups.ts); one blue is orchid so blues stay apart. */
+const PALETTE = ['#66BFA0', '#9D8FD4', '#6A9EC7', '#B8A073', '#B377C3', '#839DA0'];
 
 /**
  * Island identity colour. Green means "changed" on this map (#42b968, hue 139°), so identity
- * hues from yellow-green to green-teal (60°–170°) move to the teal/blue end (172°–200°) with
- * the same saturation and lightness; a 1 px unchanged border can then never read as a changed one.
+ * hues from yellow-green to green-teal (60°–170°) move away from it with the same saturation and
+ * lightness; a 1 px unchanged border can then never read as a changed one.
+ * - Green-teal (110°–170°) lands on teal (172°–180°), mirrored.
+ * - Yellow-green and olive (60°–110°) land on a warm brick red (345°–15°), outside the cool
+ *   blues and teals that the rest of the palette already uses.
  * Other colours, near-greys and non-hex values pass through unchanged.
  */
 export function islandIdentityColor(color: string): string {
@@ -56,10 +60,10 @@ export function islandIdentityColor(color: string): string {
   const saturation = delta / (1 - Math.abs(2 * lightness - 1));
   const hue = (max === r ? ((g - b) / delta + 6) % 6 : max === g ? (b - r) / delta + 2 : (r - g) / delta + 4) * 60;
   if (saturation < .08 || hue < 60 || hue > 170) return color;
-  // Mirrored, so green-teal lands on teal and olive on grey-blue: neighbours stay distinct.
-  const shifted = 200 - (hue - 60) * 28 / 110;
+  const shifted = hue < 110 ? (345 + (hue - 60) * 30 / 50) % 360 : 172 + (170 - hue) * 8 / 60;
   const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation, x = chroma * (1 - Math.abs((shifted / 60) % 2 - 1)), m = lightness - chroma / 2;
-  const [red, green, blue] = shifted < 180 ? [0, chroma, x] : [0, x, chroma];
+  const sector = Math.floor(shifted / 60);
+  const [red, green, blue] = [[chroma, x, 0], [x, chroma, 0], [0, chroma, x], [0, x, chroma], [x, 0, chroma], [chroma, 0, x]][sector]!;
   return '#' + [red, green, blue].map(channel => Math.round((channel + m) * 255).toString(16).padStart(2, '0')).join('');
 }
 

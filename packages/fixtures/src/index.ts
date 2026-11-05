@@ -23,7 +23,7 @@ export const DEMO_GROUPS: Group[] = [
   { id: 'billing', label: 'Billing', component: 'Commerce', color: '#9D8FD4', origin: 'manifest' },
   { id: 'api', label: 'API', component: 'Platform', color: '#6A9EC7', origin: 'manifest' },
   { id: 'interface', label: 'Interface', component: 'Experience', color: '#B8A073', origin: 'manifest' },
-  { id: 'shared', label: 'Shared', component: 'Platform', color: '#7796C3', origin: 'manifest' },
+  { id: 'shared', label: 'Shared', component: 'Platform', color: '#B377C3', origin: 'manifest' },
   { id: 'infra', label: 'Infrastructure', component: 'Platform', color: '#839DA0', origin: 'manifest' },
 ];
 
