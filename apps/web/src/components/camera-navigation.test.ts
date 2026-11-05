@@ -17,7 +17,9 @@ describe('graph camera navigation', () => {
   it('reserves the top band and a one-row bottom bar on desktop, also for large repositories', () => {
     expect(navigationInsets(1920)).toEqual({ top: 120, right: 24, bottom: 80, left: 24 });
     expect(navigationInsets(1440)).toEqual({ top: 120, right: 24, bottom: 80, left: 24 });
-    expect(navigationInsets(1280)).toEqual({ top: 150, right: 24, bottom: 80, left: 24 });
+    // The strip is one row on desktop; a wrapped strip is measured, not reserved up front.
+    expect(navigationInsets(1280)).toEqual({ top: 120, right: 24, bottom: 80, left: 24 });
+    expect(navigationInsets(900)).toEqual({ top: 120, right: 24, bottom: 80, left: 24 });
     expect(navigationInsets(390)).toEqual({ top: 196, right: 24, bottom: 150, left: 24 });
   });
   it('fits a very large packed world instead of clamping it at the old 0.025 floor', () => {

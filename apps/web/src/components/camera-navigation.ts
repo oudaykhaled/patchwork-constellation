@@ -8,12 +8,13 @@ export const MAX_RELATIVE_ZOOM = 8;
 /** Reserve a usable rectangle between the top control band (source bar + search,
  * then the one-line heading/status strip) and the bottom bar (legend, scope, zoom).
  * The bar is one row on desktop: below 1500 px the Explore scope cluster collapses to
- * its select, so large repositories need no taller bar. A narrow inspector is
+ * its select, so large repositories need no taller bar. The strip is one row on desktop
+ * too; when it wraps, the measured strip raises the top. A narrow inspector is
  * intentionally dismissible rather than reducing the map to a few pixels. Desktop
  * inspectors reserve their measured width; a bar that still wraps is measured. */
 export function navigationInsets(width: number, inspectorWidth = 0): ViewportInsets {
   return {
-    top: width <= 760 ? 196 : width <= 1380 ? 150 : 120,
+    top: width <= 760 ? 196 : 120,
     right: width > 900 && inspectorWidth ? inspectorWidth + 40 : 24,
     bottom: width <= 760 ? 150 : 80,
     left: 24,

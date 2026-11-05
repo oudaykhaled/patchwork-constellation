@@ -17,11 +17,17 @@
 /* Local repositories (local-git mode) */
 .local-repositories{display:grid;gap:8px;margin:0 0 18px}.local-repositories>.eyebrow{color:#789185;font-size:10px}.local-repo-card[disabled]{opacity:.6;cursor:progress}.local-repository-select{display:block;width:100%;height:42px;background:#0b1216;border:1px solid var(--line);border-radius:7px;padding:0 10px;color:var(--text);font-family:var(--mono);font-size:11px;margin-top:8px}.source-views{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 14px}.source-views>.button{height:30px;font-size:11px}.source-option small.source-option-note{display:block;margin-top:4px;color:#a8977a;line-height:1.5}
 @media(forced-colors:active){.chip,.chip *{-webkit-text-fill-color:CanvasText}}
-/* Top band: one calm backing behind row 2 (stats, context, coverage, breadcrumb, view controls),
-   so chips never float over circles when the map is panned or zoomed under them. The backing takes
-   pointer hits, so nothing hidden behind it can be hovered or clicked. */
-.graph-strip::before{content:'';position:absolute;top:-6px;bottom:-6px;left:-36px;right:-28px;z-index:-1;background:#091216d9;pointer-events:auto}
+/* Top band: one calm backing from the top of the map to just below row 2 (stats, context, coverage,
+   breadcrumb, view controls), behind the source bar and search, so chips never float over circles
+   when the map is panned or zoomed under them. The backing takes pointer hits, so nothing hidden
+   behind it can be hovered or clicked. The strip sits 78 px into the workspace on desktop. */
+.graph-strip::before{content:'';position:absolute;top:-78px;bottom:-6px;left:-36px;right:-28px;z-index:-1;background:#091216d9;pointer-events:auto}
+.source-bar{z-index:7}
 @media(max-width:1100px){.graph-strip::before{left:-28px;right:-22px}}
 /* Phone: rows 1-2 are one opaque band from the top edge, behind the source bar and search. */
-@media(max-width:760px){.source-bar{z-index:7}.graph-strip::before{top:-118px;left:-16px;right:-16px;background:var(--bg)}}
+@media(max-width:760px){.graph-strip::before{top:-118px;left:-16px;right:-16px;background:var(--bg)}}
+/* The open Islands menu (level, island names, Review grouping) is above file details, and the
+   source bar stays above the band while the strip is raised. */
+.graph-strip:has(.group-level-menu){z-index:11}
+.graph-workspace:has(.group-level-menu) .source-bar{z-index:12}
 @media(forced-colors:active){.graph-strip::before{background:Canvas}}

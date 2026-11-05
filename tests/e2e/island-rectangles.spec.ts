@@ -21,6 +21,10 @@ async function camera(page: Page) {
   const canvas = page.getByTestId('graph-canvas');
   return { x: Number(await canvas.getAttribute('data-camera-x')), y: Number(await canvas.getAttribute('data-camera-y')), zoom: Number(await canvas.getAttribute('data-camera-scale')) };
 }
+/** Routed synthetic graphs are unknown to the server; its error banner must not sit over pointer targets. */
+async function dismissError(page: Page) {
+  if (await page.locator('.error-banner').count()) await page.getByRole('button', { name: 'Dismiss error' }).click();
+}
 /** A page point on the island's left padding band: inside the rectangle, out of reach of any file. */
 async function islandPoint(page: Page, label: string) {
   const island = layout.islands.find(group => group.label === label)!;
@@ -46,6 +50,8 @@ test('islands are unnamed rectangles until hovered, and hover names one island a
   await expect(tooltip).toContainText('Authentication');
   await expect(tooltip).toContainText(`${changedIn('Authentication')} changed · 42 files`);
   await expect(tooltip).toContainText('Click or Enter to focus island');
+  // The second line says how the island was grouped, in words.
+  await expect(tooltip.locator('.tooltip-path')).toHaveText('Package manifest');
   await expect(page.locator('.island-ring[data-state="hover"]')).toBeVisible();
   // Warm state: the next island switches at once, still exactly one tooltip.
   const billing = await islandPoint(page, 'Billing');
@@ -95,6 +101,10 @@ test('the island group is one Tab stop with a roving focus that shows the same t
   await page.keyboard.press('Escape');
   await expect(tooltip).toBeHidden();
   await expect(page.locator('.island-label:focus')).toHaveAttribute('aria-label', first);
+  // A second Escape has nothing left to close: the place in the island list is kept.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.island-label:focus')).toHaveAttribute('aria-label', first);
+  await expect(page.getByTestId('file-search')).not.toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.locator('.focus-breadcrumb strong')).toHaveText(first.replace(/^Explore (.*) island,.*$/, '$1'));
   await page.keyboard.press('Escape');
@@ -105,7 +115,9 @@ test('the island group is one Tab stop with a roving focus that shows the same t
   expect(await page.evaluate(() => scrollY + document.documentElement.scrollLeft + (document.querySelector('.app-shell')?.scrollTop ?? 0))).toBe(0);
 });
 
-test('Tab goes from search and the strip to the map, its islands, then the bottom bar', async ({ page }) => {
+test('Tab goes from search and the strip to the map, its islands, then the bottom bar', async ({ page, browserName }) => {
+  // Like Safari's default, WebKit on macOS moves Tab between form fields only and skips buttons.
+  test.skip(browserName === 'webkit' && process.platform === 'darwin', 'macOS WebKit Tab skips buttons');
   await openGraph(page);
   await page.getByTestId('file-search').focus();
   const name = () => page.evaluate(() => { const element = document.activeElement as HTMLElement; return element.dataset.testid || element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 30) || element.tagName; });
@@ -295,6 +307,31 @@ for (const viewport of [{ width: 1280, height: 720 }, { width: 1440, height: 900
     await page.getByRole('button', { name: 'Fit all islands', exact: true }).click();
     const geometry = await islandGeometry(page);
     expect(geometry.inside).toBe(12);
+    // The strip is one row, so Fit leaves the same room above the islands as below them.
+    const above = Math.min(...geometry.islands.map(rect => rect.top)) - geometry.map.top;
+    const below = geometry.map.bottom - Math.max(...geometry.islands.map(rect => rect.bottom));
+    expect(Math.abs(above - below)).toBeLessThanOrEqual(8);
+  });
+}
+
+for (const viewport of [{ width: 640, height: 360 }, { width: 740, height: 360 }, { width: 900, height: 800 }]) {
+  test(`a large repository keeps a one-row bar and a usable map at ${viewport.width}×${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await openGraph(page, createScaleFixture(10_000, 0, 42));
+    await dismissError(page);
+    await page.getByTestId('graph-canvas').focus();
+    await page.keyboard.press('0');
+    const room = await page.evaluate(() => {
+      const strip = document.querySelector('.graph-strip')!.getBoundingClientRect(), bar = document.querySelector('.graph-bottom-bar')!.getBoundingClientRect();
+      return { bar: bar.height, map: bar.top - strip.bottom - 6 };
+    });
+    expect(room.bar).toBeLessThanOrEqual(50);
+    expect(room.map).toBeGreaterThanOrEqual(viewport.height < 500 ? 60 : 400);
+    await expect(page.getByLabel('Explore scope', { exact: true })).toBeVisible();
+    await expect(page.locator('summary[aria-label="Explain graph symbols and connections"]')).toBeVisible();
+    // The scope line stays for screen readers.
+    await expect(page.locator('.graph-scope-status')).toHaveText('Showing 10,000 of 10,000 files · 0 of 0 connections');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }
 
@@ -302,32 +339,151 @@ test('the top band backs the strip so the map never shows between its chips', as
   await openGraph(page);
   await page.getByTestId('graph-canvas').focus();
   for (let i = 0; i < 4; i++) await page.keyboard.press('+');
-  // Zoomed in, the map runs under the strip. A point between two chips hits the band, not the canvas.
+  // Zoomed in, the map runs under the strip. A point between two chips hits the band, not the canvas,
+  // and so does the top of the map beside and below the source bar and search.
   const probe = await page.evaluate(() => {
-    const strip = document.querySelector('.graph-strip')!.getBoundingClientRect(), controls = document.querySelector('.graph-view-controls')!.getBoundingClientRect();
+    const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+    const strip = box('.graph-strip'), controls = box('.graph-view-controls'), sources = box('.source-bar'), search = box('.graph-search'), workspace = box('[data-testid="graph-viewport"]');
     const band = getComputedStyle(document.querySelector('.graph-strip')!, '::before');
-    const x = controls.left - 24, y = strip.top + strip.height / 2;
-    return { hit: document.elementFromPoint(x, y)?.className, background: band.backgroundColor, content: band.content };
+    const at = (x: number, y: number) => document.elementFromPoint(x, y);
+    const between = (sources.right + search.left) / 2;
+    return {
+      hit: at(controls.left - 24, strip.top + strip.height / 2)?.className, background: band.backgroundColor, content: band.content,
+      top: at(between, workspace.top + 4)?.className, beside: at(between, sources.top + sources.height / 2)?.className, below: at(sources.left + 40, (sources.bottom + strip.top) / 2)?.className,
+      sourceBarOnTop: !!at(sources.left + sources.width / 2, sources.top + sources.height / 2)?.closest('.source-bar'), searchOnTop: !!at(search.left + search.width / 2, search.top + search.height / 2)?.closest('.graph-search'),
+    };
   });
   expect(probe.content).not.toBe('none');
   expect(probe.background).not.toBe('rgba(0, 0, 0, 0)');
   expect(probe.hit).toBe('graph-strip');
-  // On a phone rows 1 and 2 are one opaque band from the top edge.
+  expect([probe.top, probe.beside, probe.below]).toEqual(['graph-strip', 'graph-strip', 'graph-strip']);
+  expect(probe.sourceBarOnTop).toBe(true); expect(probe.searchOnTop).toBe(true);
+  // On a phone rows 1 and 2 are one opaque band from the top edge. The new size applies to layout a
+  // frame or more after setViewportSize (WebKit), so measure until it has.
   await page.setViewportSize({ width: 390, height: 844 });
-  const phone = await page.evaluate(() => {
-    const sources = document.querySelector('.source-bar')!.getBoundingClientRect(), search = document.querySelector('.graph-search')!.getBoundingClientRect();
-    const workspace = document.querySelector('[data-testid="graph-viewport"]')!.getBoundingClientRect();
-    const at = (x: number, y: number) => document.elementFromPoint(x, y);
-    return {
-      gap: at(200, (sources.bottom + search.top) / 2)?.className,
-      edge: at(4, workspace.top + 4)?.className,
-      sourceBarOnTop: !!at(sources.left + sources.width / 2, sources.top + sources.height / 2)?.closest('.source-bar'),
-      band: getComputedStyle(document.querySelector('.graph-strip')!, '::before').backgroundColor,
-    };
-  });
-  expect(phone.gap).toBe('graph-strip'); expect(phone.edge).toBe('graph-strip');
-  expect(phone.sourceBarOnTop).toBe(true);
-  expect(phone.band).toBe('rgb(12, 16, 19)');
+  await expect(async () => {
+    const phone = await page.evaluate(() => {
+      const sources = document.querySelector('.source-bar')!.getBoundingClientRect(), search = document.querySelector('.graph-search')!.getBoundingClientRect();
+      const workspace = document.querySelector('[data-testid="graph-viewport"]')!.getBoundingClientRect();
+      const at = (x: number, y: number) => document.elementFromPoint(x, y);
+      return {
+        gap: at(200, (sources.bottom + search.top) / 2)?.className,
+        edge: at(4, workspace.top + 4)?.className,
+        sourceBarOnTop: !!at(sources.left + sources.width / 2, sources.top + sources.height / 2)?.closest('.source-bar'),
+        band: getComputedStyle(document.querySelector('.graph-strip')!, '::before').backgroundColor,
+      };
+    });
+    expect(phone.gap).toBe('graph-strip'); expect(phone.edge).toBe('graph-strip');
+    expect(phone.sourceBarOnTop).toBe(true);
+    expect(phone.band).toBe('rgb(12, 16, 19)');
+  }).toPass();
+});
+
+test('the open Islands menu stays above file details, and the source bar above the band', async ({ page }) => {
+  await openGraph(page);
+  await page.getByTestId('file-search').fill('refresh.ts');
+  await page.getByRole('option', { name: /refresh\.ts/ }).click();
+  await expect(page.getByTestId('file-inspector')).toBeVisible();
+  await page.getByRole('button', { name: /^Islands:/ }).click();
+  await expect(page.getByRole('button', { name: 'Review grouping' })).toBeVisible();
+  // WebKit restacks a frame after the menu opens, so measure until it has.
+  await expect(async () => {
+    const covered = await page.evaluate(() => {
+      const items = [...document.querySelectorAll<HTMLElement>('.group-level-menu button, .group-level-menu label')];
+      const hidden = items.filter(item => { const rect = item.getBoundingClientRect(); return !document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest('.group-level-menu'); });
+      const sources = document.querySelector('.source-bar')!.getBoundingClientRect();
+      return { items: items.length, hidden: hidden.map(item => item.textContent), sourceBarOnTop: !!document.elementFromPoint(sources.left + sources.width / 2, sources.top + sources.height / 2)?.closest('.source-bar') };
+    });
+    expect(covered.items).toBeGreaterThanOrEqual(6);
+    expect(covered.hidden).toEqual([]);
+    expect(covered.sourceBarOnTop).toBe(true);
+  }).toPass();
+  await page.getByRole('radio', { name: 'Always, when they fit' }).check();
+  await expect(page.getByRole('radio', { name: 'Always, when they fit' })).toBeChecked();
+});
+
+test('a click a little past the pointer island tooltip still reaches the island under it', async ({ page }) => {
+  await openGraph(page);
+  const hover = await islandPoint(page, 'Authentication');
+  await page.mouse.move(hover.x, hover.y);
+  const tooltip = page.getByRole('tooltip');
+  await expect(tooltip).toHaveAttribute('data-kind', 'island');
+  // About 40 px down-right, inside the island and under the tooltip, at the point farthest from any file.
+  const island = layout.islands.find(group => group.label === 'Authentication')!;
+  const box = (await page.getByTestId('graph-canvas').boundingBox())!, current = await camera(page);
+  const files = island.nodes.map(node => worldToScreen(node, current, box.width, box.height)).map(point => ({ x: box.x + point.x, y: box.y + point.y }));
+  let target = { x: hover.x + 40, y: hover.y + 40 }, room = 0;
+  for (let dx = 24; dx <= 56; dx += 2) for (let dy = 24; dy <= 56; dy += 2) {
+    const point = { x: hover.x + dx, y: hover.y + dy }, nearest = Math.min(...files.map(file => Math.hypot(file.x - point.x, file.y - point.y)));
+    if (nearest > room) { room = nearest; target = point; }
+  }
+  const tip = (await tooltip.boundingBox())!;
+  expect(target.x > tip.x && target.x < tip.x + tip.width && target.y > tip.y && target.y < tip.y + tip.height).toBe(true);
+  expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute('data-testid'), target)).toBe('graph-canvas');
+  await page.mouse.move(target.x, target.y);
+  await expect(tooltip).toContainText('Authentication');
+  await page.mouse.click(target.x, target.y);
+  await expect(page.locator('.focus-breadcrumb strong')).toHaveText('Authentication');
+  await expect(page.getByTestId('file-inspector')).toHaveCount(0);
+});
+
+test('a hover island tooltip does not use up the Escape meant for search or the explanation', async ({ page }) => {
+  await openGraph(page);
+  const auth = await islandPoint(page, 'Authentication');
+  await page.mouse.move(auth.x, auth.y);
+  const tooltip = page.getByRole('tooltip');
+  await expect(tooltip).toHaveAttribute('data-kind', 'island');
+  await page.keyboard.press('/');
+  const search = page.getByTestId('file-search');
+  await expect(search).toBeFocused();
+  await page.keyboard.type('auth');
+  await expect(page.getByRole('listbox', { name: 'Search results' })).toBeVisible();
+  await expect(tooltip).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(search).toHaveValue('');
+  await expect(tooltip).toBeHidden();
+  // The ? explanation, opened from the keyboard while the pointer rests on an island (a dismissed
+  // island stays quiet until the pointer moves to another one).
+  const billing = await islandPoint(page, 'Billing');
+  await page.mouse.move(billing.x, billing.y);
+  await expect(tooltip).toHaveAttribute('data-kind', 'island');
+  const toggle = page.locator('summary[aria-label="Explain graph symbols and connections"]');
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  const explanation = page.getByRole('region', { name: 'Graph symbols and connections' });
+  await expect(explanation).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(explanation).toBeHidden();
+  await expect(toggle).toBeFocused();
+});
+
+test('one zoom step past the file threshold, an island padding band still names the island', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const graph = createScaleFixture(10_000, 0, 42), scaled = layoutGraph(graph), pitch = scaled.islands[0]!.grid!.pitch;
+  await openGraph(page, graph);
+  await dismissError(page);
+  await page.getByTestId('graph-canvas').focus();
+  await page.keyboard.press('0');
+  while ((await camera(page)).zoom * pitch < 10) await page.keyboard.press('+');
+  const current = await camera(page);
+  expect(current.zoom * pitch).toBeLessThan(16);
+  const box = (await page.getByTestId('graph-canvas').boundingBox())!;
+  const area = await page.evaluate(() => ({ top: document.querySelector('.graph-strip')!.getBoundingClientRect().bottom + 30, bottom: document.querySelector('.graph-bottom-bar')!.getBoundingClientRect().top - 30 }));
+  const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  // 3 px inside the left edge of the visible island nearest the centre: the padding band before the first file column.
+  const [choice] = scaled.islands
+    .map(island => { const edge = worldToScreen({ x: island.x - island.rx, y: island.y }, current, box.width, box.height); return { island, band: { x: box.x + edge.x + 3, y: box.y + edge.y } }; })
+    .filter(({ band }) => band.x > box.x + 40 && band.x < box.x + box.width - 420 && band.y > area.top && band.y < area.bottom)
+    .sort((a, b) => Math.hypot(a.band.x - centre.x, a.band.y - centre.y) - Math.hypot(b.band.x - centre.x, b.band.y - centre.y));
+  expect(choice).toBeDefined();
+  await page.mouse.move(choice!.band.x, choice!.band.y);
+  const tooltip = page.getByRole('tooltip');
+  await expect(tooltip).toHaveAttribute('data-kind', 'island');
+  await expect(tooltip).toContainText(choice!.island.label);
+  // A file centre is still a file.
+  const file = worldToScreen(choice!.island.nodes[0]!, current, box.width, box.height);
+  await page.mouse.move(box.x + file.x, box.y + file.y);
+  await expect(tooltip).toHaveAttribute('data-kind', 'file');
 });
 
 test('overlap rings leave a dense overview and return once files are apart', async ({ page }) => {

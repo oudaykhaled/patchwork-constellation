@@ -6,6 +6,7 @@ import type { Bounds, Camera, GraphData, GraphLayout, Island, Point, PositionedF
 import { boundsIntersect, connectionInViewport, exceedsGraphEnvelope, scopeSummary, viewportBounds } from '../../../../packages/graph-core/src/render-policy';
 import { sceneTile, sceneTranslation, type SceneTile } from '../../../../packages/graph-core/src/scene-cache';
 import { useSettledLayout } from './useSettledLayout';
+import { islandTipMeta } from './island-tip';
 import { fitVisibleCamera, isRestorableCamera, landingWindow, MAX_RELATIVE_ZOOM, MIN_RELATIVE_ZOOM, minimapFrame, minimapPoint, navigationInsets, pinchCamera, sameCamera, type ViewportInsets } from './camera-navigation';
 import './constellation-graph.css';
 
@@ -189,6 +190,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   useEffect(() => {
     const dismiss = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || (!hoveredIdRef.current && !islandTipRef.current)) return;
+      const fileHover = !!hoveredIdRef.current, pointerIslandTip = islandTipRef.current?.via === 'pointer';
       // Hover can coexist with focus in another control. Dismiss it without
       // moving that focus, changing source selection or closing file details.
       if (hoveredIdRef.current) { dismissedHoverId.current = hoveredIdRef.current; tooltipHovered.current = false; clearTooltip(); }
@@ -196,6 +198,11 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       // A native modal makes the underlying graph inert. Its own Escape
       // handling takes priority over hover content behind the backdrop.
       if (document.querySelector('dialog[open]')) return;
+      // An island tooltip is open whenever the mouse rests on the map. Closing it must not use
+      // up the Escape that search, a menu or the ? explanation is waiting for: unless the map
+      // itself has focus, that control still receives this key.
+      const focused = document.activeElement;
+      if (!fileHover && pointerIslandTip && focused && focused !== document.body && !hostRef.current?.contains(focused)) return;
       event.preventDefault(); event.stopPropagation();
     };
     window.addEventListener('keydown', dismiss, true);
@@ -288,7 +295,8 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
       roundedRect(context, rect, cornerRadius(rect, c.zoom) * px);
       context.fillStyle = alpha(island.color, dimmed ? '0a' : changed ? '17' : '0f'); context.fill();
       context.globalAlpha = dimmed ? .6 : 1;
-      context.strokeStyle = changed ? '#42b968f2' : alpha(island.color, '80'); context.lineWidth = (changed ? 1.5 : 1) * px; context.stroke();
+      // Unchanged borders at 63% alpha keep at least 3:1 against the map for every palette colour.
+      context.strokeStyle = changed ? '#42b968f2' : alpha(island.color, 'a0'); context.lineWidth = (changed ? 1.5 : 1) * px; context.stroke();
       context.globalAlpha = 1;
       drawn.push({ island, rect, changed });
     }
@@ -629,9 +637,15 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const eventPoint = (event: ReactPointerEvent<HTMLCanvasElement>): Point => { const rect = event.currentTarget.getBoundingClientRect(); return { x: event.clientX - rect.left, y: event.clientY - rect.top }; };
   /** Files are pointer targets once their lattice is at least 10 px apart on screen. */
   const filesTargetable = () => cameraRef.current.zoom * layoutPitch(layout) >= FILE_TARGET_MIN_PITCH;
+  /**
+   * A file is the pointer target within its circle plus 3 px (at most 16 px). On a tight
+   * lattice that stays below the pitch, so the gaps between files and the island's padding
+   * band still belong to the island and keep its tooltip and click.
+   */
+  const fileHitRadius = () => { const zoom = cameraRef.current.zoom; return Math.min(16, Math.max(clamp(6.6 * zoom, 2.2, 11) + 3, .35 * zoom * layoutPitch(layout))); };
   const hitNode = (point: Point) => {
     if (!filesTargetable()) return undefined;
-    let found: PositionedFile | undefined; let best = 16;
+    let found: PositionedFile | undefined; let best = fileHitRadius();
     for (const node of layout.nodes) { if (scopeGroupId && node.groupId !== scopeGroupId) continue; const screen = worldToScreen(node, cameraRef.current, sizeRef.current.width, sizeRef.current.height); const distance = Math.hypot(screen.x - point.x, screen.y - point.y); if (distance < best) { found = node; best = distance; } }
     return found;
   };
@@ -693,7 +707,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     const activePoint = active ? worldToScreen(active, cameraRef.current, sizeRef.current.width, sizeRef.current.height) : undefined;
     // Retain the active hit target through its radius instead of flickering
     // between nearby files while crossing toward content.
-    if (active && activePoint && filesTargetable() && Math.hypot(point.x - activePoint.x, point.y - activePoint.y) < 16) node = active;
+    if (active && activePoint && filesTargetable() && Math.hypot(point.x - activePoint.x, point.y - activePoint.y) < fileHitRadius()) node = active;
     const tooltipBox = tooltipRef.current?.getBoundingClientRect(), canvasBox = canvasRef.current?.getBoundingClientRect();
     if (active && activePoint && node?.id !== active.id && tooltipBox && canvasBox) {
       const left = tooltipBox.left - canvasBox.left, top = tooltipBox.top - canvasBox.top;
@@ -796,10 +810,13 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
         target = islandOrder.filter(entry => entry.y - entry.ry < probe && entry.y + entry.ry > probe)
           .sort((a, b) => Math.abs(a.x - island.x) - Math.abs(b.x - island.x))[0];
       }
-    } else if (event.key === 'Escape' && focusGroupId) {
-      // Clearing the island focus keeps keyboard focus on this island: the page-level Escape
-      // (which returns focus to search or the last file trigger) must not also run.
-      event.preventDefault(); event.stopPropagation(); onFocusGroup?.(null);
+    } else if (event.key === 'Escape') {
+      // Escape clears the island focus, else the selected file, and keyboard focus stays on this
+      // island: the page-level Escape (which returns focus to search or the last file trigger)
+      // must not also run, or the place in the island list is lost.
+      event.preventDefault(); event.stopPropagation();
+      if (focusGroupId) onFocusGroup?.(null);
+      else if (selectedFileId) onSelectFile(null);
       const target = event.currentTarget; requestAnimationFrame(() => { if (target.isConnected && document.activeElement !== target) target.focus({ preventScroll: true }); });
       return;
     }
@@ -847,7 +864,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
   const tipIsland = islandTip && !hovered && !dragging ? islandById.get(islandTip.id) : undefined;
   const tipStats = tipIsland ? islandStats.get(tipIsland.id) ?? NO_STATS : NO_STATS;
   const tipGroup = tipIsland ? snapshot.groups.find(group => group.id === tipIsland.id) as (GraphData['groups'][number] & { path?: unknown; origin?: unknown }) | undefined : undefined;
-  const tipMeta = tipGroup ? [typeof tipGroup.path === 'string' && tipGroup.path && tipGroup.path !== tipGroup.label ? tipGroup.path : '', tipGroup.origin === 'manual' ? 'manual' : tipGroup.origin === 'rules' ? 'rules' : tipGroup.origin === 'ai' ? 'AI' : ''].filter(Boolean).join(' · ') : '';
+  const tipMeta = tipGroup ? islandTipMeta(tipGroup) : '';
   /** Tooltips open below the top band's backing (it ends 6 px under the strip; the inset adds 12). */
   const tipMinTop = Math.max(8, insets.top - 4);
   const tipPosition = (() => {
@@ -875,7 +892,8 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     {keyboardIslandId !== focusGroupId && ring(keyboardIslandId, 'keyboard')}
     {hoveredIslandId !== focusGroupId && hoveredIslandId !== keyboardIslandId && ring(hoveredIslandId, 'hover')}
     {hovered && !dragging && <div ref={tooltipRef} className="graph-tooltip" data-kind="file" role="tooltip" onPointerEnter={() => { tooltipHovered.current = true; cancelHoverLeave(); }} onPointerLeave={() => { tooltipHovered.current = false; leaveHover(); }} style={{ left: clamp(hoverPosition.x + 20, 8, Math.max(8, size.width - 285)), top: clamp(hoverPosition.y - 48, tipMinTop, Math.max(tipMinTop, Math.min(size.height - 130, size.height - (insets.bottom - 12) - 8 - 122))) }}><strong>{basename(hovered.path)}</strong><span>{hovered.path}</span><small>{membership.get(hovered.id) ? `${membership.get(hovered.id)} selected source${membership.get(hovered.id) === 1 ? '' : 's'}` : 'Unchanged context'} · Select circle to inspect</small></div>}
-    {tipIsland && <div ref={tooltipRef} id="graph-island-tooltip" className="graph-tooltip graph-island-tooltip" data-kind="island" role="tooltip" onPointerEnter={() => { tooltipHovered.current = true; cancelIslandTimers(); }} onPointerLeave={() => { tooltipHovered.current = false; leaveIsland(); }} style={{ ...tipPosition, '--island-color': tipIsland.color } as CSSProperties}>
+    {/* The island tooltip has nothing to click: pointer events pass through to the island under it. */}
+    {tipIsland && <div ref={tooltipRef} id="graph-island-tooltip" className="graph-tooltip graph-island-tooltip" data-kind="island" role="tooltip" style={{ ...tipPosition, '--island-color': tipIsland.color } as CSSProperties}>
       <strong><i aria-hidden="true" />{tipIsland.label}</strong>
       <span className="tooltip-counts"><b className={tipStats.changed ? 'is-changed' : ''}>{tipStats.changed.toLocaleString()} changed</b> · {tipIsland.nodes.length.toLocaleString()} files{tipStats.overlap ? ` · ${tipStats.overlap.toLocaleString()} in multiple ${sourceKind === 'commit' ? 'commits' : 'PRs'}` : ''}</span>
       {tipMeta && <span className="tooltip-path">{tipMeta}</span>}
@@ -886,7 +904,7 @@ export function ConstellationGraph({ snapshot, selectedSourceIds, selectedFileId
     {barHost && createPortal(<div ref={barRef} className={`graph-bottom-bar panel ${largeRepository ? 'has-scope' : ''}`} style={{ '--graph-inspector-width': `${inspectorWidth}px` } as CSSProperties}>
       {legend ? legend(detail, scopeNote) : <div className="graph-legend">{detail}</div>}
       {largeRepository && <div role="group" className="graph-scope-control" aria-label="Large repository scope">
-        <label htmlFor="graph-scope">Explore scope <select id="graph-scope" aria-label="Explore scope" title={`${scopeStatus}. Above the 2,000-file / 8,000-connection target.`} value={scopeGroupId ?? ''} onChange={event => {
+        <label htmlFor="graph-scope"><span className="graph-scope-label">Explore scope</span> <select id="graph-scope" aria-label="Explore scope" title={`${scopeStatus}. Above the 2,000-file / 8,000-connection target.`} value={scopeGroupId ?? ''} onChange={event => {
           const id = event.target.value || null; setScopeGroupId(id); onFocusGroup?.(id);
           const island = id ? layout.islands.find(group => group.id === id) : undefined;
           moveCamera(fitBounds(island ? islandBounds(island) : layout.bounds));
